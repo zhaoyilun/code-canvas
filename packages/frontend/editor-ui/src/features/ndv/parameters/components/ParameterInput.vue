@@ -1677,6 +1677,14 @@ onUpdated(async () => {
 							@update:model-value="valueChangedDebounced"
 						/>
 
+						<BlocklyEditor
+							v-else-if="editorType === 'robotSkillEditor' && codeEditDialogVisible"
+							:model-value="modelValueString"
+							:is-read-only="isReadOnly || editorIsReadOnly"
+							editor-mode="robot-skills"
+							@update:model-value="valueChangedDebounced"
+						/>
+
 						<JsonEditor
 							v-else-if="parameter.type === 'json' && codeEditDialogVisible"
 							:model-value="isCustomAuthJsonField ? credentialJsonEditorValue : modelValueString"
@@ -1825,6 +1833,14 @@ onUpdated(async () => {
 					v-else-if="editorType === 'blocklyEditor' && !codeEditDialogVisible"
 					:model-value="modelValueString"
 					:is-read-only="isReadOnly || editorIsReadOnly"
+					@update:model-value="valueChangedDebounced"
+				/>
+
+				<BlocklyEditor
+					v-else-if="editorType === 'robotSkillEditor' && !codeEditDialogVisible"
+					:model-value="modelValueString"
+					:is-read-only="isReadOnly || editorIsReadOnly"
+					editor-mode="robot-skills"
 					@update:model-value="valueChangedDebounced"
 				/>
 

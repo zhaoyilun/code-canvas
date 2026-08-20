@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { N8nNotice, N8nText } from '@n8n/design-system';
 import { useI18n } from '@n8n/i18n';
-import { nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { createToolbox, loadWorkspaceOrDefault, registerN8nBlocks } from './blockly';
 import {
 	compileBlocklyWorkspace,
@@ -9,9 +9,26 @@ import {
 	parseBlocklyDataPayload,
 	serializeBlocklyDataPayload,
 } from './payload';
+import {
+	compileRobotWorkspace,
+	createDefaultRobotWorkspace,
+	createRobotToolbox,
+	parseRobotPlanPayload,
+	registerRobotBlocks,
+	serializeRobotPlanPayload,
+	SO101_CATALOG_SNAPSHOT,
+} from './robotSkills';
 
-type Props = { modelValue: string; isReadOnly?: boolean };
-const props = withDefaults(defineProps<Props>(), { isReadOnly: false });
+type Props = {
+	modelValue: string;
+	isReadOnly?: boolean;
+	/** 'data-transform' keeps the v1 editor; 'robot-skills' swaps the grammar. */
+	editorMode?: 'data-transform' | 'robot-skills';
+};
+const props = withDefaults(defineProps<Props>(), {
+	isReadOnly: false,
+	editorMode: 'data-transform',
+});
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
 const i18n = useI18n();
 const editorContainer = ref<HTMLDivElement>();
@@ -22,6 +39,13 @@ let blockly: Awaited<ReturnType<typeof loadBlocklyModule>> | undefined;
 let isSynchronizing = false;
 let resizeObserver: ResizeObserver | undefined;
 
+const isRobotMode = computed(() => props.editorMode === 'robot-skills');
+const previewTitle = computed(() =>
+	isRobotMode.value
+		? i18n.baseText('robotSkillEditor.preview.title')
+		: i18n.baseText('blocklyEditor.preview.title'),
+);
+
 onMounted(async () => {
 	await nextTick();
 	if (!editorContainer.value) return;
@@ -29,22 +53,56 @@ onMounted(async () => {
 	const container = editorContainer.value;
 	if (!container) return;
 	blockly = loadedBlockly;
-	registerN8nBlocks(blockly, {
-		transformItem: i18n.baseText('blocklyEditor.blocks.transformItem'),
-		copyInput: i18n.baseText('blocklyEditor.blocks.copyInput'),
-		emptyOutput: i18n.baseText('blocklyEditor.blocks.emptyOutput'),
-		setField: i18n.baseText('blocklyEditor.blocks.setField'),
-		to: i18n.baseText('blocklyEditor.blocks.to'),
-		getField: i18n.baseText('blocklyEditor.blocks.getField'),
-		path: i18n.baseText('blocklyEditor.blocks.path'),
-	});
+	if (isRobotMode.value) {
+		registerRobotBlocks(blockly, {
+			taskPlan: i18n.baseText('robotSkillEditor.blocks.taskPlan'),
+			executeSkill: i18n.baseText('robotSkillEditor.blocks.executeSkill'),
+			skill: i18n.baseText('robotSkillEditor.blocks.skill'),
+			executePrimitive: i18n.baseText('robotSkillEditor.blocks.executePrimitive'),
+			primitive: i18n.baseText('robotSkillEditor.blocks.primitive'),
+			wait: i18n.baseText('robotSkillEditor.blocks.wait'),
+			seconds: i18n.baseText('robotSkillEditor.blocks.seconds'),
+			gripper: i18n.baseText('robotSkillEditor.blocks.gripper'),
+			gripperOpen: i18n.baseText('robotSkillEditor.blocks.gripperOpen'),
+			gripperClose: i18n.baseText('robotSkillEditor.blocks.gripperClose'),
+			gripperRotateCw: i18n.baseText('robotSkillEditor.blocks.gripperRotateCw'),
+			gripperRotateCcw: i18n.baseText('robotSkillEditor.blocks.gripperRotateCcw'),
+			condition: i18n.baseText('robotSkillEditor.blocks.condition'),
+			conditionField: i18n.baseText('robotSkillEditor.blocks.conditionField'),
+			conditionOp: i18n.baseText('robotSkillEditor.blocks.conditionOp'),
+			target: i18n.baseText('robotSkillEditor.blocks.target'),
+			place: i18n.baseText('robotSkillEditor.blocks.place'),
+			direction: i18n.baseText('robotSkillEditor.blocks.direction'),
+			directionNone: i18n.baseText('robotSkillEditor.blocks.directionNone'),
+			distance: i18n.baseText('robotSkillEditor.blocks.distance'),
+			timeout: i18n.baseText('robotSkillEditor.blocks.timeout'),
+			extraParams: i18n.baseText('robotSkillEditor.blocks.extraParams'),
+		});
+	} else {
+		registerN8nBlocks(blockly, {
+			transformItem: i18n.baseText('blocklyEditor.blocks.transformItem'),
+			copyInput: i18n.baseText('blocklyEditor.blocks.copyInput'),
+			emptyOutput: i18n.baseText('blocklyEditor.blocks.emptyOutput'),
+			setField: i18n.baseText('blocklyEditor.blocks.setField'),
+			to: i18n.baseText('blocklyEditor.blocks.to'),
+			getField: i18n.baseText('blocklyEditor.blocks.getField'),
+			path: i18n.baseText('blocklyEditor.blocks.path'),
+		});
+	}
 	workspace = blockly.inject(container, {
-		toolbox: createToolbox({
-			transform: i18n.baseText('blocklyEditor.categories.transform'),
-			logic: i18n.baseText('blocklyEditor.categories.logic'),
-			math: i18n.baseText('blocklyEditor.categories.math'),
-			text: i18n.baseText('blocklyEditor.categories.text'),
-		}),
+		toolbox: isRobotMode.value
+			? createRobotToolbox({
+					robot: i18n.baseText('robotSkillEditor.categories.robot'),
+					primitives: i18n.baseText('robotSkillEditor.categories.primitives'),
+					math: i18n.baseText('blocklyEditor.categories.math'),
+					text: i18n.baseText('blocklyEditor.categories.text'),
+				})
+			: createToolbox({
+					transform: i18n.baseText('blocklyEditor.categories.transform'),
+					logic: i18n.baseText('blocklyEditor.categories.logic'),
+					math: i18n.baseText('blocklyEditor.categories.math'),
+					text: i18n.baseText('blocklyEditor.categories.text'),
+				}),
 		readOnly: props.isReadOnly,
 	});
 	workspace.addChangeListener(handleWorkspaceChange);
@@ -73,6 +131,33 @@ watch(
 
 function loadModelValue(value: string) {
 	if (!workspace || !blockly) return;
+	if (isRobotMode.value) {
+		const payload = parseRobotPlanPayload(value);
+		if (!payload.ok) {
+			isSynchronizing = true;
+			workspace.clear();
+			isSynchronizing = false;
+			javascriptPreview.value = '';
+			compileError.value = payload.error;
+			return;
+		}
+		isSynchronizing = true;
+		const loadedWorkspace = loadWorkspaceOrDefault(
+			blockly,
+			workspace,
+			payload.payload.workspace,
+			createDefaultRobotWorkspace(),
+		);
+		isSynchronizing = false;
+		if (!loadedWorkspace) {
+			compileError.value = i18n.baseText('blocklyEditor.loadError');
+			javascriptPreview.value = '';
+			return;
+		}
+		updateCompileState();
+		return;
+	}
+
 	const payload = parseBlocklyDataPayload(value);
 	if (!payload.ok) {
 		isSynchronizing = true;
@@ -108,13 +193,23 @@ function emitWorkspaceValue() {
 }
 function updateCompileState() {
 	if (!workspace || !blockly) return;
-	const result = compileBlocklyWorkspace(blockly.serialization.workspaces.save(workspace));
+	const state = blockly.serialization.workspaces.save(workspace);
+	if (isRobotMode.value) {
+		const result = compileRobotWorkspace(state, SO101_CATALOG_SNAPSHOT);
+		javascriptPreview.value = result.ok ? JSON.stringify(result.plan, null, 2) : '';
+		compileError.value = result.ok ? '' : result.error;
+		return;
+	}
+	const result = compileBlocklyWorkspace(state);
 	javascriptPreview.value = result.ok ? result.javascript : '';
 	compileError.value = result.ok ? '' : result.error;
 }
 function serializeWorkspace(): string {
 	if (!workspace || !blockly) return '';
-	return serializeBlocklyDataPayload(blockly.serialization.workspaces.save(workspace));
+	const state = blockly.serialization.workspaces.save(workspace);
+	return isRobotMode.value
+		? serializeRobotPlanPayload(state, undefined)
+		: serializeBlocklyDataPayload(state);
 }
 async function loadBlocklyModule(): Promise<typeof import('blockly')> {
 	return await import('blockly');
@@ -124,7 +219,14 @@ type BlocklyEvent = import('blockly').Events.Abstract;
 </script>
 
 <template>
-	<section :class="$style.editor" :aria-label="i18n.baseText('blocklyEditor.ariaLabel')">
+	<section
+		:class="$style.editor"
+		:aria-label="
+			isRobotMode
+				? i18n.baseText('robotSkillEditor.ariaLabel')
+				: i18n.baseText('blocklyEditor.ariaLabel')
+		"
+	>
 		<div ref="editorContainer" :class="$style.workspace" data-test-id="blockly-workspace" />
 		<N8nNotice
 			v-if="compileError"
@@ -135,9 +237,7 @@ type BlocklyEvent = import('blockly').Events.Abstract;
 			{{ i18n.baseText('blocklyEditor.compileError', { interpolate: { error: compileError } }) }}
 		</N8nNotice>
 		<div :class="$style.preview">
-			<N8nText tag="h3" size="small" bold>{{
-				i18n.baseText('blocklyEditor.preview.title')
-			}}</N8nText>
+			<N8nText tag="h3" size="small" bold>{{ previewTitle }}</N8nText>
 			<pre
 				:class="$style.code"
 				data-test-id="blockly-javascript-preview"

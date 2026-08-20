@@ -5926,6 +5926,9 @@ importers:
       '@n8n/blockly-data-transform':
         specifier: workspace:*
         version: link:../../@n8n/blockly-data-transform
+      '@n8n/blockly-robot-skills':
+        specifier: workspace:*
+        version: link:../../@n8n/blockly-robot-skills
       '@n8n/chat':
         specifier: workspace:*
         version: link:../@n8n/chat
