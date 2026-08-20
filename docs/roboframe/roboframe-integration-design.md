@@ -7,7 +7,7 @@
 | 分支 | `feat/roboframe-integration` |
 | 本地基线 | n8n `2.35.4` + Blockly `12.3.1`，`blockly-data-transform` v1 已落地（见 `.agents/specs/blockly-data-transform-v1.md`） |
 | 上游仓库 | [gitcode.com/openeuler/IB_Robot](https://gitcode.com/openeuler/IB_Robot)，分支 `RoboFrame`，分析基线 commit `8f364c3` |
-| 状态 | 设计稿 v0.1，待审核（审核通过后进入实施） |
+| 状态 | 设计稿 v0.2，已完成审核修订（15 条审核意见已落入正文，§12 标注已决事项） |
 | 审核要点 | §3 分工矩阵（n8n vs Blockly）、§5 桥接层、§7 Blockly 语法、§10 分期与验收 |
 
 ---
@@ -54,7 +54,7 @@ RoboFrame（IB-Robot，openEuler 出品）是融合 **Hugging Face LeRobot 机�
 
 | 层 | 组件 | 状态 | 与集成的关系 |
 | --- | --- | --- | --- |
-| 应用层 | `embodied_agent`（任务入口/规划/执行编排）、`vlm_task_planner`（VLM 规划） | 已实现 | **可被替代/增强**：n8n+Blockly 提供更可控的任务编排；VLM 规划保留 |
+| 应用层 | `embodied_agent`（任务入口/规划/执行编排）、`vlm_task_planner`（VLM 规划） | 已实现 | **旁路增强/共存**：n8n+Blockly 是与 `/voice_command` 链路并存的旁路入口，不替代、不修改原链路；VLM 规划保留 |
 | 规划分发层 | `action_dispatch`（ACT/VLA 流式动作）、`task_dispatch`（任务级序列）、`robot_teleop` | 已实现 | 执行侧，n8n/Blockly 不直接调用 |
 | 技能执行层 | `skill_library`（技能→primitive）、`robot_skill_cli`（`robot-skill` CLI）、Gateway policy | 已实现 | **主要对接边界**（见 §2.3） |
 | 推理研发层 | `tensormsg`（ROS↔张量契约转换）、`inference_service`（多后端推理）、`dataset_tools`（录制/转换） | 已实现 | 数据/ML 闭环由 n8n 编排，内部不动 |
@@ -193,10 +193,10 @@ graph TB
         YAML["robot_config<br/>robots/*.yaml<br/>技能模板 · 位姿 · 安全边界"]
     end
 
-    NODES -- "HTTPS（凭据）" --> BAPI
+    NODES -- "HTTP + token（跨网段经反代 TLS）" --> BAPI
     BCLI -- "ROS action/service" --> SKILL
     YAML -. "catalog 消费" .-> BAPI
-    YAML -. "catalog 消费" .-> BLOCKLY
+    YAML -. "catalog 消费（经 bridge/节点参数中转，非直连）" .-> BLOCKLY
     IM --> TRIG
     WEB --> TRIG
     CRON --> TRIG
@@ -215,9 +215,9 @@ graph TB
 ### 5.2 形态与部署
 
 - 轻量 Python（FastAPI）服务，**运行在机器人侧 ROS 环境内**（Ubuntu 主机或端侧），复用 `robot_config` 解析、Gateway 授权模型与 `robot-skill` CLI（runtime 命令经 `rclpy`）。
-- 无状态、无数据库；只转发，不裁决。
-- 鉴权：Bearer token（部署时生成，n8n 凭据保存）；**不提供** `authorize_motion` 开关（运动授权仍只能 launch 时人工打开）。
-- 本分支内实现于 `scripts/roboframe-bridge/`，契约与 CLI 对齐；后续可作为对 IB_Robot 上游的可选贡献。
+- **近无状态**：无数据库、只转发不裁决；但需在内存保留最近 N 条任务终态以支撑 `GET /v1/tasks/{task_id}`（CLI 进程退出后终态即失；bridge 重启导致的历史丢失可接受，长期记录以 n8n 执行记录为准）。
+- 鉴权与传输：Bearer token（部署时生成，n8n 凭据保存）；**最低要求 = 局域网 + token，跨网段访问必须经反向代理 TLS**（bridge 本身不终结 TLS）。**不提供** `authorize_motion` 开关（运动授权仍只能 launch 时人工打开）。
+- 本分支内实现于 `services/roboframe-bridge/`（独立 Python 服务目录，含部署打包说明），契约与 CLI 对齐；后续可作为对 IB_Robot 上游的可选贡献。
 
 ### 5.3 API 契约（v1）
 
@@ -259,7 +259,7 @@ graph TB
 
 ### 6.2 凭据
 
-- 新凭据类型 **RoboFrame Bridge API**：`baseUrl`、`token`、可选 `ROS_DOMAIN_ID`（透传注释用途）、超时。
+- 新凭据类型 **RoboFrame Bridge API**：`baseUrl`、`token`、超时。（`ROS_DOMAIN_ID` 属于 bridge 侧部署配置，不进 n8n 凭据。）
 - 按 AGENTS.md/安全规范：token 只存 n8n 凭据库，绝不落日志。
 
 ### 6.3 安全与执行策略（继承 RoboFrame 语义）
@@ -269,6 +269,7 @@ graph TB
 - **超时**：默认取技能 `timeout_policy`；n8n 侧超时 ≥ 机器人侧超时。
 - **取消**：统一走 `POST /v1/tasks/{id}/cancel`，取消后状态未知时不得表述为"已停止"。
 - **authorize_motion**：n8n 任何节点都不提供开启入口；状态为未授权时节点直接报"运动未授权"。
+- **错误分类**（映射本仓库规范）：参数非法/未授权/技能不存在/计划过期 → `NodeOperationError`（用户错误语义，不重试）；bridge 不可达/网络超时 → 操作性错误（可走 n8n 错误分支）。日志与执行记录不输出 payload/workspace/凭据。
 
 ### 6.4 与 OpenClaw / IM 集成
 
@@ -308,8 +309,8 @@ Schedule/Webhook → Robot Task（录制 episodes）
 ### 7.1 新节点：**Robot Skill Plan**（`CUSTOM.robotSkillPlan`）
 
 - 与 v1 同构：`parameterPane: 'wide'`、`noDataExpression: true`、payload 为字符串参数。
-- 参数编辑器：`typeOptions.editor: 'robotSkillEditor'` —— `ParameterInput.vue` 增加一个分发分支，**复用 `BlocklyEditor.vue` 组件**，通过 `editorMode` prop 区分语法（data-transform vs robot-skills），不动 v1 编辑器行为。
-- 可选隐藏参数 `skillCatalog`（`loadOptionsMethod` 从 bridge 拉取），供编辑器生成技能/位姿下拉选项；catalog 不可达时编辑器降级为"仅文本 + 离线白名单"，保存不受影响，执行由后端校验兜底。
+- 参数编辑器：`typeOptions.editor: 'robotSkillEditor'` —— 需在 `packages/workflow/src/interfaces.ts` 的 `EditorType` 联合类型中新增该值（与 v1 添加 `blocklyEditor` 同一接缝），`ParameterInput.vue` 增加一个分发分支，**复用 `BlocklyEditor.vue` 组件**并通过新增 `editorMode` prop 区分语法。注意：这是对 v1 共享组件的代码修改（不改其行为），v1 编辑器回归测试必须覆盖。
+- **catalog 数据来源（v1 决策）**：技能/位姿下拉以**节点包内嵌离线白名单**为准（catalog 快照随节点版本发布）；不在编辑器内做 live 拉取——隐藏参数不渲染即不触发前端 `loadOptions`，该机制不可行。live catalog 动态下拉列为 v2（需新增 editor-ui→bridge 代理通道，届时独立设计）。新鲜度由执行期兜底：后端对照实时 catalog 校验，技能已删除/禁用时明确报错（见 §7.3 digest 校验）。
 
 ### 7.2 积木语法（v1 白名单）
 
@@ -319,9 +320,9 @@ Schedule/Webhook → Robot Task（录制 episodes）
 | `robot_execute_skill` | 语句 | 技能下拉（catalog 驱动）+ 参数块（`target_name / place_name / motion_direction / motion_distance / timeout_sec`），可选 `parameters` JSON 补充字段；参数在编译期做 schema 校验 |
 | `robot_execute_primitive` | 语句 | primitive 下拉（10 种受支持 primitive）；默认工具箱折叠，需在节点设置显式开启（风险提示） |
 | `robot_wait` | 语句 | 等待时长（受 `task_budget_sec` 约束） |
-| `robot_gripper` | 语句 | 开/合/旋转快捷块（编译为对应 skill/primitive） |
+| `robot_gripper` | 语句 | 开/合/旋转快捷块（语法糖：编译结果与等价的 `robot_execute_skill`/`robot_execute_primitive` 完全一致；可选，不影响语法完备性） |
 | `robot_named_pose` | 值 | 位姿下拉（catalog 驱动：home/observe_table/zero…） |
-| `robot_condition` / `robot_compare` | 控制/值 | 基于 `RobotStatus` / `TaskStatus` / 感知结果字段的条件分支（v1 支持基于上一技能结果的简单条件；v2 扩展感知字段） |
+| `robot_condition` | 步级守卫 | 基于上一步结果的简单条件（如 `last.success == true`）；**编译为步级 `skipIf` 守卫，plan 保持线性**，不做嵌套分支——嵌套控制流由 n8n 工作流层表达（避免双层控制流与计划解释器复杂化）；感知字段条件推迟 v2 |
 | `robot_observe`（v2） | 语句 | 触发感知快照，结果供后续条件使用 |
 
 工具箱：只含上述语法；无变量、无循环、无任意代码块。
@@ -339,7 +340,7 @@ Schedule/Webhook → Robot Task（录制 episodes）
     { "step": "skill", "skill": "move_relative_ee", "params": { "motionDirection": "forward", "motionDistance": 0.03 } },
     { "step": "primitive", "primitive": "open_gripper" },
     { "step": "wait", "seconds": 2 },
-    { "step": "condition", "if": { "field": "last.success", "op": "==", "value": true }, "then": [ ... ] }
+    { "step": "skill", "skill": "close_gripper_skill", "skipIf": { "field": "last.success", "op": "==", "value": false } }
   ]
 }
 ```
@@ -348,6 +349,7 @@ Schedule/Webhook → Robot Task（录制 episodes）
   - 唯一根、全部块可达、未知/断开/重复根/畸形块 = 编译错误；
   - 危险 key（`__proto__`/`prototype`/`constructor`）拒绝；大小/深度/步数上限；
   - 参数必须通过技能 `capability.parameters` schema 校验；
+  - payload 记录编译时的 `configDigest`；执行期与实时 catalog digest 比对，不一致即报"计划已过期"（技能增删后旧计划不得静默变化）；
   - **后端重编译**：node runtime 忽略 payload 中的 plan，只信任 workspace 重编译结果。
 
 ### 7.4 共享包：`packages/@n8n/blockly-robot-skills`
@@ -356,7 +358,7 @@ Schedule/Webhook → Robot Task（录制 episodes）
 
 ```ts
 export const ROBOT_SKILL_SCHEMA_VERSION = 1;
-export type RobotTaskPlan = { schemaVersion: 1; robot: string; plan: PlanStep[] };
+export type RobotTaskPlan = { schemaVersion: 1; robot: string; configDigest: string; plan: PlanStep[] };
 export type CompileResult =
   | { ok: true; plan: RobotTaskPlan; blockCount: number }
   | { ok: false; error: string };
@@ -366,7 +368,7 @@ export function parseRobotPlanPayload(value: string): ...;
 export function serializeRobotPlanPayload(workspace: Record<string, unknown>): string;
 ```
 
-限制表（初值，实施时按需调整）：payload 256 KiB、块数 200、嵌套深度 40、计划步数 100、文本/参数长度与 v1 对齐。
+限制表（初值，实施时按需调整）：payload 256 KiB、块数 200、嵌套深度 40、计划步数 100、文本/参数长度与 v1 对齐；**plan 总预算**：所有步骤 `timeoutSec` 与 `wait` 时长之和 ≤ `task_budget_sec`（默认 180s），防止超长计划撞 n8n 节点执行上限。
 
 ### 7.5 输出形态与执行模式
 
@@ -384,7 +386,7 @@ export function serializeRobotPlanPayload(workspace: Record<string, unknown>): s
 | 编译产物 | JavaScript（数据变换） | RobotTaskPlan JSON（动作计划） |
 | 执行 | 内置 runner 逐项转换 | bridge → skill 执行链 |
 
-两者互不依赖、互不修改；仅共享 `BlocklyEditor.vue` 组件与"workspace 为唯一真相 + 后端重编译"的模式。**不做**通用 Blockly SDK。
+两者逻辑互不依赖；共享 `BlocklyEditor.vue` 组件（通过 `editorMode` prop 扩展，**不改 v1 行为**，v1 回归测试必须覆盖）与"workspace 为唯一真相 + 后端重编译"模式。**不做**通用 Blockly SDK。
 
 ### 7.7 v2 可选：规则直达（rule_entry）可视化
 
@@ -395,7 +397,7 @@ export function serializeRobotPlanPayload(workspace: Record<string, unknown>): s
 
 ## 8. 端到端场景
 
-### 8.1 场景一：定时安全巡检（v1 验收场景）
+### 8.1 场景一：定时安全巡检（Phase 2 验收场景）
 
 ```mermaid
 sequenceDiagram
@@ -414,7 +416,7 @@ sequenceDiagram
     W->>W: 结果聚合 → 通知分支（正常/失败）
 ```
 
-### 8.2 场景二：社交消息驱动的抓取任务（v1）
+### 8.2 场景二：社交消息驱动的抓取任务（Phase 2）
 
 ```text
 飞书消息 → OpenClaw/Webhook → n8n 工作流
@@ -456,10 +458,10 @@ Schedule → 录制（RecordEpisode action）
 
 ### Phase 1 — n8n 侧 MVP（机器人侧 bridge + 节点族）
 
-- [ ] `scripts/roboframe-bridge/`：FastAPI 服务实现 §5.3 契约（catalog/status/validate/execute/cancel/health）。
+- [ ] `services/roboframe-bridge/`：FastAPI 服务实现 §5.3 契约（catalog/status/validate/execute/cancel/health，含内存任务终态登记）。
 - [ ] `custom-nodes/n8n-nodes-roboframe/`：Robot Catalog / Robot Status / Robot Skill / Robot Validate + 凭据类型。
 - [ ] 触发：Webhook + Schedule 跑通"状态检查 → 技能执行 → 结果输出"。
-- [ ] 验收（仿真）：定时巡检场景端到端 PASS；未授权/忙/超时/参数非法四类错误路径 PASS；执行记录可导出。
+- [ ] 验收（仿真）：**单技能执行链路端到端 PASS**（Webhook/Schedule → Robot Status → Robot Skill（可多节点串联）→ 结果输出；不依赖 Phase 2 的计划节点）；未授权/忙/超时/参数非法四类错误路径 PASS；执行记录可导出。
 - [ ] 安全验收：§9 第 1、2、3、6、7 条。
 
 ### Phase 2 — Blockly 侧（技能计划编辑器）
@@ -497,12 +499,12 @@ Schedule → 录制（RecordEpisode action）
 
 | # | 问题 | 倾向方案 | 影响 |
 | --- | --- | --- | --- |
-| 1 | Bridge 归属：维护在本分支 vs 贡献 IB_Robot 上游 | 本分支先实现（`scripts/roboframe-bridge/`），稳定后贡献上游 | 维护成本 vs 生态收益 |
+| 1 | Bridge 归属：维护在本分支 vs 贡献 IB_Robot 上游 | 本分支先实现（`services/roboframe-bridge/`），稳定后贡献上游 | 维护成本 vs 生态收益 |
 | 2 | 技能动态参数的 UI 形态：固定公共字段 + `parameters` JSON 补充 vs 全动态表单 | v1 用固定字段 + JSON 补充（n8n 参数 schema 动态化成本高） | 参数 UX 与实现复杂度权衡 |
 | 3 | 计划执行粒度：整计划一个任务 vs 每步一个任务 | 每步一个 gateway 租约（`Robot Task` 顺序执行） | 步骤间可插审批/重试；取消语义清晰 |
 | 4 | n8n 部署位置：主机/云端 vs 板端 | 主机/云端（§6.5）；板端只跑 bridge | 网络拓扑与延迟 |
-| 5 | Blockly 技能下拉在 catalog 不可达时的行为 | 离线白名单 + 后端校验兜底 | 离线可用性 |
-| 6 | `robot_condition` v1 支持范围 | 仅基于上一技能/任务结果的简单条件 | 感知条件推迟到 v2 |
+| 5 | Blockly 技能下拉数据来源（**审核已决**） | v1 = 节点内嵌离线白名单 + 执行期 digest 校验；live 动态下拉推迟 v2（需 editor-ui→bridge 代理通道） | 离线可用性 vs 目录新鲜度 |
+| 6 | `robot_condition` v1 支持范围（**审核已决**） | 步级 `skipIf` 守卫、plan 保持线性；嵌套控制流归 n8n 工作流层 | 执行器复杂度与双层控制流 |
 | 7 | VLM 规划器接入：n8n 直接调用 `vlm_task_planner` API 还是保留 ROS 链路 | 保留 ROS 链路，n8n 不接（v1） | 范围控制 |
 | 8 | 分支策略：本分支长期承载集成 vs 按 Phase 再拆分支 | 按 Phase 拆子分支，本分支合入 v1 全量 | 评审粒度 |
 
@@ -512,10 +514,11 @@ Schedule → 录制（RecordEpisode action）
 
 ```text
 docs/roboframe/roboframe-integration-design.md          ← 本设计稿
-scripts/roboframe-bridge/**                             ← Phase 1：HTTP bridge
+services/roboframe-bridge/**                            ← Phase 1：HTTP bridge（独立 Python 服务 + 部署说明）
 custom-nodes/n8n-nodes-roboframe/**                     ← Phase 1：节点族 + 凭据
 packages/@n8n/blockly-robot-skills/**                    ← Phase 2：共享编译器
-packages/frontend/editor-ui/.../BlocklyEditor/**        ← Phase 2：editorMode 扩展
+packages/workflow/src/interfaces.ts                     ← Phase 2：EditorType 增加 'robotSkillEditor'
+packages/frontend/editor-ui/.../BlocklyEditor/**        ← Phase 2：editorMode 扩展（含 v1 回归测试）
 packages/frontend/@n8n/i18n/src/locales/en.json         ← Phase 2：i18n
 packages/frontend/editor-ui/src/features/ndv/parameters/components/ParameterInput.vue  ← Phase 2：编辑器分发分支
 docs/roboframe/phase1-acceptance.md / phase2-acceptance.md  ← 各阶段验收记录
