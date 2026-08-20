@@ -72,24 +72,24 @@ watch(
 );
 
 function loadModelValue(value: string) {
-	if (!workspace || !blockly) return;
+	const currentWorkspace = workspace;
+	const currentBlockly = blockly;
+	if (!currentWorkspace || !currentBlockly) return;
 	const payload = parseBlocklyDataPayload(value);
 	if (!payload.ok) {
-		isSynchronizing = true;
-		workspace.clear();
-		isSynchronizing = false;
+		withWorkspaceEventsDisabled(currentBlockly, () => currentWorkspace.clear());
 		javascriptPreview.value = '';
 		compileError.value = payload.error;
 		return;
 	}
-	isSynchronizing = true;
-	const loadedWorkspace = loadWorkspaceOrDefault(
-		blockly,
-		workspace,
-		payload.payload.workspace,
-		createDefaultWorkspace(),
+	const loadedWorkspace = withWorkspaceEventsDisabled(currentBlockly, () =>
+		loadWorkspaceOrDefault(
+			currentBlockly,
+			currentWorkspace,
+			payload.payload.workspace,
+			createDefaultWorkspace(),
+		),
 	);
-	isSynchronizing = false;
 	if (!loadedWorkspace) {
 		const result = compileBlocklyWorkspace(payload.payload.workspace);
 		javascriptPreview.value = '';
@@ -97,6 +97,16 @@ function loadModelValue(value: string) {
 		return;
 	}
 	updateCompileState();
+}
+function withWorkspaceEventsDisabled<T>(runtime: BlocklyRuntime, callback: () => T): T {
+	isSynchronizing = true;
+	runtime.Events.disable();
+	try {
+		return callback();
+	} finally {
+		runtime.Events.enable();
+		isSynchronizing = false;
+	}
 }
 function handleWorkspaceChange(event: BlocklyEvent) {
 	if (!isSynchronizing && !event.isUiEvent) emitWorkspaceValue();
@@ -121,6 +131,7 @@ async function loadBlocklyModule(): Promise<typeof import('blockly')> {
 }
 type BlocklyWorkspace = import('blockly').WorkspaceSvg;
 type BlocklyEvent = import('blockly').Events.Abstract;
+type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 </script>
 
 <template>
