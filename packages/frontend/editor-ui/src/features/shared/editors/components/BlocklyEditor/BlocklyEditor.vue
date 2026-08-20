@@ -134,7 +134,7 @@ type BlocklyEvent = import('blockly').Events.Abstract;
 
 <style lang="scss" module>
 .editor {
-	min-height: 24rem;
+	height: 24rem;
 	background: var(--background--surface);
 	border: 1px solid var(--border-color--subtle);
 	border-radius: var(--radius--md);

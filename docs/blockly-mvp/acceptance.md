@@ -1,6 +1,6 @@
 # Blockly Code MVP 验收
 
-> 当前结论：CLI 技术链路 PASS；浏览器 UI 业务闭环尚未完成，因此不能宣称总体业务 PASS。
+> 当前结论：定义范围内的本地 MVP 业务闭环 PASS。已真实验证节点创建器、Blockly 可视编辑与拖拽、自动保存与重载、workflow 导出，以及浏览器手工执行输出 `result = 42`。这不代表生产安全或完整产品就绪。
 
 ## 当前验证状态
 
@@ -17,6 +17,7 @@
 | ParameterInput tests | PASS | 56/56。 |
 | editor-ui lint | PASS | exit 0。 |
 | editor-ui production build | PASS | 产出 Blockly chunk；已观察到 `dist/assets/blockly-CU9BVUMX.js`。 |
+| Blockly 可视布局 | PASS | 实机验收发现仅使用 `min-height` 会使 Blockly `.injectionDiv` 高度为 0；改为确定的 `height: 24rem` 后，工具箱和积木可见，production build 已重跑。 |
 | editor-ui full typecheck | 基线阻断 | 仅剩未修改的 `CanvasNodeDefault.test.ts` 两处 CSS custom-property TS2353：`--canvas-node--height`、`--canvas-node--width`；不是 Blockly 失败。 |
 | workflow 根 TypeScript 6 force build | PASS | workflow ESM/CJS 配置使用根 TS6 `--force` 构建通过。 |
 | workflow 标准 TypeScript 7 clean build | 另一已知基线问题 | 曾因 `execution-cancelled.error.ts` 与 `expression.error.ts` 的两个 `level` TS2353 失败；与 Canvas/Blockly 检查分开记录。 |
@@ -26,9 +27,11 @@
 | 单对象与数组导出 payload 校验 | PASS | `verify-payload.mjs` 对 fixture 单对象和官方单 workflow 数组导出均通过。 |
 | CLI task runner execution | PASS | runner 注册，`Blockly Code` status `success`，输出 `{"result":42}`。 |
 | 本地实例与 runner | PASS | `http://localhost:5678` 可达，runner ready。 |
-| Playwright UI 入口 | 被 owner setup 阻断 | 浏览器进入 `/setup`；截图 `output/playwright/n8n-owner-setup-blocker.png`。 |
-| 未认证节点类型端点 | HTTP 401，非 PASS | 只证明请求未认证；不能据此确认节点类型注册或节点创建器可见。 |
-| 节点创建器 / Blockly UI / 保存重载 / 浏览器执行 | 待验证 | 为避免输入或记录密码，需用户自行完成 owner setup 后继续。 |
+| Playwright UI 入口 | PASS | Overview 可见 `Blockly Code MVP Demo`，工作流画布可见 Manual Trigger、`Blockly Code` 与连线；截图 `output/playwright/blockly-workflow-canvas.png`。 |
+| 节点创建器与新增节点 | PASS | 搜索结果可见 `Blockly Code`，点击后实际新增 `Blockly Code1` 并打开默认 Blockly；截图 `output/playwright/blockly-node-creator.png`、`output/playwright/blockly-node-added.png`。验收后已删除临时节点。 |
+| Blockly 拖拽与保存重载 | PASS | 从 Math 工具箱拖入数值积木，观察到 workflow PATCH 200；页面重载后积木仍存在。截图 `output/playwright/blockly-after-drag.png`、`output/playwright/blockly-reloaded.png`。验收后已删除临时积木。 |
+| 最终 UI 导出 | PASS | 官方 CLI 导出 `scripts/blockly-mvp/.runtime/blockly-code-demo.ui-exported.json`；验证器 PASS，最终仅含 Manual Trigger 与 `CUSTOM.blocklyCode` 两个节点。 |
+| 浏览器执行 | PASS | 最终工作流在 UI 中输出 1 item，表格显示 `result = 42`；截图 `output/playwright/blockly-execution-result.png`。SQLite 最新记录 id `4`、mode `manual`、status `success`。 |
 
 ## workflow JSON 载荷
 
@@ -110,31 +113,50 @@ scripts/blockly-mvp/.runtime/blockly-code-demo.exported.json
 
 该日志中的 `resumeToken` 已脱敏。验收材料只能保留脱敏版本，不得恢复、复制或记录原始 token。
 
-CLI 技术链路可以标记 PASS；它不证明节点创建器、Blockly editor、保存重载或浏览器执行已经通过。
+CLI 技术链路可以标记 PASS；它本身不证明节点创建器、Blockly editor、保存重载或浏览器执行。下节记录了独立完成的 UI 证据。
 
 ## UI 技术验收与业务 PASS
 
-当前实例已经启动且 runner ready，但 Playwright 被重定向到 owner setup 页面：
+owner setup 由用户在浏览器中自行完成；自动化没有输入、读取或记录密码。随后使用同一已认证浏览器完成以下链路：
 
 ```text
-URL: http://localhost:5678/setup
-截图: output/playwright/n8n-owner-setup-blocker.png
+Overview 中打开 Blockly Code MVP Demo
+  → 节点创建器搜索并新增 Blockly Code1
+  → 打开默认 Blockly 编辑器
+  → 从 Math 工具箱拖入数值积木
+  → workflow PATCH 200
+  → 重载后积木仍存在
+  → 删除验收临时积木和临时节点
+  → 导出最终两节点 workflow 并通过 payload verifier
+  → 浏览器执行 workflow
+  → Output 显示 result = 42
+  → SQLite manual execution id 4 status success
 ```
 
-这张截图只证明 UI setup gate 可见，不证明 Blockly 入口可见。为避免处理密码，自动化未填写 owner 表单。
+证据文件：
 
-未认证调用节点类型端点返回 HTTP 401，因此当前不能把该端点标为 PASS；完成 owner setup 后仍需在已认证 UI 中核验节点创建器和参数面板。
+```text
+output/playwright/blockly-workflow-canvas.png
+output/playwright/blockly-node-creator.png
+output/playwright/blockly-node-added.png
+output/playwright/blockly-editor.png
+output/playwright/blockly-after-drag.png
+output/playwright/blockly-reloaded.png
+output/playwright/blockly-execution-result.png
+scripts/blockly-mvp/.runtime/blockly-code-demo.ui-exported.json
+scripts/blockly-mvp/.runtime/logs/n8n-20260820-191652.log
+scripts/blockly-mvp/.runtime/logs/ui-acceptance-20260820-1935.log
+```
 
-用户完成 owner setup 后，以下证据全部齐备才能标记 UI 技术验收和业务 PASS：
+最终导出验证结果：
 
-1. 节点创建器可搜索并添加 `Blockly Code` 的截图；
-2. 参数面板中可操作 Blockly 编辑器的截图；
-3. 保存后重载仍显示 return block + `math_number 42` 的截图；
-4. n8n 原始导出 workflow JSON，节点类型为 `CUSTOM.blocklyCode` 且包含 `blocklyPayload`；
-5. 浏览器执行详情中的 `{"result":42}`；
-6. 同一浏览器执行对应的 task runner 日志，包含可关联的时间戳或执行标识。
+```text
+PASS: Blockly payload connects n8n_return_output.VALUE to math_number=42
+PASS: generated JavaScript returns result 42
+PASS: final node count=2; types=n8n-nodes-base.manualTrigger,CUSTOM.blocklyCode
+```
 
-当前业务 PASS 未完成。测试、production build、CLI import、CLI execution 或 `/setup` 截图均不能单独替代上述可见业务闭环。
+因此可以对“Blockly → JavaScript → n8n Node Execution”的本地 MVP 定义范围标记业务 PASS。默认服务日志已记录 JavaScript runner 注册，但默认日志级别不输出每次 UI execution 的 runner job ID；执行关联证据采用 UI 输出截图与同一隔离数据库中的 manual execution id `4`。初次新增 custom node 时浏览器还会请求 `/schemas/CUSTOM.blocklyCode/1.0.0.json` 并得到 404；它没有阻断节点编辑或执行，但若后续产品化需要节点 schema/docs，应单独补齐。
 
 ## 已知基线问题的归属
 

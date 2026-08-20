@@ -42,6 +42,7 @@ scripts/blockly-mvp/run-demo.sh
 ```
 
 To enter the authenticated editor, complete n8n's owner setup in the browser.
+Do not place the owner password in commands, logs, screenshots, or repository files.
 Then select **Blockly Code MVP Demo** and use **Execute workflow**. The fixture has
 a Manual Trigger followed by the custom
 `CUSTOM.blocklyCode` node. Its `blocklyPayload` contains schema
@@ -59,9 +60,9 @@ packages/cli/bin/n8n execute --id=blockly-code-mvp-demo --rawOutput
 This command requires the workflow to be imported first. If import assigns a
 different workflow ID, replace `blockly-code-mvp-demo` with the actual ID. A
 successful command result containing `result: 42` is execution evidence for the
-custom node and task runner. It is not UI business PASS: UI acceptance separately
-requires opening the visible workflow, executing it from the editor, and retaining
-a screenshot plus the corresponding runtime log.
+custom node and task runner. The command alone is not UI business PASS. The current
+local MVP UI evidence, including node creation, drag, reload, export, and browser
+execution, is recorded in `docs/blockly-mvp/acceptance.md`.
 
 To validate a modified fixture without starting n8n:
 
