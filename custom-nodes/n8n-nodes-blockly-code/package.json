@@ -1,0 +1,38 @@
+{
+  "name": "n8n-nodes-blockly-code",
+  "version": "0.1.0",
+  "description": "Blockly Code node for n8n",
+  "license": "MIT",
+  "keywords": [
+    "n8n-community-node-package"
+  ],
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "build": "n8n-node build",
+    "lint": "n8n-node lint",
+    "test": "vitest run nodes"
+  },
+  "n8n": {
+    "n8nNodesApiVersion": 1,
+    "strict": false,
+    "credentials": [],
+    "nodes": [
+      "dist/nodes/BlocklyCode/BlocklyCode.node.js"
+    ]
+  },
+  "devDependencies": {
+    "@n8n/node-cli": "^0.44.3",
+    "n8n-workflow": "workspace:*",
+    "typescript": "^5.9.2",
+    "vitest": "^4.1.9"
+  },
+  "peerDependencies": {
+    "n8n-workflow": "*"
+  },
+  "homepage": "https://n8n.io",
+  "author": {
+    "name": "Blockly Code Node contributors"
+  }
+}

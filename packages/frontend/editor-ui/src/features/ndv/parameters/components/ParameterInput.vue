@@ -42,6 +42,7 @@ import SqlEditor from '@/features/shared/editors/components/SqlEditor/SqlEditor.
 import TextEdit from './TextEdit.vue';
 import WorkflowSelectorParameterInput from './WorkflowSelectorParameterInput/WorkflowSelectorParameterInput.vue';
 import AgentSelectorParameterInput from './AgentSelectorParameterInput/AgentSelectorParameterInput.vue';
+import BlocklyEditor from '@/features/shared/editors/components/BlocklyEditor/BlocklyEditor.vue';
 
 import {
 	formatAsExpression,
@@ -1669,6 +1670,12 @@ onUpdated(async () => {
 							fill-parent
 							@update:model-value="valueChangedDebounced"
 						/>
+						<BlocklyEditor
+							v-else-if="editorType === 'blocklyEditor' && codeEditDialogVisible"
+							:model-value="modelValueString"
+							:is-read-only="isReadOnly || editorIsReadOnly"
+							@update:model-value="valueChangedDebounced"
+						/>
 
 						<JsonEditor
 							v-else-if="parameter.type === 'json' && codeEditDialogVisible"
@@ -1813,6 +1820,13 @@ onUpdated(async () => {
 						</span>
 					</template>
 				</JsEditor>
+
+				<BlocklyEditor
+					v-else-if="editorType === 'blocklyEditor' && !codeEditDialogVisible"
+					:model-value="modelValueString"
+					:is-read-only="isReadOnly || editorIsReadOnly"
+					@update:model-value="valueChangedDebounced"
+				/>
 
 				<JsonEditor
 					v-else-if="parameter.type === 'json' && !codeEditDialogVisible && !isSecretParameter"

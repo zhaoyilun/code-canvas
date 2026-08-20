@@ -1,4 +1,5 @@
 packages:
+  - custom-nodes/*
   - packages/*
   - packages/@n8n/*
   - packages/frontend/**
@@ -127,6 +128,7 @@ catalog:
   ai: ^7.0.48
   axios: 1.18.0
   basic-auth: 2.0.1
+  blockly: 12.3.1
   cache-manager: 5.2.3
   callsites: 3.1.0
   change-case: ^5.4.4

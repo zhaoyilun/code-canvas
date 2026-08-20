@@ -25,6 +25,19 @@ import { mock } from 'vitest-mock-extended';
 import { ExpressionLocalResolveContextSymbol } from '@/app/constants';
 import { nextTick, reactive } from 'vue';
 
+vi.mock('@/features/shared/editors/components/BlocklyEditor/BlocklyEditor.vue', () => ({
+	default: {
+		props: ['modelValue', 'isReadOnly'],
+		emits: ['update:modelValue'],
+		template: `<button
+			data-test-id="blockly-editor"
+			:data-model-value="modelValue"
+			:data-read-only="String(isReadOnly)"
+			@click="$emit('update:modelValue', 'updated blockly payload')"
+		/>`,
+	},
+}));
+
 function getNdvStateMock(): Partial<ReturnType<typeof useNDVStore>> {
 	return {
 		hasInputData: true,
@@ -955,6 +968,34 @@ describe('ParameterInput.vue', () => {
 				expect(updateEvents).toBeDefined();
 				expect(updateEvents.length).toBeLessThan(5);
 				expect(updateEvents).toContainEqual([expect.objectContaining({ value: 'hello' })]);
+			});
+		});
+	});
+
+	describe('Blockly editor', () => {
+		it('renders the Blockly editor and debounces its value updates', async () => {
+			const { getByTestId, emitted } = renderComponent({
+				props: {
+					path: 'blocklyPayload',
+					parameter: createTestNodeProperties({
+						displayName: 'Blockly Payload',
+						name: 'blocklyPayload',
+						type: 'string',
+						typeOptions: { editor: 'blocklyEditor', editorIsReadOnly: true },
+					}),
+					modelValue: 'initial blockly payload',
+				},
+			});
+
+			const editor = getByTestId('blockly-editor');
+			expect(editor).toHaveAttribute('data-model-value', 'initial blockly payload');
+			expect(editor).toHaveAttribute('data-read-only', 'true');
+
+			await userEvent.click(editor);
+			await waitFor(() => {
+				expect(emitted('update')).toContainEqual([
+					expect.objectContaining({ value: 'updated blockly payload' }),
+				]);
 			});
 		});
 	});
