@@ -946,9 +946,15 @@ importers:
 
   custom-nodes/n8n-nodes-blockly-code:
     devDependencies:
+      '@n8n/blockly-data-transform':
+        specifier: workspace:*
+        version: link:../../packages/@n8n/blockly-data-transform
       '@n8n/node-cli':
         specifier: ^0.44.3
         version: link:../../packages/@n8n/node-cli
+      esbuild:
+        specifier: ^0.28.1
+        version: 0.28.1
       n8n-workflow:
         specifier: workspace:*
         version: link:../../packages/workflow
@@ -1721,6 +1727,27 @@ importers:
       vitest-mock-extended:
         specifier: 'catalog:'
         version: 3.1.0(typescript@7.0.2)(vitest@4.1.9)
+
+  packages/@n8n/blockly-data-transform:
+    devDependencies:
+      '@n8n/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@n8n/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@n8n/vitest-config':
+        specifier: workspace:*
+        version: link:../vitest-config
+      typescript:
+        specifier: catalog:typescript
+        version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: 8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@20.19.41)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(jsdom@26.1.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(vite@8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3))
 
   packages/@n8n/chat-hub:
     dependencies:
@@ -5854,6 +5881,9 @@ importers:
       '@n8n/api-types':
         specifier: workspace:*
         version: link:../../@n8n/api-types
+      '@n8n/blockly-data-transform':
+        specifier: workspace:*
+        version: link:../../@n8n/blockly-data-transform
       '@n8n/chat':
         specifier: workspace:*
         version: link:../@n8n/chat

@@ -1,0 +1,26 @@
+[
+	{
+		"customer": { "name": "Ada Lovelace" },
+		"amount": 50,
+		"quantity": 3,
+		"customerLabel": "Customer: Ada Lovelace",
+		"orderTotal": 150,
+		"grade": "gold"
+	},
+	{
+		"customer": { "name": "Grace Hopper" },
+		"amount": 20,
+		"quantity": 4,
+		"customerLabel": "Customer: Grace Hopper",
+		"orderTotal": 80,
+		"grade": "standard"
+	},
+	{
+		"customer": { "name": "Lin Qian" },
+		"amount": 120,
+		"quantity": 1,
+		"customerLabel": "Customer: Lin Qian",
+		"orderTotal": 120,
+		"grade": "gold"
+	}
+]

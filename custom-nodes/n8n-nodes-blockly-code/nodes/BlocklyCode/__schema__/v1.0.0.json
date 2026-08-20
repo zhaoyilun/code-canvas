@@ -1,0 +1,6 @@
+{
+	"type": "object",
+	"description": "JSON object produced by the configured Blockly transformation",
+	"additionalProperties": true,
+	"version": 1
+}

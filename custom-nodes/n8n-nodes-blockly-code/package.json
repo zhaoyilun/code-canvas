@@ -1,7 +1,7 @@
 {
   "name": "n8n-nodes-blockly-code",
   "version": "0.1.0",
-  "description": "Blockly Code node for n8n",
+  "description": "Blockly Data Transform node for n8n",
   "license": "MIT",
   "keywords": [
     "n8n-community-node-package"
@@ -10,9 +10,10 @@
     "dist"
   ],
   "scripts": {
-    "build": "n8n-node build",
+    "build": "n8n-node build && node scripts/bundle-runtime.mjs",
     "lint": "n8n-node lint",
-    "test": "vitest run nodes"
+    "test": "vitest run nodes",
+    "typecheck": "tsc --noEmit"
   },
   "n8n": {
     "n8nNodesApiVersion": 1,
@@ -23,7 +24,9 @@
     ]
   },
   "devDependencies": {
+    "@n8n/blockly-data-transform": "workspace:*",
     "@n8n/node-cli": "^0.44.3",
+    "esbuild": "catalog:",
     "n8n-workflow": "workspace:*",
     "typescript": "^5.9.2",
     "vitest": "^4.1.9"
@@ -33,6 +36,6 @@
   },
   "homepage": "https://n8n.io",
   "author": {
-    "name": "Blockly Code Node contributors"
+    "name": "Blockly Data Transform contributors"
   }
 }

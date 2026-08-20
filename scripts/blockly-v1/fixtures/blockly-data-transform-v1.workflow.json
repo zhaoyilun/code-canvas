@@ -1,0 +1,94 @@
+{
+	"id": "blockly-data-transform-v1",
+	"name": "Blockly Data Transform v1 — Three Orders",
+	"active": false,
+	"settings": {},
+	"nodes": [
+		{
+			"id": "manual-trigger",
+			"name": "When clicking 'Execute workflow'",
+			"type": "n8n-nodes-base.manualTrigger",
+			"typeVersion": 1,
+			"position": [240, 300],
+			"parameters": {}
+		},
+		{
+			"id": "seed-orders",
+			"name": "Seed three business orders",
+			"type": "n8n-nodes-base.set",
+			"typeVersion": 3.4,
+			"position": [460, 300],
+			"parameters": {
+				"options": {},
+				"assignments": {
+					"assignments": [
+						{
+							"id": "orders-array",
+							"name": "orders",
+							"type": "array",
+							"value": "[{\"customer\":{\"name\":\"Ada Lovelace\"},\"amount\":50,\"quantity\":3},{\"customer\":{\"name\":\"Grace Hopper\"},\"amount\":20,\"quantity\":4},{\"customer\":{\"name\":\"Lin Qian\"},\"amount\":120,\"quantity\":1}]"
+						}
+					]
+				}
+			}
+		},
+		{
+			"id": "split-orders",
+			"name": "Split orders into three items",
+			"type": "n8n-nodes-base.splitOut",
+			"typeVersion": 1,
+			"position": [700, 300],
+			"parameters": {
+				"fieldToSplitOut": "orders",
+				"options": {
+					"destinationFieldName": ""
+				}
+			}
+		},
+		{
+			"id": "blockly-data-transform",
+			"name": "Blockly Data Transform",
+			"type": "CUSTOM.blocklyCode",
+			"typeVersion": 1,
+			"position": [940, 300],
+			"parameters": {
+				"blocklyPayload": "{\n  \"schemaVersion\": 2,\n  \"workspace\": {\n    \"blocks\": {\n      \"languageVersion\": 0,\n      \"blocks\": [\n        {\n          \"type\": \"n8n_transform_item\",\n          \"x\": 24,\n          \"y\": 24,\n          \"inputs\": {\n            \"STATEMENTS\": {\n              \"block\": {\n                \"type\": \"n8n_set_field\",\n                \"fields\": {\n                  \"KEY\": \"customerLabel\"\n                },\n                \"inputs\": {\n                  \"VALUE\": {\n                    \"block\": {\n                      \"type\": \"text_join\",\n                      \"extraState\": {\n                        \"itemCount\": 2\n                      },\n                      \"inputs\": {\n                        \"ADD0\": {\n                          \"block\": {\n                            \"type\": \"text\",\n                            \"fields\": {\n                              \"TEXT\": \"Customer: \"\n                            }\n                          }\n                        },\n                        \"ADD1\": {\n                          \"block\": {\n                            \"type\": \"n8n_get_field\",\n                            \"fields\": {\n                              \"PATH\": \"customer.name\"\n                            }\n                          }\n                        }\n                      }\n                    }\n                  }\n                },\n                \"next\": {\n                  \"block\": {\n                    \"type\": \"n8n_set_field\",\n                    \"fields\": {\n                      \"KEY\": \"orderTotal\"\n                    },\n                    \"inputs\": {\n                      \"VALUE\": {\n                        \"block\": {\n                          \"type\": \"math_arithmetic\",\n                          \"fields\": {\n                            \"OP\": \"MULTIPLY\"\n                          },\n                          \"inputs\": {\n                            \"A\": {\n                              \"block\": {\n                                \"type\": \"n8n_get_field\",\n                                \"fields\": {\n                                  \"PATH\": \"amount\"\n                                }\n                              }\n                            },\n                            \"B\": {\n                              \"block\": {\n                                \"type\": \"n8n_get_field\",\n                                \"fields\": {\n                                  \"PATH\": \"quantity\"\n                                }\n                              }\n                            }\n                          }\n                        }\n                      }\n                    },\n                    \"next\": {\n                      \"block\": {\n                        \"type\": \"n8n_set_field\",\n                        \"fields\": {\n                          \"KEY\": \"grade\"\n                        },\n                        \"inputs\": {\n                          \"VALUE\": {\n                            \"block\": {\n                              \"type\": \"logic_ternary\",\n                              \"inputs\": {\n                                \"IF\": {\n                                  \"block\": {\n                                    \"type\": \"logic_compare\",\n                                    \"fields\": {\n                                      \"OP\": \"GTE\"\n                                    },\n                                    \"inputs\": {\n                                      \"A\": {\n                                        \"block\": {\n                                          \"type\": \"math_arithmetic\",\n                                          \"fields\": {\n                                            \"OP\": \"MULTIPLY\"\n                                          },\n                                          \"inputs\": {\n                                            \"A\": {\n                                              \"block\": {\n                                                \"type\": \"n8n_get_field\",\n                                                \"fields\": {\n                                                  \"PATH\": \"amount\"\n                                                }\n                                              }\n                                            },\n                                            \"B\": {\n                                              \"block\": {\n                                                \"type\": \"n8n_get_field\",\n                                                \"fields\": {\n                                                  \"PATH\": \"quantity\"\n                                                }\n                                              }\n                                            }\n                                          }\n                                        }\n                                      },\n                                      \"B\": {\n                                        \"block\": {\n                                          \"type\": \"math_number\",\n                                          \"fields\": {\n                                            \"NUM\": 100\n                                          }\n                                        }\n                                      }\n                                    }\n                                  }\n                                },\n                                \"THEN\": {\n                                  \"block\": {\n                                    \"type\": \"text\",\n                                    \"fields\": {\n                                      \"TEXT\": \"gold\"\n                                    }\n                                  }\n                                },\n                                \"ELSE\": {\n                                  \"block\": {\n                                    \"type\": \"text\",\n                                    \"fields\": {\n                                      \"TEXT\": \"standard\"\n                                    }\n                                  }\n                                }\n                              }\n                            }\n                          }\n                        }\n                      }\n                    }\n                  }\n                }\n              }\n            }\n          },\n          \"fields\": {\n            \"MODE\": \"COPY\"\n          }\n        }\n      ]\n    }\n  },\n  \"javascript\": \"const output = { ...$json };\\noutput[\\\"customerLabel\\\"] = [\\\"Customer: \\\", ($json?.[\\\"customer\\\"]?.[\\\"name\\\"] ?? null)].join('');\\noutput[\\\"orderTotal\\\"] = (($json?.[\\\"amount\\\"] ?? null) * ($json?.[\\\"quantity\\\"] ?? null));\\noutput[\\\"grade\\\"] = (((($json?.[\\\"amount\\\"] ?? null) * ($json?.[\\\"quantity\\\"] ?? null)) >= 100) ? \\\"gold\\\" : \\\"standard\\\");\\nreturn { json: output };\\n\"\n}"
+			}
+		}
+	],
+	"connections": {
+		"When clicking 'Execute workflow'": {
+			"main": [
+				[
+					{
+						"node": "Seed three business orders",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Seed three business orders": {
+			"main": [
+				[
+					{
+						"node": "Split orders into three items",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		},
+		"Split orders into three items": {
+			"main": [
+				[
+					{
+						"node": "Blockly Data Transform",
+						"type": "main",
+						"index": 0
+					}
+				]
+			]
+		}
+	}
+}
