@@ -1,0 +1,2 @@
+[console_scripts]
+roboframe-bridge = roboframe_bridge.app:main

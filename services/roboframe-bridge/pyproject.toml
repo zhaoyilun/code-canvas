@@ -1,0 +1,30 @@
+[project]
+name = "roboframe-bridge"
+version = "0.1.0"
+description = "Thin HTTP bridge exposing the RoboFrame robot-skill sanctioned boundary to n8n"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+roboframe-bridge = "roboframe_bridge.app:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["roboframe_bridge*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
