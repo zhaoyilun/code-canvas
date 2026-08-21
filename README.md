@@ -1,3 +1,22 @@
+# n8n-blockly — Blockly 数据变换 + RoboFrame 机器人技能节点(n8n fork)
+
+> 基于 n8n `2.35.4` 快照的 fork,增加两套自研能力并验证了 RK3588 离线部署。以下为上游 n8n 原始 README。
+
+## 本仓库新增内容
+
+| 能力 | 说明 | 入口 |
+| --- | --- | --- |
+| **Blockly Data Transform** | 可视化积木式数据变换节点(`CUSTOM.blocklyCode`),共享编译器 + 只读 JS 预览,运行时始终重编译防篡改 | `custom-nodes/n8n-nodes-blockly-code/`、`packages/@n8n/blockly-data-transform/` |
+| **RoboFrame 机器人技能节点族** | Robot Catalog / Status / Skill / Validate / Task / Skill Plan 六节点,经 HTTP bridge 对接 [IB_Robot](https://gitcode.com/openeuler/IB_Robot) 的 `robot-skill` sanctioned 边界 | `custom-nodes/n8n-nodes-roboframe/`、`services/roboframe-bridge/` |
+| **Blockly 技能计划编辑器** | `robotSkillEditor` 参数编辑器 + `@n8n/blockly-robot-skills` 共享编译器 | `packages/frontend/editor-ui/.../BlocklyEditor/` |
+| **RK3588 离线 Kiosk 部署** | arm64 Docker 镜像、systemd、触控屏全屏自启、离线加固;不联外网单机自治 | `deploy/rk3588/`、[docs/roboframe/deploy-rk3588.md](docs/roboframe/deploy-rk3588.md) |
+
+设计与验收:`docs/roboframe/`(集成设计稿 v0.2、Phase 1/2 验收记录)、`.agents/specs/`。
+
+bridge 已在 arm64 ROS 2 Humble 容器中对照真实 `robot-skill` CLI 完成契约校准并端到端跑通(HTTP → bridge → CLI → Gateway → 4 原语执行 → completed)。
+
+---
+
 ![Banner image](https://user-images.githubusercontent.com/10284570/173569848-c624317f-42b1-45a6-ab09-f0ea3c247648.png)
 
 # n8n – The Platform for AI Agents and Workflow Automation
