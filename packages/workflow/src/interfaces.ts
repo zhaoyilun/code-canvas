@@ -1811,7 +1811,8 @@ export type EditorType =
 	| 'htmlEditor'
 	| 'sqlEditor'
 	| 'cssEditor'
-	| 'blocklyEditor';
+	| 'blocklyEditor'
+	| 'robotSkillEditor';
 export type CodeNodeEditorLanguage = (typeof CODE_LANGUAGES)[number];
 export type CodeExecutionMode = (typeof CODE_EXECUTION_MODES)[number];
 export type SQLDialect =

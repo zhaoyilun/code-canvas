@@ -4,6 +4,6 @@ export default defineConfig({
 	test: {
 		environment: 'node',
 		globals: true,
-		include: ['payload.test.ts'],
+		include: ['src/features/shared/editors/components/BlocklyEditor/payload.test.ts'],
 	},
 });

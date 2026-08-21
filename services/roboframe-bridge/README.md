@@ -1,0 +1,56 @@
+# RoboFrame HTTP Bridge
+
+把 RoboFrame 的 `robot-skill` sanctioned 边界（catalog / status / validate / execute / cancel）
+暴露为 REST API，供 n8n 的 RoboFrame 节点族远程调用。设计契约见
+`docs/roboframe/roboframe-integration-design.md` §5。
+
+## 边界与安全
+
+- 只转发，不裁决：所有执行最终走 `/embodied/execute_skill → skill_executor → safety_guard`。
+- **不提供** `authorize_motion` 开关；运动授权只能由操作员在 launch 时开启。
+- 鉴权：Bearer token（环境变量 `ROBOFRAME_BRIDGE_TOKEN`；为空时禁用鉴权，仅限本机联调）。
+- 传输：bridge 本身不终结 TLS。最低要求 = 局域网 + token；跨网段访问必须经反向代理 TLS。
+- 近无状态：内存保留最近 256 条任务终态（重启丢失可接受，长期记录以 n8n 执行历史为准）。
+
+## 部署（机器人侧 ROS 环境内）
+
+```bash
+cd services/roboframe-bridge
+python3 -m venv .venv && . .venv/bin/activate
+pip install -e ".[dev]"
+
+export ROBOFRAME_BRIDGE_TOKEN="$(openssl rand -hex 24)"
+export ROBOT_CONFIG_NAME=so101_single_arm   # 或 ROBOT_CONFIG_PATH=/abs/path.yaml
+export ROBOFRAME_BRIDGE_BIND=0.0.0.0        # 默认 127.0.0.1
+export ROBOFRAME_BRIDGE_PORT=8090
+
+roboframe-bridge
+```
+
+前置条件：`source .shrc_local && source install/setup.sh`（`robot-skill` 在 PATH 中）。
+
+## API（v1）
+
+| 方法/路径 | 说明 |
+| --- | --- |
+| `GET /v1/health` | 存活与版本（公开） |
+| `GET /v1/catalog` | 技能列表 + `config_digest` + 机器人名 |
+| `GET /v1/catalog/skills/{name}` | 技能详情（参数 schema、recovery、timeout） |
+| `GET /v1/catalog/poses` | 命名位姿 |
+| `GET /v1/status` | Gateway：授权 / 控制模式 / busy / readiness |
+| `POST /v1/skills/validate` | schema + Gateway 安全校验，不执行 |
+| `POST /v1/skills/execute` | 异步提交，返回 `202 {accepted, task_id}` |
+| `GET /v1/tasks/{task_id}` | 任务状态（`X-Terminal-State` 头标识终态） |
+| `POST /v1/tasks/{task_id}/cancel` | 取消；状态未知时 `state=unknown`，不得表述为"已停止" |
+
+失败/超时**不自动重试**；是否重试由 n8n 按技能 `recovery_policy` 决定。
+
+## 测试
+
+```bash
+pip install -e ".[dev]"
+pytest
+```
+
+测试使用 Fake 客户端，不需要 ROS 环境。CLI 适配层（`RobotSkillCliClient`）的
+JSON 输出映射需在机器人侧联调时对照实际 `robot-skill --json` 输出校准。

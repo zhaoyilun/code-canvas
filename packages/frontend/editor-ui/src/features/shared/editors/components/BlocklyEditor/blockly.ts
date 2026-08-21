@@ -1,18 +1,29 @@
 import type * as Blockly from 'blockly';
-import type { JavascriptGenerator } from 'blockly/javascript';
 
-import { createDefaultWorkspace, type BlocklyWorkspaceState } from './payload';
+export const TRANSFORM_ITEM_BLOCK = 'n8n_transform_item';
+export const SET_FIELD_BLOCK = 'n8n_set_field';
+export const GET_FIELD_BLOCK = 'n8n_get_field';
 
-export const RETURN_OUTPUT_BLOCK = 'n8n_return_output';
+type BlocklyRuntime = Pick<
+	typeof Blockly,
+	'Blocks' | 'FieldDropdown' | 'FieldTextInput' | 'serialization'
+>;
 
-type BlocklyRuntime = Pick<typeof Blockly, 'Blocks' | 'serialization'>;
-
-type ToolboxLabels = {
+export type ToolboxLabels = {
+	transform: string;
 	logic: string;
 	math: string;
 	text: string;
-	variables: string;
-	output: string;
+};
+
+export type BlockLabels = {
+	transformItem: string;
+	copyInput: string;
+	emptyOutput: string;
+	setField: string;
+	to: string;
+	getField: string;
+	path: string;
 };
 
 export function createToolbox(labels: ToolboxLabels): Blockly.utils.toolbox.ToolboxInfo {
@@ -21,11 +32,24 @@ export function createToolbox(labels: ToolboxLabels): Blockly.utils.toolbox.Tool
 		contents: [
 			{
 				kind: 'category',
+				name: labels.transform,
+				colour: '230',
+				contents: [
+					{ kind: 'block', type: TRANSFORM_ITEM_BLOCK },
+					{ kind: 'block', type: SET_FIELD_BLOCK },
+					{ kind: 'block', type: GET_FIELD_BLOCK },
+				],
+			},
+			{
+				kind: 'category',
 				name: labels.logic,
 				categorystyle: 'logic_category',
 				contents: [
-					{ kind: 'block', type: 'logic_compare' },
 					{ kind: 'block', type: 'logic_boolean' },
+					{ kind: 'block', type: 'logic_compare' },
+					{ kind: 'block', type: 'logic_operation' },
+					{ kind: 'block', type: 'logic_negate' },
+					{ kind: 'block', type: 'logic_ternary' },
 				],
 			},
 			{
@@ -46,52 +70,63 @@ export function createToolbox(labels: ToolboxLabels): Blockly.utils.toolbox.Tool
 					{ kind: 'block', type: 'text_join' },
 				],
 			},
-			{
-				kind: 'category',
-				name: labels.variables,
-				categorystyle: 'variable_category',
-				custom: 'VARIABLE',
-			},
-			{
-				kind: 'category',
-				name: labels.output,
-				colour: '230',
-				contents: [{ kind: 'block', type: RETURN_OUTPUT_BLOCK }],
-			},
 		],
 	};
 }
 
-export function registerReturnOutputBlock(
-	blockly: BlocklyRuntime,
-	javascriptGenerator: JavascriptGenerator,
-	orderNone: number,
-	label: string,
-) {
-	blockly.Blocks[RETURN_OUTPUT_BLOCK] = {
+export function registerN8nBlocks(blockly: BlocklyRuntime, labels: BlockLabels) {
+	blockly.Blocks[TRANSFORM_ITEM_BLOCK] = {
 		init(this: Blockly.Block) {
-			this.appendValueInput('VALUE').setCheck(null).appendField(label);
-			this.setPreviousStatement(true);
+			this.appendDummyInput()
+				.appendField(labels.transformItem)
+				.appendField(
+					new blockly.FieldDropdown([
+						[labels.copyInput, 'COPY'],
+						[labels.emptyOutput, 'EMPTY'],
+					]),
+					'MODE',
+				);
+			this.appendStatementInput('STATEMENTS');
 			this.setColour(230);
 		},
 	};
-
-	javascriptGenerator.forBlock[RETURN_OUTPUT_BLOCK] = (block, generator) => {
-		const value = generator.valueToCode(block, 'VALUE', orderNone) || 'null';
-		return `return [{ json: { result: ${value} } }];\n`;
+	blockly.Blocks[SET_FIELD_BLOCK] = {
+		init(this: Blockly.Block) {
+			this.appendValueInput('VALUE')
+				.setCheck(null)
+				.appendField(labels.setField)
+				.appendField(new blockly.FieldTextInput(''), 'KEY')
+				.appendField(labels.to);
+			this.setPreviousStatement(true);
+			this.setNextStatement(true);
+			this.setColour(230);
+		},
+	};
+	blockly.Blocks[GET_FIELD_BLOCK] = {
+		init(this: Blockly.Block) {
+			this.appendDummyInput()
+				.appendField(labels.getField)
+				.appendField(labels.path)
+				.appendField(new blockly.FieldTextInput(''), 'PATH');
+			this.setOutput(true);
+			this.setColour(230);
+		},
 	};
 }
 
 export function loadWorkspaceOrDefault(
 	blockly: BlocklyRuntime,
 	workspace: Blockly.Workspace,
-	state: BlocklyWorkspaceState,
+	state: Record<string, unknown>,
+	defaultWorkspace: Record<string, unknown>,
 ): boolean {
 	try {
+		workspace.clear();
 		blockly.serialization.workspaces.load(state, workspace);
 		return true;
 	} catch {
-		blockly.serialization.workspaces.load(createDefaultWorkspace(), workspace);
+		workspace.clear();
+		blockly.serialization.workspaces.load(defaultWorkspace, workspace);
 		return false;
 	}
 }

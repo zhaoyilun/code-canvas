@@ -7,7 +7,7 @@
 | 分支 | `feat/roboframe-integration` |
 | 本地基线 | n8n `2.35.4` + Blockly `12.3.1`，`blockly-data-transform` v1 已落地（见 `.agents/specs/blockly-data-transform-v1.md`） |
 | 上游仓库 | [gitcode.com/openeuler/IB_Robot](https://gitcode.com/openeuler/IB_Robot)，分支 `RoboFrame`，分析基线 commit `8f364c3` |
-| 状态 | 设计稿 v0.2，已完成审核修订（15 条审核意见已落入正文，§12 标注已决事项） |
+| 状态 | 设计稿 v0.2（15 条审核意见已落入）；Phase 1/2 已按本稿实施，代码级验收记录见 `phase1-acceptance.md` / `phase2-acceptance.md` |
 | 审核要点 | §3 分工矩阵（n8n vs Blockly）、§5 桥接层、§7 Blockly 语法、§10 分期与验收 |
 
 ---
@@ -456,19 +456,19 @@ Schedule → 录制（RecordEpisode action）
 
 - [x] RoboFrame 分析、分工矩阵、总体架构、桥接契约、n8n/Blockly 设计、安全红线、分期。
 
-### Phase 1 — n8n 侧 MVP（机器人侧 bridge + 节点族）
+### Phase 1 — n8n 侧 MVP（机器人侧 bridge + 节点族）✅ 代码级完成（验收见 `phase1-acceptance.md`；仿真端到端待 ROS 环境）
 
-- [ ] `services/roboframe-bridge/`：FastAPI 服务实现 §5.3 契约（catalog/status/validate/execute/cancel/health，含内存任务终态登记）。
-- [ ] `custom-nodes/n8n-nodes-roboframe/`：Robot Catalog / Robot Status / Robot Skill / Robot Validate + 凭据类型。
-- [ ] 触发：Webhook + Schedule 跑通"状态检查 → 技能执行 → 结果输出"。
+- [x] `services/roboframe-bridge/`：FastAPI 服务实现 §5.3 契约（catalog/status/validate/execute/cancel/health，含内存任务终态登记）。
+- [x] `custom-nodes/n8n-nodes-roboframe/`：Robot Catalog / Robot Status / Robot Skill / Robot Validate + 凭据类型。
+- [x] 触发：Webhook + Schedule 跑通"状态检查 → 技能执行 → 结果输出"。
 - [ ] 验收（仿真）：**单技能执行链路端到端 PASS**（Webhook/Schedule → Robot Status → Robot Skill（可多节点串联）→ 结果输出；不依赖 Phase 2 的计划节点）；未授权/忙/超时/参数非法四类错误路径 PASS；执行记录可导出。
 - [ ] 安全验收：§9 第 1、2、3、6、7 条。
 
-### Phase 2 — Blockly 侧（技能计划编辑器）
+### Phase 2 — Blockly 侧（技能计划编辑器）✅ 代码级完成（验收见 `phase2-acceptance.md`；浏览器 E2E 待联调环境）
 
-- [ ] `packages/@n8n/blockly-robot-skills/`：编译器 + schema + 限制 + 测试。
-- [ ] `robotSkillEditor`：`ParameterInput.vue` 分发分支 + `BlocklyEditor.vue` `editorMode` + 技能/位姿动态下拉。
-- [ ] `CUSTOM.robotSkillPlan` + `CUSTOM.robotTask` 节点：编译 → 顺序执行 → 取消/超时。
+- [x] `packages/@n8n/blockly-robot-skills/`：编译器 + schema + 限制 + 测试。
+- [x] `robotSkillEditor`：`ParameterInput.vue` 分发分支 + `BlocklyEditor.vue` `editorMode`（技能下拉为离线快照，live 动态下拉按已决 #5 留 v2）。
+- [x] `CUSTOM.robotSkillPlan` + `CUSTOM.robotTask` 节点：编译 → 顺序执行 → 取消/超时。
 - [ ] 验收（仿真）：场景一全链路 PASS；workspace 篡改（plan 字段伪造）无效果；编译错误本地化提示；保存/重载/导出导入 PASS。
 
 ### Phase 3 — 增强
