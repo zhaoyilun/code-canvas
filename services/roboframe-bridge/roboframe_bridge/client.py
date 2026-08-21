@@ -32,6 +32,27 @@ class RobotClientError(Exception):
     """A call into the robot boundary failed (non-zero exit, bad output)."""
 
 
+def _parse_jsonl(stdout: str) -> dict[str, Any] | None:
+    """Parse the LAST JSON object of a JSON-lines stream.
+
+    Long-running commands (execute) stream ``{event: feedback}`` lines
+    followed by a single ``{event: result}`` envelope; instant commands print
+    exactly one object.
+    """
+    parsed: dict[str, Any] | None = None
+    for line in stdout.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            candidate = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(candidate, dict):
+            parsed = candidate
+    return parsed
+
+
 class SkillNotFound(RobotClientError):
     pass
 
@@ -69,7 +90,9 @@ class RobotSkillCliClient:
             self._config_args = ["--config-path", config_path]
 
     def _run(self, args: list[str], timeout: float = DEFAULT_TIMEOUT_SEC) -> dict[str, Any]:
-        cmd = [self._bin, *self._config_args, *args, "--json"]
+        # NOTE: the real robot-skill CLI has no --json flag — JSON is its only
+        # output format (calibrated against IB_Robot RoboFrame @ 8f364c3).
+        cmd = [self._bin, *self._config_args, *args]
         try:
             completed = subprocess.run(
                 cmd,
@@ -81,15 +104,34 @@ class RobotSkillCliClient:
         except (subprocess.TimeoutExpired, OSError) as exc:
             raise RobotClientError(f"robot-skill invocation failed: {exc}") from exc
         if completed.returncode != 0:
+            # Prefer the structured envelope over a bare exit code.
+            envelope = _parse_jsonl(completed.stdout)
+            if envelope is not None and envelope.get("ok") is False:
+                error = envelope.get("error") or {}
+                raise RobotClientError(
+                    f"{error.get('code', 'ROBOT_ERROR')}: {error.get('message', 'unknown robot-skill error')}"
+                )
             stderr = completed.stderr.strip() or f"exit {completed.returncode}"
             raise RobotClientError(stderr)
-        try:
-            parsed = json.loads(completed.stdout)
-        except json.JSONDecodeError as exc:
-            raise RobotClientError(f"robot-skill returned non-JSON output: {exc}") from exc
+        parsed = _parse_jsonl(completed.stdout)
+        if parsed is None:
+            raise RobotClientError(
+                f"robot-skill returned non-JSON output: {completed.stdout[:200]!r}"
+            )
         if not isinstance(parsed, dict):
             raise RobotClientError("robot-skill output was not a JSON object")
-        return parsed
+        # The CLI exits 0 even for policy rejections (ok:false error envelopes);
+        # surface those so the bridge maps them to error responses.
+        if parsed.get("ok") is False:
+            error = parsed.get("error") or {}
+            raise RobotClientError(
+                f"{error.get('code', 'ROBOT_ERROR')}: {error.get('message', 'unknown robot-skill error')}"
+            )
+        # Commands return {command, data, ok, schema_version}; models model the
+        # inner payload. `data` is null for a few no-payload commands — fall
+        # back to the whole envelope so callers still get a dict.
+        data = parsed.get("data")
+        return data if isinstance(data, dict) else parsed
 
     def catalog(self) -> Catalog:
         return Catalog.model_validate(self._run(["list-skills"]))

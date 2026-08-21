@@ -34,6 +34,7 @@
 
 ## 未覆盖（按设计留待后续）
 
-- ⏭ 仿真端到端（`use_sim:=true` + Gazebo + `robot-skill`）：需 ROS 2 环境，验收场景按设计为"单技能链路"（Webhook/Schedule → Status → Skill → 输出），在具备 ROS 环境的机器上执行 `services/roboframe-bridge/README.md` 部署步骤后复验。
-- ⏭ CLI JSON 映射联调：`RobotSkillCliClient` 的输出解析需对照真实 `robot-skill --json` 校准（README 已注明）。
+- ⏭ Gazebo 物理仿真端到端：需完整 ROS 2 桌面环境。**契约级仿真已通过**（2026-08-21，Mac mini arm64 + ros:humble 容器）：contract_mock + safety_guard + skill_executor + task_executor + FollowJointTrajectory 桩构成运动面；HTTP `POST /v1/skills/execute` → bridge → `robot-skill` → Gateway 准入（digest 匹配、控制模式、安全校验）→ 4 原语执行 → `GET /v1/tasks/{id}` 返回 `completed / success=true`。剩余差距仅为物理引擎语义。
+- ✅ CLI JSON 映射联调（2026-08-21 完成，对照真实 CLI 校准）：真实 `robot-skill` 无 `--json` 标志（JSON 为唯一输出格式）；`execute` 输出为 JSON-lines（feedback 流 + 单条 result 信封），取最后一行解析；CLI 对策略拒绝也可能返回 exit 0（`ok:false` 信封），按信封 `error.code/message` 上抛。修复已落入 `client.py`（`_parse_jsonl` + 信封解包），bridge 17 个单测全过。
 - ⏭ Playwright 浏览器验收：属 Phase 2 交付范围（依赖 Robot Skill Plan 节点）。
+- ⏭ RK3588 实机部署：镜像与部署物已就绪（`deploy/rk3588/`，arm64 镜像在 Mac 构建并通过容器冒烟：healthz OK、零 custom-node 加载错误），待板端执行 `docs/roboframe/deploy-rk3588.md`。
