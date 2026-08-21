@@ -6,7 +6,7 @@
 | --- | --- |
 | Project root | `/Volumes/MySSD/zhaoyilun/dev/n8n-blockly` |
 | Base | n8n `2.35.4`, Blockly `12.3.1`, blockly-data-transform v1（`70c66ad1`） |
-| Branch | `feat/roboframe-integration` |
+| Branch | `main`（开发分支 `feat/roboframe-integration` 已并入） |
 | Design | `docs/roboframe/roboframe-integration-design.md` v0.2（15 条审核意见已落入） |
 | Upstream | https://gitcode.com/openeuler/IB_Robot `RoboFrame` 分支（commit `8f364c3`，只读消费） |
 | Delivery | n8n 节点族 + HTTP bridge + Blockly 技能计划编辑器；roboframe 执行层零改动 |

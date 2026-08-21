@@ -6,7 +6,7 @@
 | --- | --- |
 | Project root | Repository root |
 | Base | n8n `2.35.4`, Blockly `12.3.1`, MVP commit `3d4bea91` |
-| Branch | `codex/blockly-data-transform-v1` |
+| Branch | `main`（开发分支 `codex/blockly-data-transform-v1` 已并入） |
 | Audience | Self-hosted n8n users who can model simple data rules but should not write JavaScript |
 | Delivery | Deployable n8n fork: custom node runtime plus the smallest editor-ui integration |
 | Product | `Blockly Data Transform`, technical node id remains `CUSTOM.blocklyCode` |

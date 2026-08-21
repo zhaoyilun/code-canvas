@@ -4,7 +4,7 @@
 
 | 字段 | 内容 |
 | --- | --- |
-| 分支 | `feat/roboframe-integration` |
+| 分支 | `main`（开发分支 `feat/roboframe-integration` 已并入） |
 | 本地基线 | n8n `2.35.4` + Blockly `12.3.1`，`blockly-data-transform` v1 已落地（见 `.agents/specs/blockly-data-transform-v1.md`） |
 | 上游仓库 | [gitcode.com/openeuler/IB_Robot](https://gitcode.com/openeuler/IB_Robot)，分支 `RoboFrame`，分析基线 commit `8f364c3` |
 | 状态 | 设计稿 v0.2（15 条审核意见已落入）；Phase 1/2 已按本稿实施，代码级验收记录见 `phase1-acceptance.md` / `phase2-acceptance.md` |

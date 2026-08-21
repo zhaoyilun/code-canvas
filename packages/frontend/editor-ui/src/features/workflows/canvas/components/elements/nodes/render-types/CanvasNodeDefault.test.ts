@@ -185,7 +185,9 @@ describe('CanvasNodeDefault', () => {
 				});
 
 				const nodeElement = getByText('Test Node').closest('.node');
-				expect(nodeElement).toHaveStyle({ '--canvas-node--height': expected });
+				// String form: object literals with CSS custom properties fail against
+				// @vitest/browser's stricter toHaveStyle(Partial<CSSStyleDeclaration>) signature.
+				expect(nodeElement).toHaveStyle(`--canvas-node--height: ${expected}`);
 			},
 		);
 	});
@@ -499,7 +501,7 @@ describe('CanvasNodeDefault', () => {
 					});
 
 					const nodeElement = getByText('Test Node').closest('.node');
-					expect(nodeElement).toHaveStyle({ '--canvas-node--width': expected });
+					expect(nodeElement).toHaveStyle(`--canvas-node--width: ${expected}`);
 				},
 			);
 		});

@@ -17,6 +17,7 @@ export default defineConfig({
 		globals: true,
 		include: [
 			'src/features/shared/editors/components/BlocklyEditor/payload.test.ts',
+			'src/features/shared/editors/components/BlocklyEditor/robotSkills.test.ts',
 			'src/features/shared/editors/components/BlocklyEditor/BlocklyEditor.test.ts',
 		],
 	},

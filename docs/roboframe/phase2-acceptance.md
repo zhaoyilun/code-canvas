@@ -1,6 +1,6 @@
 # Phase 2 验收记录 — Blockly 侧（技能计划编辑器）
 
-> 分支 `feat/roboframe-integration`。对照设计稿 §10 Phase 2 与 §11 测试矩阵。
+> 分支 `main`（开发分支 `feat/roboframe-integration` 已并入）。对照设计稿 §10 Phase 2 与 §11 测试矩阵。
 
 ## 交付物
 
