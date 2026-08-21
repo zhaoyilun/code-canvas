@@ -49,7 +49,7 @@ N8N_BLOCKLY_COMPILER_MODULE=/absolute/path/to/index.js node scripts/blockly-v1/v
 3. 确认 Blockly 工作区包含字段标准化、金额乘法和条件分级；预览只读，且与 `verify-v1.mjs --require-compiler` 的 canonical 输出一致。
 4. 编辑一个可识别的文本块，再保存；记录正常 workflow PATCH 成功。重新加载后 workspace 仍存在。
 5. 执行 workflow；执行记录必须为 `success`，Blockly 节点输出必须恰好三项、顺序不变，并与 `scripts/blockly-v1/fixtures/expected-output.json` 字段完全一致。
-6. 通过官方 UI/CLI 导出 workflow；对导出文件运行 `node scripts/blockly-v1/verify-v1.mjs /path/to/export.json --require-compiler`。将该文件导入新的隔离 `N8N_USER_FOLDER`，用 `n8n execute --id=<imported-id> --rawOutput` 保存结果，再运行 `node scripts/blockly-v1/verify-execution.mjs /path/to/raw-output.json`；必须得到相同三项输出。
+6. 通过官方 UI/CLI 导出 workflow；对导出文件运行 `node scripts/blockly-v1/verify-v1.mjs /path/to/export.json --require-compiler`。将该文件导入新的隔离 `N8N_USER_FOLDER`，用 `n8n execute --id=<imported-id> --rawOutput` 保存结果，再运行 `node scripts/blockly-v1/verify-execution.mjs /path/to/raw-output.json`；必须得到相同三项输出。此 `--rawOutput` 只证明输出验收，不能证明 preview tamper 信任边界。
 
 静态验证、单元测试或 health/HTTP 200 都不能替代上述真实 UI 保存、重载、执行、导出/导入和证据留存。
 
@@ -71,6 +71,7 @@ ps -axww -o pid=,ppid=,command= \
 export EXPORTED_WORKFLOW=/path/to/ui-exported.json
 export TAMPER_RUNTIME=scripts/blockly-v1/.runtime/tampered-preview
 mkdir -p "$TAMPER_RUNTIME"
+export TAMPER_RUNTIME="$(cd "$TAMPER_RUNTIME" && pwd)"
 
 node - "$EXPORTED_WORKFLOW" "$TAMPER_RUNTIME/workflow.json" <<'NODE'
 const fs = require('node:fs');
@@ -91,16 +92,58 @@ packages/cli/bin/n8n import:workflow --input="$TAMPER_RUNTIME/workflow.json"
 N8N_USER_FOLDER="$TAMPER_RUNTIME/n8n-user" \
 N8N_CUSTOM_EXTENSIONS="$PWD/custom-nodes/n8n-nodes-blockly-code/dist" \
 N8N_RUNNERS_INSECURE_MODE=false \
-packages/cli/bin/n8n execute --id="$(node -p "require('./$TAMPER_RUNTIME/workflow.json').id")" \
+packages/cli/bin/n8n execute --id="$(node -p "require(process.env.TAMPER_RUNTIME + '/workflow.json').id")" \
   --rawOutput > "$TAMPER_RUNTIME/raw-output.json"
 
+# rawOutput 只可用于常规输出验收，不能作为 tamper 证据。
+node scripts/blockly-v1/verify-execution.mjs "$TAMPER_RUNTIME/raw-output.json"
+
+# 取该次执行的完整 execution record。它必须同时包含 workflowId、workflowData
+# 和 data.resultData；不要将上面的 raw-output.json 传给 tamper 验证。
+export TAMPER_WORKFLOW_ID="$(node -p "require(process.env.TAMPER_RUNTIME + '/workflow.json').id")"
+export N8N_SQLITE_DB="$TAMPER_RUNTIME/n8n-user/.n8n/database.sqlite"
+export TAMPER_EXECUTION_ID="$(sqlite3 -readonly "$N8N_SQLITE_DB" \
+  "SELECT id FROM execution_entity WHERE workflowId = '$TAMPER_WORKFLOW_ID' ORDER BY id DESC LIMIT 1;")"
+test -n "$TAMPER_EXECUTION_ID"
+
+# 从 SQLite 的 execution_entity 与 execution_data 导出同一条完整记录。
+sqlite3 -readonly -json "$N8N_SQLITE_DB" "
+SELECT e.id, e.workflowId, e.finished, e.mode, e.status, d.workflowData, d.data
+FROM execution_entity e
+JOIN execution_data d ON d.executionId = e.id
+WHERE e.id = $TAMPER_EXECUTION_ID;
+" > "$TAMPER_RUNTIME/execution-record-row.json"
+
+# execution_data.data 使用 flatted 存储；在声明该现有依赖的 packages/cli
+# 上下文中解码，不新增依赖。
+(
+  cd packages/cli
+  node --input-type=module - \
+    "$TAMPER_RUNTIME/execution-record-row.json" \
+    "$TAMPER_RUNTIME/execution-record.json" <<'NODE'
+import { readFileSync, writeFileSync } from 'node:fs';
+import { parse as parseFlatted } from 'flatted';
+
+const [inputPath, outputPath] = process.argv.slice(2);
+const [row] = JSON.parse(readFileSync(inputPath, 'utf8'));
+if (!row) throw new Error('SQLite execution record was not found');
+const record = {
+  ...row,
+  finished: Boolean(row.finished),
+  workflowData: JSON.parse(row.workflowData),
+  data: parseFlatted(row.data),
+};
+writeFileSync(outputPath, `${JSON.stringify(record, null, 2)}\n`);
+NODE
+)
+
 node scripts/blockly-v1/verify-execution.mjs \
-  "$TAMPER_RUNTIME/raw-output.json" \
+  "$TAMPER_RUNTIME/execution-record.json" \
   --workflow="$TAMPER_RUNTIME/workflow.json" \
   --expect-tampered-preview
 ```
 
-只有验证器报告 tampered preview 被忽略、三条输出与 `expected-output.json` 完全一致时，该信任边界才通过。
+tamper 模式会额外校验 `execution.workflowId` 与 `--workflow` 文档 id 一致，且 `execution.workflowData` 中唯一 `CUSTOM.blocklyCode` 节点的 `blocklyPayload` 与传入 tampered workflow 完全一致，再校验三条运行输出。只有验证器报告 tampered preview 被忽略、三条输出与 `expected-output.json` 完全一致时，该信任边界才通过。
 
 ## 停止、清理与回滚
 
