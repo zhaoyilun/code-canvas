@@ -23,6 +23,7 @@
   },
   "include": [
     "nodes/**/*",
+    "credentials/**/*",
     "package.json"
   ],
   "exclude": [

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=n8n Kiosk
+Comment=Fullscreen n8n editor on the robot touchscreen
+Exec=/opt/n8n-rk3588/kiosk/kiosk.sh
+Terminal=false
+X-GNOME-Autostart-enabled=true
+# Runs at desktop session start (requires auto-login enabled on the device).

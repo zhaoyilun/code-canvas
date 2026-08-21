@@ -1,0 +1,26 @@
+# n8n on RK3588 (offline kiosk topology).
+# host networking on purpose: the n8n container must reach the bridge at
+# 127.0.0.1:8090 (bridge binds loopback only — no LAN exposure) and the kiosk
+# browser reaches n8n at 127.0.0.1:5678. No port mapping, no bridge network.
+# NOTE: `network_mode: host` is Linux-only; on macOS dev machines use
+# `docker run -p 5678:5678` style overrides instead of this file.
+
+services:
+  n8n:
+    image: n8n-rk3588:${N8N_TAG:-latest}
+    container_name: n8n-rk3588
+    network_mode: host
+    env_file: env.offline
+    user: node
+    restart: unless-stopped
+    volumes:
+      - n8n-data:/home/node/.n8n
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:5678/healthz"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  n8n-data:

@@ -1,0 +1,21 @@
+# n8n container bring-up — RK3588 offline kiosk topology.
+#
+# Install to: /etc/systemd/system/n8n-rk3588.service
+# The container itself is restart=unless-stopped; this unit only guarantees
+# `docker compose up` happens at boot and waits for /healthz.
+
+[Unit]
+Description=n8n (fork) container — offline kiosk
+Requires=docker.service
+After=docker.service roboframe-bridge.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+WorkingDirectory=/opt/n8n-rk3588
+ExecStart=/usr/bin/docker compose up -d --wait
+ExecStop=/usr/bin/docker compose down
+TimeoutStartSec=180
+
+[Install]
+WantedBy=multi-user.target

@@ -7,7 +7,7 @@ export class RoboFrameBridgeApi implements ICredentialType {
 
 	documentationUrl = 'https://gitcode.com/openeuler/IB_Robot';
 
-	icon = 'file:roboframe.svg';
+	icon: 'file:roboframe.svg' = 'file:roboframe.svg';
 
 	properties: INodeProperties[] = [
 		{
@@ -28,23 +28,24 @@ export class RoboFrameBridgeApi implements ICredentialType {
 		},
 	];
 
-	test = async (credentials: Record<string, unknown>): Promise<{ status: 'OK' | 'Error'; message: string }> => {
-		const baseUrl = typeof credentials.baseUrl === 'string' ? credentials.baseUrl.replace(/\/+$/, '') : '';
-		if (baseUrl === '') {
-			return { status: 'Error', message: 'Base URL is required' };
-		}
-		const token = typeof credentials.token === 'string' && credentials.token !== '' ? credentials.token : undefined;
-		try {
-			const response = await fetch(`${baseUrl}/v1/health`, {
-				headers: token === undefined ? {} : { Authorization: `Bearer ${token}` },
-			});
-			if (response.ok) return { status: 'OK', message: 'Connection OK' };
-			return { status: 'Error', message: `Bridge responded with ${response.status}` };
-		} catch (error) {
-			return {
-				status: 'Error',
-				message: error instanceof Error ? error.message : 'Bridge unreachable',
-			};
-		}
+	// Declarative test (ICredentialTestRequest): the credential test button
+	// issues GET {baseUrl}/v1/health and treats 2xx as OK. The bearer token
+	// header is injected by the authenticate rule below.
+	test: ICredentialType['test'] = {
+		request: {
+			baseURL: '={{$credentials.baseUrl.replace(/\\/+$/, "")}}',
+			url: '/v1/health',
+			headers: {
+				// Health is public per the bridge contract; send the token when
+				// present anyway so misconfigured tokens surface in the test.
+				Authorization: '={{$credentials.token ? `Bearer ${$credentials.token}` : ""}}',
+			},
+		},
+		rules: [
+			{
+				type: 'responseCode',
+				properties: { value: 200, message: 'Bridge health check failed' },
+			},
+		],
 	};
 }

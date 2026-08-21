@@ -1,0 +1,31 @@
+# RoboFrame HTTP bridge — runs NATIVELY on the RK3588 host inside the ROS env
+# (it shells out to `robot-skill`, which needs install/setup.sh sourced).
+#
+# Install to: /etc/systemd/system/roboframe-bridge.service
+# Secrets live in /etc/roboframe-bridge.env (ROBOFRAME_BRIDGE_TOKEN required).
+#
+# Adjust IB_ROBOT_DIR and the venv path to the actual installation.
+
+[Unit]
+Description=RoboFrame HTTP bridge (robot-skill REST facade)
+After=network.target
+# The bridge does not need the network to serve loopback, but ordering after
+# network.target avoids racing journald/hostname setup during boot.
+
+[Service]
+Type=simple
+User=robot
+Group=robot
+EnvironmentFile=/etc/roboframe-bridge.env
+# Bind loopback ONLY: the sole consumer is the n8n container in host-network
+# mode on this same device. There is no reason for anything else to reach it.
+Environment=ROBOFRAME_BRIDGE_BIND=127.0.0.1
+Environment=ROBOFRAME_BRIDGE_PORT=8090
+WorkingDirectory=/opt/roboframe-bridge
+# systemd cannot `source` a ROS setup script; wrap through a login shell.
+ExecStart=/bin/bash -lc 'source /opt/IB_Robot/install/setup.sh && exec /opt/roboframe-bridge/.venv/bin/roboframe-bridge'
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -10,7 +10,7 @@
 		"dist"
 	],
 	"scripts": {
-		"build": "n8n-node build",
+		"build": "n8n-node build && node scripts/bundle-runtime.mjs",
 		"lint": "n8n-node lint",
 		"test": "vitest run nodes",
 		"typecheck": "tsc --noEmit"
