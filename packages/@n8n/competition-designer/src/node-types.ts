@@ -5,6 +5,8 @@ export const COMPETITION_NODE_TYPES = {
 	merge: 'n8n-nodes-base.merge',
 	noOp: 'n8n-nodes-base.noOp',
 	httpRequest: 'n8n-nodes-base.httpRequest',
+	code: 'n8n-nodes-base.code',
+	blocklyCode: 'CUSTOM.blocklyCode',
 	robotStatus: 'CUSTOM.robotStatus',
 	robotSkillPlan: 'CUSTOM.robotSkillPlan',
 	robotValidate: 'CUSTOM.robotValidate',

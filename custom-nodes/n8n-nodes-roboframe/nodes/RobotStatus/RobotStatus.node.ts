@@ -33,7 +33,10 @@ export class RobotStatus implements INodeType {
 			const normalized = robotStatusJson(status);
 			const output: INodeExecutionData[] = [];
 			for (let index = 0; index < items.length; index++) {
-				output.push({ json: normalized, pairedItem: { item: index } });
+				output.push({
+					json: { ...items[index].json, ...normalized },
+					pairedItem: { item: index },
+				});
 			}
 			if (output.length === 0) {
 				output.push({ json: normalized, pairedItem: { item: 0 } });

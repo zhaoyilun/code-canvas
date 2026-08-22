@@ -1,3 +1,4 @@
+import { parseBlocklyDataPayload } from '@n8n/blockly-data-transform';
 import { parseRobotPlanPayload } from '@n8n/blockly-robot-skills';
 import type { IExecuteFunctions, INode, INodeExecutionData } from 'n8n-workflow';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -49,10 +50,35 @@ const livePoses = {
 
 function designDraft(catalogDigest = 'sha256:live-catalog') {
 	return {
-		schemaVersion: '1.0',
+		schemaVersion: '2.0',
 		designId: 'lesson.inspect-and-open',
 		revisionId: 'revision-1',
 		name: 'AI 可解释机器人课程',
+		logicNodes: [
+			{
+				nodeRef: 'logic.normalize-input',
+				label: 'Normalize lesson input',
+				outputMode: 'copyInput',
+				statements: [
+					{
+						kind: 'set',
+						intentStepId: 'logic.normalize.amount',
+						targetField: 'normalizedAmount',
+						value: {
+							kind: 'convert',
+							to: 'number',
+							value: { kind: 'input', path: 'amount' },
+						},
+						teaching: {
+							what: '把输入金额转换为数字',
+							why: '机器人判断节点需要稳定的数值类型',
+							editable: ['输入路径', '输出字段'],
+							expectedEffect: 'normalizedAmount 是数字或 null',
+						},
+					},
+				],
+			},
+		],
 		robotPlan: {
 			schemaVersion: 1,
 			planRef: 'plan.inspect-and-open',
@@ -117,7 +143,12 @@ describe('CompetitionDesign node', () => {
 			stage: string;
 			blocklyPayload: string;
 			blocklyWorkspace: Record<string, unknown>;
-			semanticDraft: { steps: Array<{ teaching?: { why: string } }> };
+			logicNodes: Array<{
+				blocklyPayload: string;
+				javascript: string;
+				sourceMap: Array<{ intentStepId: string; blockId: string }>;
+			}>;
+			semanticDraft: { robotPlan: { steps: Array<{ teaching?: { why: string } }> } };
 			robotTaskPlan: { plan: unknown[] };
 			traceMap: unknown[];
 			n8nWorkflow: {
@@ -132,11 +163,16 @@ describe('CompetitionDesign node', () => {
 		expect(json.stage).toBe('complete');
 		expect(parseRobotPlanPayload(json.blocklyPayload).ok).toBe(true);
 		expect(json.blocklyWorkspace).toHaveProperty('blocks');
+		expect(json.logicNodes).toHaveLength(1);
+		expect(parseBlocklyDataPayload(json.logicNodes[0].blocklyPayload).ok).toBe(true);
+		expect(json.logicNodes[0].javascript).toContain('normalizedAmount');
+		expect(json.logicNodes[0].sourceMap[0]?.intentStepId).toBe('logic.normalize.amount');
 		expect(json.robotTaskPlan.plan).toHaveLength(2);
-		expect(json.traceMap).toHaveLength(2);
-		expect(json.semanticDraft.steps[0]?.teaching?.why).toBe('先理解环境再动作');
+		expect(json.traceMap).toHaveLength(3);
+		expect(json.semanticDraft.robotPlan.steps[0]?.teaching?.why).toBe('先理解环境再动作');
 		expect(json.n8nWorkflow.nodes.map((nodeEntry) => nodeEntry.type)).toEqual([
 			'n8n-nodes-base.manualTrigger',
+			'CUSTOM.blocklyCode',
 			'CUSTOM.robotStatus',
 			'n8n-nodes-base.if',
 			'CUSTOM.robotSkillPlan',

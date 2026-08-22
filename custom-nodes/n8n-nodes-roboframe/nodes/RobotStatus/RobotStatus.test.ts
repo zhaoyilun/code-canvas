@@ -1,8 +1,35 @@
-import { describe, expect, it } from 'vitest';
+import type { IExecuteFunctions, INodeExecutionData } from 'n8n-workflow';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { robotStatusJson } from './RobotStatus.node';
+const { clientFromCredentialsMock } = vi.hoisted(() => ({
+	clientFromCredentialsMock: vi.fn(),
+}));
+
+vi.mock('../shared/context', () => ({ clientFromCredentials: clientFromCredentialsMock }));
+
+import { RobotStatus, robotStatusJson } from './RobotStatus.node';
+
+function makeContext(items: INodeExecutionData[]): IExecuteFunctions {
+	return {
+		getInputData: () => items,
+		getCredentials: vi.fn(async () => ({ baseUrl: 'http://bridge', token: 'test' })),
+	} as unknown as IExecuteFunctions;
+}
 
 describe('robotStatusJson', () => {
+	beforeEach(() => {
+		clientFromCredentialsMock.mockReset();
+		clientFromCredentialsMock.mockResolvedValue({
+			status: vi.fn(async () => ({
+				schema_version: 1,
+				robot_name: 'rk3588_training_arm',
+				motion_authorized: true,
+				busy: false,
+				config_digest: 'sha256:live-catalog',
+			})),
+		});
+	});
+
 	it('preserves the real RoboFrame status identity, digests and readiness fields', () => {
 		const result = robotStatusJson({
 			schema_version: 1,
@@ -55,5 +82,35 @@ describe('robotStatusJson', () => {
 		]);
 		expect(result).not.toHaveProperty('requiredControlMode');
 		expect(result).not.toHaveProperty('readiness');
+	});
+
+	it('keeps Blockly Logic output while live robot status fields take precedence', async () => {
+		const result = await new RobotStatus().execute.call(
+			makeContext([
+				{
+					json: {
+						lessonId: 'lesson-1',
+						normalizedScore: 72,
+						activeStudentNames: ['Lin', 'Tao'],
+						robotName: 'stale-name',
+						busy: true,
+					},
+					pairedItem: { item: 0 },
+				},
+			]),
+		);
+
+		expect(result[0][0]).toEqual({
+			json: expect.objectContaining({
+				lessonId: 'lesson-1',
+				normalizedScore: 72,
+				activeStudentNames: ['Lin', 'Tao'],
+				robotName: 'rk3588_training_arm',
+				busy: false,
+				motionAuthorized: true,
+				configDigest: 'sha256:live-catalog',
+			}),
+			pairedItem: { item: 0 },
+		});
 	});
 });

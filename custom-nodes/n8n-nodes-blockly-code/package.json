@@ -1,7 +1,7 @@
 {
   "name": "n8n-nodes-blockly-code",
   "version": "0.1.0",
-  "description": "Blockly Data Transform node for n8n",
+  "description": "Blockly Logic node for visual per-item logic inside n8n",
   "license": "MIT",
   "keywords": [
     "n8n-community-node-package"
@@ -36,6 +36,6 @@
   },
   "homepage": "https://n8n.io",
   "author": {
-    "name": "Blockly Data Transform contributors"
+    "name": "Blockly Logic contributors"
   }
 }

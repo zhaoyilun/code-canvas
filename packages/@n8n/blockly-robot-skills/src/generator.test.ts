@@ -1,3 +1,5 @@
+import { createRequire } from 'node:module';
+import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import type { RobotCatalog } from './catalog';
@@ -5,6 +7,29 @@ import { SO101_CATALOG_SNAPSHOT } from './catalog';
 import { compileRobotWorkspace } from './compiler';
 import type { RobotPlanDraft } from './generator';
 import { generateRobotPlanWorkspace } from './generator';
+import { parseRobotPlanPayload, serializeRobotPlanPayload } from './payload';
+
+type BlocklyWorkspace = { dispose(): void };
+type BlocklyRuntime = {
+	VERSION: string;
+	// eslint-disable-next-line @typescript-eslint/naming-convention -- Blockly public API
+	Blocks: Record<string, unknown>;
+	// eslint-disable-next-line @typescript-eslint/naming-convention -- Blockly public API
+	Workspace: new () => BlocklyWorkspace;
+	common: { defineBlocksWithJsonArray(definitions: Array<Record<string, unknown>>): void };
+	serialization: {
+		workspaces: {
+			load(state: Record<string, unknown>, workspace: BlocklyWorkspace): void;
+			save(workspace: BlocklyWorkspace): Record<string, unknown>;
+		};
+	};
+};
+
+const repositoryRequire = createRequire(
+	path.resolve(__dirname, '../../../frontend/editor-ui/package.json'),
+);
+const Blockly = repositoryRequire('blockly') as BlocklyRuntime;
+registerRoundTripBlocks();
 
 function draftOf(steps: RobotPlanDraft['steps']): RobotPlanDraft {
 	return {
@@ -58,8 +83,20 @@ describe('generateRobotPlanWorkspace', () => {
 		expect(new Set(first.sourceMap.map((entry) => entry.blockId)).size).toBe(4);
 		for (const entry of first.sourceMap) {
 			expect(entry.planStepId).toBe(`step:${entry.blockId}`);
+			const action = findBlockById(first.workspace, entry.blockId);
+			expect(parseBlockData(action)).toMatchObject({ intentStepId: entry.stepRef });
 		}
 		expect(first.sourceMap[0]?.guardBlockId).toBeDefined();
+		const inspectAction = findBlockById(first.workspace, first.sourceMap[0]?.blockId ?? '');
+		expect(parseBlockData(inspectAction)).toEqual({
+			intentStepId: 'inspect',
+			teaching: draft.steps[0]?.teaching,
+		});
+		const inspectGuard = findBlockById(first.workspace, first.sourceMap[0]?.guardBlockId ?? '');
+		expect(parseBlockData(inspectGuard)).toEqual({
+			intentStepId: 'inspect',
+			teaching: draft.steps[0]?.teaching,
+		});
 		expect(first.plan.plan[0]).toMatchObject({
 			step: 'skill',
 			skill: 'inspect_scene',
@@ -84,6 +121,81 @@ describe('generateRobotPlanWorkspace', () => {
 
 		const recompiled = compileRobotWorkspace(first.workspace, SO101_CATALOG_SNAPSHOT);
 		expect(recompiled).toMatchObject({ ok: true, plan: first.plan });
+	});
+
+	it('preserves teaching data and source identities through Blockly 12.3.1 load/save', () => {
+		const teaching = {
+			what: 'Inspect the teaching table',
+			why: 'Explain how the skill maps to robot execution',
+			editable: ['skill timeout'],
+			expectedEffect: 'The latest scene state is available',
+		};
+		const draft = draftOf([
+			{ stepRef: 'inspect-taught', kind: 'skill', name: 'inspect_scene', teaching },
+			{ stepRef: 'pause-plain', kind: 'wait', durationMs: 500 },
+			{
+				stepRef: 'wave-guarded-plain',
+				kind: 'skill',
+				name: 'wave_hello',
+				when: { field: 'last.success', op: 'eq', value: true },
+			},
+		]);
+		const generated = generateRobotPlanWorkspace(draft, SO101_CATALOG_SNAPSHOT, {
+			designId: 'design.round-trip',
+		});
+		expect(Blockly.VERSION).toBe('12.3.1');
+		expect(generated.ok).toBe(true);
+		if (!generated.ok) return;
+
+		const workspace = new Blockly.Workspace();
+		let saved: Record<string, unknown>;
+		try {
+			Blockly.serialization.workspaces.load(generated.workspace, workspace);
+			saved = Blockly.serialization.workspaces.save(workspace);
+		} finally {
+			workspace.dispose();
+		}
+
+		const payload = serializeRobotPlanPayload({
+			catalog: SO101_CATALOG_SNAPSHOT,
+			workspace: saved,
+		});
+		const parsedPayload = parseRobotPlanPayload(payload);
+		expect(parsedPayload.ok).toBe(true);
+		if (!parsedPayload.ok) return;
+		const recompiled = compileRobotWorkspace(
+			parsedPayload.payload.workspace,
+			SO101_CATALOG_SNAPSHOT,
+		);
+		expect(recompiled).toMatchObject({ ok: true, plan: generated.plan });
+
+		for (const entry of generated.sourceMap) {
+			const action = findBlockById(parsedPayload.payload.workspace, entry.blockId);
+			expect(action).toBeDefined();
+			expect(parseBlockData(action)).toMatchObject({ intentStepId: entry.stepRef });
+			if (entry.guardBlockId !== undefined) {
+				const guard = findBlockById(parsedPayload.payload.workspace, entry.guardBlockId);
+				expect(guard?.type).toBe('robot_condition');
+				expect(parseBlockData(guard)).toEqual({ intentStepId: entry.stepRef });
+			}
+		}
+		const taughtEntry = generated.sourceMap.find((entry) => entry.stepRef === 'inspect-taught');
+		expect(parseBlockData(findBlockById(saved, taughtEntry?.blockId ?? ''))).toEqual({
+			intentStepId: 'inspect-taught',
+			teaching,
+		});
+		const waitEntry = generated.sourceMap.find((entry) => entry.stepRef === 'pause-plain');
+		expect(parseBlockData(findBlockById(saved, waitEntry?.blockId ?? ''))).toEqual({
+			intentStepId: 'pause-plain',
+		});
+		if (recompiled.ok) {
+			expect(recompiled.plan.plan.map((step) => step.blockId)).toEqual(
+				generated.sourceMap.map((entry) => entry.blockId),
+			);
+			expect(recompiled.plan.plan.map((step) => step.planStepId)).toEqual(
+				generated.sourceMap.map((entry) => entry.planStepId),
+			);
+		}
 	});
 
 	it('keeps block identities stable across parameter edits and step reordering', () => {
@@ -303,3 +415,88 @@ describe('generateRobotPlanWorkspace', () => {
 		).toMatchObject({ ok: false, error: { code: 'TOO_MANY_STEPS', path: 'steps' } });
 	});
 });
+
+function findBlockById(value: unknown, blockId: string): Record<string, unknown> | undefined {
+	if (Array.isArray(value)) {
+		for (const entry of value) {
+			const found = findBlockById(entry, blockId);
+			if (found !== undefined) return found;
+		}
+		return undefined;
+	}
+	if (typeof value !== 'object' || value === null) return undefined;
+	const record = value as Record<string, unknown>;
+	if (record.id === blockId) return record;
+	for (const entry of Object.values(record)) {
+		const found = findBlockById(entry, blockId);
+		if (found !== undefined) return found;
+	}
+	return undefined;
+}
+
+function parseBlockData(block: Record<string, unknown> | undefined): unknown {
+	if (block === undefined || typeof block.data !== 'string') return undefined;
+	try {
+		return JSON.parse(block.data);
+	} catch {
+		throw new Error('Expected robot block data to be valid JSON');
+	}
+}
+
+function registerRoundTripBlocks(): void {
+	if (Blockly.Blocks.robot_task_plan !== undefined) return;
+	const skillOptions = SO101_CATALOG_SNAPSHOT.skills.map((skill): [string, string] => [
+		skill.name,
+		skill.name,
+	]);
+	Blockly.common.defineBlocksWithJsonArray([
+		{
+			type: 'robot_task_plan',
+			message0: 'robot plan %1',
+			args0: [{ type: 'input_statement', name: 'DO' }],
+			colour: 30,
+		},
+		{
+			type: 'robot_execute_skill',
+			message0: 'execute skill %1',
+			args0: [{ type: 'field_dropdown', name: 'SKILL', options: skillOptions }],
+			previousStatement: null,
+			nextStatement: null,
+			colour: 30,
+		},
+		{
+			type: 'robot_wait',
+			message0: 'wait %1 seconds',
+			args0: [{ type: 'input_value', name: 'SECONDS', check: 'Number' }],
+			previousStatement: null,
+			nextStatement: null,
+			colour: 30,
+		},
+		{
+			type: 'robot_condition',
+			message0: 'condition %1 %2 %3',
+			args0: [
+				{
+					type: 'field_dropdown',
+					name: 'FIELD',
+					options: [
+						['last.success', 'last.success'],
+						['last.state', 'last.state'],
+					],
+				},
+				{
+					type: 'field_dropdown',
+					name: 'OP',
+					options: [
+						['==', '=='],
+						['!=', '!='],
+					],
+				},
+				{ type: 'input_value', name: 'VALUE', check: 'String' },
+			],
+			previousStatement: null,
+			nextStatement: null,
+			colour: 30,
+		},
+	]);
+}

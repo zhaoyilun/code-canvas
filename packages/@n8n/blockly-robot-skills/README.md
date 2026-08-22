@@ -108,6 +108,14 @@ step whenever the workspace block carries an ID. `sourceMap` is the package-leve
 mapping; the orchestration layer adds `workflowNodeId`, explanation references,
 and revision metadata.
 
+Every generated action block stores standard Blockly `data` as a JSON string
+containing `intentStepId: stepRef` and the validated `teaching` annotation when
+present. A generated guard block carries the same step data as its guarded
+action. Blockly load/save and payload serialization preserve this metadata so
+the node editor can show what the selected block does, why it exists, which
+fields are editable, and its expected effect without using preview code as the
+teaching source.
+
 ## Frontend integration
 
 The robot Blockly editor should:

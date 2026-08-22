@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -35,11 +36,36 @@ function setField(
 	};
 }
 
+function deleteField(key: string, next?: Record<string, unknown>): Record<string, unknown> {
+	return {
+		type: 'n8n_delete_field',
+		fields: { KEY: key },
+		...(next ? { next: value(next) } : {}),
+	};
+}
+
 const numberBlock = (num: number) => ({ type: 'math_number', fields: { NUM: num } });
 const text = (textValue: string) => ({ type: 'text', fields: { TEXT: textValue } });
 const field = (path: string) => ({ type: 'n8n_get_field', fields: { PATH: path } });
+const booleanBlock = (enabled: boolean) => ({
+	type: 'logic_boolean',
+	fields: { BOOL: enabled ? 'TRUE' : 'FALSE' },
+});
 
-describe('Blockly data transform compiler', () => {
+function objectProperty(
+	key: string,
+	expression: Record<string, unknown>,
+	next?: Record<string, unknown>,
+): Record<string, unknown> {
+	return {
+		type: 'n8n_object_property',
+		fields: { KEY: key },
+		inputs: { VALUE: value(expression) },
+		...(next ? { next: value(next) } : {}),
+	};
+}
+
+describe('Blockly Logic compiler', () => {
 	it('compiles the default copy-input workspace deterministically', () => {
 		const defaultWorkspace = createDefaultWorkspace();
 		const result = compileBlocklyWorkspace(defaultWorkspace);
@@ -61,6 +87,27 @@ describe('Blockly data transform compiler', () => {
 		});
 	});
 
+	it('preserves empty slots from the official list mutator as null values', () => {
+		const result = compileBlocklyWorkspace(
+			workspace(
+				root(
+					setField('items', {
+						type: 'lists_create_with',
+						extraState: { itemCount: 3 },
+						inputs: { ADD1: value(text('middle')) },
+					}),
+				),
+			),
+		);
+
+		expect(result).toEqual({
+			ok: true,
+			blockCount: 4,
+			javascript:
+				'const output = { ...$json };\noutput["items"] = [null, "middle", null];\nreturn { json: output };\n',
+		});
+	});
+
 	it('compiles field normalization with get, text join, and empty output mode', () => {
 		const result = compileBlocklyWorkspace(
 			workspace(
@@ -79,6 +126,30 @@ describe('Blockly data transform compiler', () => {
 			blockCount: 5,
 			javascript:
 				'const output = {};\noutput["normalized"] = ["user-", ($json?.["profile"]?.["id"] ?? null)].join(\'\');\nreturn { json: output };\n',
+		});
+	});
+
+	it('writes and deletes nested output paths without mutating the input item', () => {
+		const input = {
+			profile: { name: 'before', retained: true },
+			obsolete: { flag: true, retained: 'yes' },
+		};
+		const result = compileBlocklyWorkspace(
+			workspace(root(setField('profile.name', text('after'), deleteField('obsolete.flag')))),
+		);
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		const execution = runInNewContext(`(() => { ${result.javascript} })()`, {
+			$json: input,
+		}) as { json: Record<string, unknown> };
+		expect(execution.json).toEqual({
+			profile: { name: 'after', retained: true },
+			obsolete: { retained: 'yes' },
+		});
+		expect(input).toEqual({
+			profile: { name: 'before', retained: true },
+			obsolete: { flag: true, retained: 'yes' },
 		});
 	});
 
@@ -141,6 +212,227 @@ describe('Blockly data transform compiler', () => {
 		}
 	});
 
+	it('compiles array creation, indexed access, and length without loops', () => {
+		const array = {
+			type: 'lists_create_with',
+			extraState: { itemCount: 2 },
+			inputs: { ADD0: value(text('first')), ADD1: value(text('second')) },
+		};
+		const result = compileBlocklyWorkspace(
+			workspace(
+				root(
+					setField(
+						'selected',
+						{
+							type: 'n8n_array_at',
+							inputs: { ARRAY: value(array), INDEX: value(numberBlock(1)) },
+						},
+						{
+							type: 'n8n_set_field',
+							fields: { KEY: 'itemCount' },
+							inputs: {
+								VALUE: value({
+									type: 'lists_length',
+									inputs: {
+										VALUE: value({ type: 'lists_create_with', extraState: { itemCount: 0 } }),
+									},
+								}),
+							},
+						},
+					),
+				),
+			),
+		);
+
+		expect(result).toEqual({
+			ok: true,
+			blockCount: 10,
+			javascript:
+				'const output = { ...$json };\noutput["selected"] = ((items, index) => Array.isArray(items) && Number.isInteger(index) ? (items.at(index) ?? null) : null)(["first", "second"], 1);\noutput["itemCount"] = ((value) => Array.isArray(value) || typeof value === \'string\' ? value.length : 0)([]);\nreturn { json: output };\n',
+		});
+	});
+
+	it('compiles bounded array filter and path projection', () => {
+		const result = compileBlocklyWorkspace(
+			workspace(
+				root(
+					setField('activeNames', {
+						type: 'n8n_array_map_path',
+						fields: { PATH: 'profile.name' },
+						inputs: {
+							ARRAY: value({
+								type: 'n8n_array_filter_path',
+								fields: { PATH: 'active', OP: 'EQ' },
+								inputs: { ARRAY: value(field('users')), VALUE: value(booleanBlock(true)) },
+							}),
+						},
+					}),
+				),
+			),
+		);
+
+		expect(result).toEqual({
+			ok: true,
+			blockCount: 6,
+			javascript:
+				'const output = { ...$json };\noutput["activeNames"] = ((items) => Array.isArray(items) ? items.map((item) => (item?.["profile"]?.["name"] ?? null)) : [])(((items, expected) => Array.isArray(items) ? items.filter((item) => ((item?.["active"] ?? null) === expected)) : [])(($json?.["users"] ?? null), true));\nreturn { json: output };\n',
+		});
+	});
+
+	it('compiles object construction, arbitrary path reads, and explicit conversions', () => {
+		const result = compileBlocklyWorkspace(
+			workspace(
+				root(
+					setField('summary', {
+						type: 'n8n_object_create',
+						inputs: {
+							PROPERTIES: value(
+								objectProperty(
+									'count',
+									{
+										type: 'n8n_convert',
+										fields: { TYPE: 'NUMBER' },
+										inputs: { VALUE: value(field('count')) },
+									},
+									objectProperty('email', {
+										type: 'n8n_get_path',
+										fields: { PATH: 'contact.email' },
+										inputs: { VALUE: value(field('profile')) },
+									}),
+								),
+							),
+						},
+					}),
+				),
+			),
+		);
+
+		expect(result).toEqual({
+			ok: true,
+			blockCount: 9,
+			javascript:
+				'const output = { ...$json };\noutput["summary"] = { ["count"]: ((value) => { if (value === null || value === \'\') return null; const number = Number(value); return Number.isFinite(number) ? number : null; })(($json?.["count"] ?? null)), ["email"]: ((($json?.["profile"] ?? null))?.["contact"]?.["email"] ?? null) };\nreturn { json: output };\n',
+		});
+	});
+
+	it('compiles assertion, conditional statement branches, deletion, and following statements', () => {
+		const assertion = {
+			type: 'n8n_assert',
+			inputs: {
+				CONDITION: value({
+					type: 'logic_compare',
+					fields: { OP: 'GTE' },
+					inputs: { A: value(field('age')), B: value(numberBlock(18)) },
+				}),
+				MESSAGE: value(text('age must be at least 18')),
+			},
+			next: value({
+				type: 'n8n_if',
+				inputs: {
+					CONDITION: value(field('active')),
+					THEN: value(setField('status', text('active'))),
+					ELSE: value({ type: 'n8n_delete_field', fields: { KEY: 'legacyStatus' } }),
+				},
+				next: value(setField('reviewed', booleanBlock(true))),
+			}),
+		};
+		const result = compileBlocklyWorkspace(workspace(root(assertion)));
+
+		expect(result).toEqual({
+			ok: true,
+			blockCount: 13,
+			javascript:
+				'const output = { ...$json };\nif (!((($json?.["age"] ?? null) >= 18))) {\n\tthrow new Error(String("age must be at least 18"));\n}\nif (($json?.["active"] ?? null)) {\n\toutput["status"] = "active";\n} else {\n\tdelete output["legacyStatus"];\n}\noutput["reviewed"] = true;\nreturn { json: output };\n',
+		});
+	});
+
+	it.each([
+		[
+			'array input gaps',
+			workspace(
+				root(
+					setField('items', {
+						type: 'lists_create_with',
+						inputs: { ADD0: value(text('a')), ADD2: value(text('c')) },
+					}),
+				),
+			),
+		],
+		[
+			'array extra input',
+			workspace(
+				root(setField('items', { type: 'lists_create_with', inputs: { ITEM: value(text('x')) } })),
+			),
+		],
+		[
+			'conversion type',
+			workspace(
+				root(
+					setField('value', {
+						type: 'n8n_convert',
+						fields: { TYPE: 'DATE' },
+						inputs: { VALUE: value(text('2026-08-22')) },
+					}),
+				),
+			),
+		],
+		[
+			'filter operator',
+			workspace(
+				root(
+					setField('items', {
+						type: 'n8n_array_filter_path',
+						fields: { PATH: 'ready', OP: 'MATCHES' },
+						inputs: { ARRAY: value(field('items')), VALUE: value(booleanBlock(true)) },
+					}),
+				),
+			),
+		],
+		[
+			'duplicate object key',
+			workspace(
+				root(
+					setField('object', {
+						type: 'n8n_object_create',
+						inputs: {
+							PROPERTIES: value(
+								objectProperty('same', text('a'), objectProperty('same', text('b'))),
+							),
+						},
+					}),
+				),
+			),
+		],
+		[
+			'dotted object key',
+			workspace(
+				root(
+					setField('object', {
+						type: 'n8n_object_create',
+						inputs: { PROPERTIES: value(objectProperty('profile.name', text('Ada'))) },
+					}),
+				),
+			),
+		],
+		[
+			'object property in root statement chain',
+			workspace(root(objectProperty('value', text('x')))),
+		],
+		[
+			'output statement in object property chain',
+			workspace(
+				root(
+					setField('object', {
+						type: 'n8n_object_create',
+						inputs: { PROPERTIES: value(setField('value', text('x'))) },
+					}),
+				),
+			),
+		],
+	])('rejects malformed Blockly Logic grammar: %s', (_name, invalidWorkspace) => {
+		expect(compileBlocklyWorkspace(invalidWorkspace).ok).toBe(false);
+	});
+
 	it.each([
 		['unknown block', workspace(root(setField('value', { type: 'controls_repeat_ext' })))],
 		['disconnected root', { blocks: { languageVersion: 0, blocks: [root(), root()] } }],
@@ -167,6 +459,19 @@ describe('Blockly data transform compiler', () => {
 		expect(parseBlocklyDataPayload('{"schemaVersion":1,"workspace":{},"javascript":""}').ok).toBe(
 			false,
 		);
+		expect(
+			parseBlocklyDataPayload(
+				JSON.stringify({
+					schemaVersion: 2,
+					workspace: createDefaultWorkspace(),
+					javascript: '',
+					hiddenCode: 'ignored field',
+				}),
+			),
+		).toEqual({
+			ok: false,
+			error: 'Payload must contain only schemaVersion, workspace, and javascript',
+		});
 		const parsed = parseBlocklyDataPayload(
 			JSON.stringify({
 				schemaVersion: 2,

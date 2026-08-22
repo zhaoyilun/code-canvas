@@ -1,0 +1,462 @@
+{
+  "id": "lesson.ai-code-understanding",
+  "name": "AI 可解释机器人课程 · Blockly Logic v2",
+  "nodes": [
+    {
+      "id": "be270138-6998-5fc0-a0c4-f0fc4bb451d0",
+      "name": "01 Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        192
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "d3759c88-5f79-591a-b3b0-9888f5bcdf42",
+      "name": "01.1 Blockly Logic · 规范化课程输入",
+      "type": "CUSTOM.blocklyCode",
+      "typeVersion": 1,
+      "position": [
+        224,
+        192
+      ],
+      "parameters": {
+        "blocklyPayload": "{\"schemaVersion\":2,\"workspace\":{\"blocks\":{\"languageVersion\":0,\"blocks\":[{\"type\":\"n8n_transform_item\",\"id\":\"logic-1b734dba-75ff-58c1-8c07-a630153bd121\",\"x\":24,\"y\":24,\"fields\":{\"MODE\":\"COPY\"},\"inputs\":{\"STATEMENTS\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-e351f08f-f3be-5cb3-a29d-4788619b4f2f\",\"data\":\"{\\\"intentStepId\\\":\\\"logic.normalize-score\\\",\\\"teaching\\\":{\\\"what\\\":\\\"把输入分数转换为数字并乘以 1.2\\\",\\\"why\\\":\\\"让学员观察类型转换和乘法积木对应的 JavaScript\\\",\\\"editable\\\":[\\\"输入字段 score\\\",\\\"倍率 1.2\\\",\\\"输出字段 normalizedScore\\\"],\\\"expectedEffect\\\":\\\"输出包含统一量纲的 normalizedScore\\\"}}\",\"fields\":{\"KEY\":\"normalizedScore\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"math_arithmetic\",\"id\":\"logic-24750806-fd9a-5738-b15c-a1f1f249c195\",\"fields\":{\"OP\":\"MULTIPLY\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_convert\",\"id\":\"logic-2bd9b719-95fc-50db-9fe8-15bda137c910\",\"fields\":{\"TYPE\":\"NUMBER\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-26350d78-e4dd-5d37-b9f4-98c34b4b59c0\",\"fields\":{\"PATH\":\"score\"}}}}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-b85ea599-effe-5437-99f2-35fea509558e\",\"fields\":{\"NUM\":1.2}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-c286397c-bfd5-5b6a-a48e-1d4d5aec9e42\",\"data\":\"{\\\"intentStepId\\\":\\\"logic.select-active-students\\\",\\\"teaching\\\":{\\\"what\\\":\\\"筛选活跃学员并读取姓名\\\",\\\"why\\\":\\\"展示数组筛选和字段映射如何替代 Code 节点\\\",\\\"editable\\\":[\\\"数组路径 students\\\",\\\"筛选字段 active\\\",\\\"姓名路径 profile.name\\\"],\\\"expectedEffect\\\":\\\"activeStudentNames 只包含活跃学员姓名\\\"}}\",\"fields\":{\"KEY\":\"activeStudentNames\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_array_map_path\",\"id\":\"logic-1bfebe7b-9331-51ab-bff1-bb627ee4e92d\",\"fields\":{\"PATH\":\"profile.name\"},\"inputs\":{\"ARRAY\":{\"block\":{\"type\":\"n8n_array_filter_path\",\"id\":\"logic-a23a7736-d441-5b29-a9dc-8f8a7ba4ad3a\",\"fields\":{\"PATH\":\"active\",\"OP\":\"EQ\"},\"inputs\":{\"ARRAY\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-c145c227-70e3-5069-bfd8-8f929f4ba1b4\",\"fields\":{\"PATH\":\"students\"}}},\"VALUE\":{\"block\":{\"type\":\"logic_boolean\",\"id\":\"logic-f8984e3e-34c5-5406-809a-650596bcaf82\",\"fields\":{\"BOOL\":\"TRUE\"}}}}}}}}}}}}}}}}]}},\"javascript\":\"const output = { ...$json };\\noutput[\\\"normalizedScore\\\"] = (((value) => { if (value === null || value === '') return null; const number = Number(value); return Number.isFinite(number) ? number : null; })(($json?.[\\\"score\\\"] ?? null)) * 1.2);\\noutput[\\\"activeStudentNames\\\"] = ((items) => Array.isArray(items) ? items.map((item) => (item?.[\\\"profile\\\"]?.[\\\"name\\\"] ?? null)) : [])(((items, expected) => Array.isArray(items) ? items.filter((item) => ((item?.[\\\"active\\\"] ?? null) === expected)) : [])(($json?.[\\\"students\\\"] ?? null), true));\\nreturn { json: output };\\n\"}"
+      }
+    },
+    {
+      "id": "57c9aeef-77aa-567a-9873-2c11a03df8a4",
+      "name": "02 Robot Status",
+      "type": "CUSTOM.robotStatus",
+      "typeVersion": 1,
+      "position": [
+        448,
+        192
+      ],
+      "parameters": {},
+      "credentials": {
+        "robframeBridgeApi": {
+          "id": "REPLACE_WITH_ROBOFRAME_CREDENTIAL_ID",
+          "name": "REPLACE_WITH_ROBOFRAME_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "id": "901799ed-8b13-5ea7-ae9c-6a1cb3cd0a25",
+      "name": "03 Robot Ready?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        672,
+        192
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "0278495d-89c3-59d3-a64e-2baff3498311",
+              "leftValue": "={{ $json.motionAuthorized }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "true"
+              }
+            },
+            {
+              "id": "058a9548-f5ab-5665-8d9a-db660b90caf6",
+              "leftValue": "={{ $json.busy }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "false"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "d5002e8e-2d3c-5b48-86e7-cc1b103a0ad6",
+      "name": "04 Robot Plan · plan.observe-and-greet",
+      "type": "CUSTOM.robotSkillPlan",
+      "typeVersion": 1,
+      "position": [
+        896,
+        96
+      ],
+      "parameters": {
+        "blocklyPayload": "{\"schemaVersion\":2,\"catalog\":{\"robotName\":\"rk3588_training_arm\",\"configDigest\":\"rk3588-classroom-demo-v2\",\"skills\":[{\"name\":\"inspect_scene\",\"summary\":\"Inspect the workspace from the observation view.\",\"domain\":\"manipulation\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":30,\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}},{\"name\":\"recover_safe_pose\",\"summary\":\"Return the arm to the 'home' safe rest pose.\",\"domain\":\"manipulation\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":30,\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}},{\"name\":\"recover_zero_pose\",\"summary\":\"Return the arm to the 'zero' pose.\",\"domain\":\"manipulation\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":30,\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}},{\"name\":\"move_relative_ee\",\"summary\":\"Move the end effector relative to its current pose.\",\"domain\":\"manipulation\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":30,\"parameters\":{\"type\":\"object\",\"properties\":{\"motion_direction\":{\"type\":\"string\",\"enum\":[\"forward\",\"backward\",\"left\",\"right\",\"up\",\"down\"]},\"motion_distance\":{\"type\":\"number\"}},\"required\":[\"motion_direction\",\"motion_distance\"],\"additionalProperties\":false}},{\"name\":\"open_gripper_skill\",\"summary\":\"Open the gripper.\",\"domain\":\"manipulation\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":15,\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}},{\"name\":\"close_gripper_skill\",\"summary\":\"Close the gripper.\",\"domain\":\"manipulation\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":15,\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}},{\"name\":\"rotate_gripper_cw\",\"summary\":\"Rotate the gripper clockwise around the end-effector Z axis.\",\"domain\":\"manipulation\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":30,\"parameters\":{\"type\":\"object\",\"properties\":{\"motion_distance\":{\"type\":\"number\"}},\"required\":[\"motion_distance\"],\"additionalProperties\":false}},{\"name\":\"rotate_gripper_ccw\",\"summary\":\"Rotate the gripper counter-clockwise around the end-effector Z axis.\",\"domain\":\"manipulation\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":30,\"parameters\":{\"type\":\"object\",\"properties\":{\"motion_distance\":{\"type\":\"number\"}},\"required\":[\"motion_distance\"],\"additionalProperties\":false}},{\"name\":\"dance_basic\",\"summary\":\"Perform a rhythmic dance gesture.\",\"domain\":\"entertainment\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":60,\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}},{\"name\":\"wave_hello\",\"summary\":\"Wave hello.\",\"domain\":\"social\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":30,\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}},{\"name\":\"nod_yes\",\"summary\":\"Nod yes.\",\"domain\":\"social\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":30,\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}},{\"name\":\"shake_no\",\"summary\":\"Shake no.\",\"domain\":\"social\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":30,\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}},{\"name\":\"celebrate\",\"summary\":\"Celebrate a success.\",\"domain\":\"social\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":30,\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}},{\"name\":\"greet_observe_raise\",\"summary\":\"Raise into the observe pose as a greeting.\",\"domain\":\"social\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":30,\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}},{\"name\":\"act_cute\",\"summary\":\"Act cute to seek attention.\",\"domain\":\"social\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":30,\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}},{\"name\":\"happy_spin_upright\",\"summary\":\"Spin cheerfully while upright.\",\"domain\":\"social\",\"requiredControlMode\":\"moveit_planning\",\"recoveryPolicy\":\"never_retry\",\"timeoutSec\":30,\"parameters\":{\"type\":\"object\",\"properties\":{},\"required\":[],\"additionalProperties\":false}}],\"primitives\":[\"move_to_named_pose\",\"move_to_pose\",\"move_to_configuration\",\"move_relative_ee\",\"move_to_joint_positions\",\"move_through_joint_positions\",\"open_gripper\",\"close_gripper\",\"rotate_gripper_cw\",\"rotate_gripper_ccw\"],\"namedPoses\":[\"home\",\"observe_table\",\"zero\"]},\"workspace\":{\"blocks\":{\"languageVersion\":0,\"blocks\":[{\"type\":\"robot_task_plan\",\"id\":\"robot-80ab891283109619\",\"x\":40,\"y\":40,\"inputs\":{\"DO\":{\"block\":{\"type\":\"robot_execute_skill\",\"id\":\"robot-5e2d88fb4e7dc467\",\"data\":\"{\\\"intentStepId\\\":\\\"robot.observe\\\",\\\"teaching\\\":{\\\"what\\\":\\\"观察场景\\\",\\\"why\\\":\\\"先获取环境信息再执行动作\\\",\\\"editable\\\":[],\\\"expectedEffect\\\":\\\"形成可供后续判断使用的场景状态\\\"}}\",\"fields\":{\"SKILL\":\"inspect_scene\"},\"inputs\":{},\"next\":{\"block\":{\"type\":\"robot_wait\",\"id\":\"robot-69e0635b7499fd07\",\"data\":\"{\\\"intentStepId\\\":\\\"robot.pause\\\"}\",\"inputs\":{\"SECONDS\":{\"block\":{\"type\":\"math_number\",\"id\":\"robot-1aa1f68e4dd14da2\",\"fields\":{\"NUM\":0.5}}}},\"next\":{\"block\":{\"type\":\"robot_condition\",\"id\":\"robot-2fb8bda35fb9563f-guard\",\"data\":\"{\\\"intentStepId\\\":\\\"robot.wave\\\"}\",\"fields\":{\"FIELD\":\"last.success\",\"OP\":\"!=\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"text\",\"id\":\"robot-e80b5484623f73ae\",\"fields\":{\"TEXT\":\"true\"}}}},\"next\":{\"block\":{\"type\":\"robot_execute_skill\",\"id\":\"robot-2fb8bda35fb9563f\",\"data\":\"{\\\"intentStepId\\\":\\\"robot.wave\\\"}\",\"fields\":{\"SKILL\":\"wave_hello\"},\"inputs\":{}}}}}}}}}}}]}}}"
+      }
+    },
+    {
+      "id": "49605f5d-6559-5ab4-8990-f35ed4a23dcf",
+      "name": "05 Validate Plan",
+      "type": "CUSTOM.robotValidate",
+      "typeVersion": 1,
+      "position": [
+        1120,
+        96
+      ],
+      "parameters": {
+        "operation": "plan"
+      },
+      "credentials": {
+        "robframeBridgeApi": {
+          "id": "REPLACE_WITH_ROBOFRAME_CREDENTIAL_ID",
+          "name": "REPLACE_WITH_ROBOFRAME_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "id": "ecd49416-2183-5a05-80f4-b96384b1ff3d",
+      "name": "06 Human Approval",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1344,
+        32
+      ],
+      "parameters": {
+        "resume": "form",
+        "incomingAuthentication": "none",
+        "responseMode": "onReceived",
+        "formTitle": "Review Robot Plan",
+        "formDescription": "Choose Approve only after reviewing the Blockly plan and validation.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Approval Decision",
+              "fieldType": "radio",
+              "fieldOptions": {
+                "values": [
+                  {
+                    "option": "Approve"
+                  },
+                  {
+                    "option": "Reject"
+                  }
+                ]
+              },
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b8923a63-4a94-582a-b1a5-764f0157b605",
+      "name": "07 Approved?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        1568,
+        32
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "5ece191b-7f95-531c-b750-2c80e4ed9215",
+              "leftValue": "={{ $json[\"Approval Decision\"] }}",
+              "rightValue": "Approve",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "698301b7-89d1-5216-86bc-f5cf015bc1f6",
+      "name": "08 Merge Approved Plan",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1792,
+        48
+      ],
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      }
+    },
+    {
+      "id": "6418c8c7-b73a-5ab0-b4a0-b44079ccd447",
+      "name": "09 Execute Robot Plan",
+      "type": "CUSTOM.robotTask",
+      "typeVersion": 1,
+      "position": [
+        2016,
+        48
+      ],
+      "parameters": {},
+      "credentials": {
+        "robframeBridgeApi": {
+          "id": "REPLACE_WITH_ROBOFRAME_CREDENTIAL_ID",
+          "name": "REPLACE_WITH_ROBOFRAME_CREDENTIAL_NAME"
+        }
+      }
+    },
+    {
+      "id": "77c2d49e-748c-5987-b19a-86d6a2d9c631",
+      "name": "10 Task Completed?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        2240,
+        48
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "d0c8e1c0-1d4c-5dfd-9544-aceaf91ca497",
+              "leftValue": "={{ $json.finalStatus }}",
+              "rightValue": "completed",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "28173371-66ba-5113-a8c6-49728fcd81af",
+      "name": "11 Completed",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2464,
+        0
+      ],
+      "parameters": {},
+      "notes": "Robot task completed.",
+      "notesInFlow": true
+    },
+    {
+      "id": "7644fef0-d042-5de6-8aad-bdc23b7cc75c",
+      "name": "12 Needs Inspection",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2464,
+        192
+      ],
+      "parameters": {},
+      "notes": "Robot task ended failed, canceled, or unknown. Inspect the structured result.",
+      "notesInFlow": true
+    },
+    {
+      "id": "2945328b-8cb8-52dd-a707-ed2c5227ca06",
+      "name": "13 Rejected",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        1792,
+        240
+      ],
+      "parameters": {},
+      "notes": "The reviewer rejected this robot plan.",
+      "notesInFlow": true
+    },
+    {
+      "id": "89055bc6-5d52-5451-8e3e-552d5ee733f0",
+      "name": "14 Robot Not Ready",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        896,
+        288
+      ],
+      "parameters": {},
+      "notes": "Robot motion is not authorized or another task is active.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "01 Start": {
+      "main": [
+        [
+          {
+            "node": "01.1 Blockly Logic · 规范化课程输入",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "01.1 Blockly Logic · 规范化课程输入": {
+      "main": [
+        [
+          {
+            "node": "02 Robot Status",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "02 Robot Status": {
+      "main": [
+        [
+          {
+            "node": "03 Robot Ready?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "03 Robot Ready?": {
+      "main": [
+        [
+          {
+            "node": "04 Robot Plan · plan.observe-and-greet",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "14 Robot Not Ready",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "04 Robot Plan · plan.observe-and-greet": {
+      "main": [
+        [
+          {
+            "node": "05 Validate Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "05 Validate Plan": {
+      "main": [
+        [
+          {
+            "node": "06 Human Approval",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "08 Merge Approved Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "06 Human Approval": {
+      "main": [
+        [
+          {
+            "node": "07 Approved?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "07 Approved?": {
+      "main": [
+        [
+          {
+            "node": "08 Merge Approved Plan",
+            "type": "main",
+            "index": 1
+          }
+        ],
+        [
+          {
+            "node": "13 Rejected",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "08 Merge Approved Plan": {
+      "main": [
+        [
+          {
+            "node": "09 Execute Robot Plan",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "09 Execute Robot Plan": {
+      "main": [
+        [
+          {
+            "node": "10 Task Completed?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "10 Task Completed?": {
+      "main": [
+        [
+          {
+            "node": "11 Completed",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "12 Needs Inspection",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {},
+  "meta": {
+    "competitionDesign": {
+      "schemaVersion": "2.0",
+      "designId": "lesson.ai-code-understanding",
+      "revisionId": "revision-2",
+      "planRef": "plan.observe-and-greet",
+      "reviewState": "review_required"
+    }
+  }
+}

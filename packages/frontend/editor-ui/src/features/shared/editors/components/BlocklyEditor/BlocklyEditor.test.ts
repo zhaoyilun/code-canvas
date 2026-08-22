@@ -22,6 +22,7 @@ const events = {
 };
 let changeListener: ChangeListener | undefined;
 let savedWorkspace: Record<string, unknown> = createDefaultWorkspace();
+let selectedBlockData: string | undefined;
 
 function notifyProgrammaticChange() {
 	if (events.disabled) return;
@@ -48,6 +49,7 @@ const blockly = {
 	FieldTextInput: class {
 		constructor(_value: string) {}
 	},
+	getSelected: vi.fn(() => (selectedBlockData === undefined ? null : { data: selectedBlockData })),
 	inject: vi.fn(() => workspace),
 	svgResize: vi.fn(),
 	serialization: {
@@ -93,6 +95,7 @@ describe('BlocklyEditor.vue', () => {
 		events.disabled = false;
 		changeListener = undefined;
 		savedWorkspace = createDefaultWorkspace();
+		selectedBlockData = undefined;
 		vi.clearAllMocks();
 		vi.stubGlobal(
 			'ResizeObserver',
@@ -151,6 +154,69 @@ describe('BlocklyEditor.vue', () => {
 		expect(typeof emitted).toBe('string');
 		const parsed = parseRobotPlanPayload(String(emitted));
 		expect(parsed.ok && parsed.payload.catalog.configDigest).toBe('rk3588-live-digest');
+		wrapper.unmount();
+	});
+
+	it.each([
+		{
+			name: 'logic',
+			props: { modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()) },
+			title: 'blocklyEditor.title',
+		},
+		{
+			name: 'robot plan',
+			props: {
+				modelValue: serializeRobotPlanPayload({
+					catalog: {
+						robotName: 'rk3588_lab_arm',
+						configDigest: 'rk3588-live-digest',
+						skills: [],
+						primitives: [],
+						namedPoses: [],
+					},
+					workspace: { blocks: { blocks: [] } },
+				}),
+				editorMode: 'robot-skills' as const,
+			},
+			title: 'robotSkillEditor.title',
+		},
+	])('identifies the $name Blockly editor as part of the current n8n node', async ({ props, title }) => {
+		const editorProps: {
+			modelValue: string;
+			editorMode?: 'data-transform' | 'robot-skills';
+		} = props;
+		const wrapper = mount(BlocklyEditor, { props: editorProps });
+
+		await flushPromises();
+
+		expect(wrapper.text()).toContain(title);
+		expect(wrapper.text()).toContain('blocklyEditor.location.node');
+		wrapper.unmount();
+	});
+
+	it('shows the AI teaching annotation for the selected generated block', async () => {
+		const wrapper = mount(BlocklyEditor, {
+			props: { modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()) },
+		});
+		await flushPromises();
+		selectedBlockData = JSON.stringify({
+			intentStepId: 'logic.normalize.amount',
+			teaching: {
+				what: 'Normalize the amount',
+				why: 'The next node expects a number',
+				editable: ['input path', 'default value'],
+				expectedEffect: 'amount is numeric',
+			},
+		});
+
+		changeListener?.({ isUiEvent: true });
+		await flushPromises();
+
+		const annotation = wrapper.get('[data-test-id="blockly-teaching-annotation"]');
+		expect(annotation.text()).toContain('Normalize the amount');
+		expect(annotation.text()).toContain('The next node expects a number');
+		expect(annotation.text()).toContain('input path · default value');
+		expect(annotation.text()).toContain('logic.normalize.amount');
 		wrapper.unmount();
 	});
 

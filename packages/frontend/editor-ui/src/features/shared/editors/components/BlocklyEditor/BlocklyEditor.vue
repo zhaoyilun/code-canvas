@@ -35,6 +35,7 @@ const i18n = useI18n();
 const editorContainer = ref<HTMLDivElement>();
 const javascriptPreview = ref('');
 const compileError = ref('');
+const selectedTeaching = ref<TeachingAnnotation>();
 let workspace: BlocklyWorkspace | undefined;
 let blockly: Awaited<ReturnType<typeof loadBlocklyModule>> | undefined;
 let robotCatalog: RobotCatalog = SO101_CATALOG_SNAPSHOT;
@@ -46,6 +47,16 @@ const previewTitle = computed(() =>
 	isRobotMode.value
 		? i18n.baseText('robotSkillEditor.preview.title')
 		: i18n.baseText('blocklyEditor.preview.title'),
+);
+const editorTitle = computed(() =>
+	isRobotMode.value
+		? i18n.baseText('robotSkillEditor.title')
+		: i18n.baseText('blocklyEditor.title'),
+);
+const editorDescription = computed(() =>
+	isRobotMode.value
+		? i18n.baseText('robotSkillEditor.description')
+		: i18n.baseText('blocklyEditor.description'),
 );
 
 onMounted(async () => {
@@ -68,6 +79,32 @@ onMounted(async () => {
 			to: i18n.baseText('blocklyEditor.blocks.to'),
 			getField: i18n.baseText('blocklyEditor.blocks.getField'),
 			path: i18n.baseText('blocklyEditor.blocks.path'),
+			deleteField: i18n.baseText('blocklyEditor.blocks.deleteField'),
+			if: i18n.baseText('blocklyEditor.blocks.if'),
+			do: i18n.baseText('blocklyEditor.blocks.do'),
+			else: i18n.baseText('blocklyEditor.blocks.else'),
+			assert: i18n.baseText('blocklyEditor.blocks.assert'),
+			message: i18n.baseText('blocklyEditor.blocks.message'),
+			getPath: i18n.baseText('blocklyEditor.blocks.getPath'),
+			from: i18n.baseText('blocklyEditor.blocks.from'),
+			convert: i18n.baseText('blocklyEditor.blocks.convert'),
+			as: i18n.baseText('blocklyEditor.blocks.as'),
+			convertText: i18n.baseText('blocklyEditor.blocks.convertText'),
+			convertNumber: i18n.baseText('blocklyEditor.blocks.convertNumber'),
+			convertBoolean: i18n.baseText('blocklyEditor.blocks.convertBoolean'),
+			arrayItemAt: i18n.baseText('blocklyEditor.blocks.arrayItemAt'),
+			index: i18n.baseText('blocklyEditor.blocks.index'),
+			mapArrayPath: i18n.baseText('blocklyEditor.blocks.mapArrayPath'),
+			filterArrayPath: i18n.baseText('blocklyEditor.blocks.filterArrayPath'),
+			operatorEqual: i18n.baseText('blocklyEditor.blocks.operatorEqual'),
+			operatorNotEqual: i18n.baseText('blocklyEditor.blocks.operatorNotEqual'),
+			operatorLess: i18n.baseText('blocklyEditor.blocks.operatorLess'),
+			operatorLessEqual: i18n.baseText('blocklyEditor.blocks.operatorLessEqual'),
+			operatorGreater: i18n.baseText('blocklyEditor.blocks.operatorGreater'),
+			operatorGreaterEqual: i18n.baseText('blocklyEditor.blocks.operatorGreaterEqual'),
+			objectCreate: i18n.baseText('blocklyEditor.blocks.objectCreate'),
+			objectProperty: i18n.baseText('blocklyEditor.blocks.objectProperty'),
+			key: i18n.baseText('blocklyEditor.blocks.key'),
 		});
 	}
 	workspace = blockly.inject(container, {
@@ -83,6 +120,9 @@ onMounted(async () => {
 					logic: i18n.baseText('blocklyEditor.categories.logic'),
 					math: i18n.baseText('blocklyEditor.categories.math'),
 					text: i18n.baseText('blocklyEditor.categories.text'),
+					arrays: i18n.baseText('blocklyEditor.categories.arrays'),
+					objects: i18n.baseText('blocklyEditor.categories.objects'),
+					types: i18n.baseText('blocklyEditor.categories.types'),
 				}),
 		readOnly: props.isReadOnly,
 	});
@@ -175,7 +215,15 @@ function withWorkspaceEventsDisabled<T>(runtime: BlocklyRuntime, callback: () =>
 	}
 }
 function handleWorkspaceChange(event: BlocklyEvent) {
-	if (!isSynchronizing && !event.isUiEvent) emitWorkspaceValue();
+	if (event.isUiEvent) {
+		updateSelectedTeaching();
+		return;
+	}
+	if (!isSynchronizing) emitWorkspaceValue();
+}
+function updateSelectedTeaching() {
+	const selected = blockly?.getSelected() as { data?: unknown } | null | undefined;
+	selectedTeaching.value = parseTeachingAnnotation(selected?.data);
 }
 function emitWorkspaceValue() {
 	updateCompileState();
@@ -231,6 +279,44 @@ function createRobotBlockLabels(): RobotBlockLabels {
 async function loadBlocklyModule(): Promise<typeof import('blockly')> {
 	return await import('blockly');
 }
+type TeachingAnnotation = {
+	intentStepId: string;
+	what: string;
+	why: string;
+	editable: string[];
+	expectedEffect: string;
+};
+function parseTeachingAnnotation(value: unknown): TeachingAnnotation | undefined {
+	if (typeof value !== 'string') return undefined;
+	try {
+		const parsed = JSON.parse(value) as unknown;
+		if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return undefined;
+		const record = parsed as Record<string, unknown>;
+		const teaching = record.teaching;
+		if (typeof teaching !== 'object' || teaching === null || Array.isArray(teaching))
+			return undefined;
+		const annotation = teaching as Record<string, unknown>;
+		if (
+			typeof record.intentStepId !== 'string' ||
+			typeof annotation.what !== 'string' ||
+			typeof annotation.why !== 'string' ||
+			!Array.isArray(annotation.editable) ||
+			!annotation.editable.every((item) => typeof item === 'string') ||
+			typeof annotation.expectedEffect !== 'string'
+		) {
+			return undefined;
+		}
+		return {
+			intentStepId: record.intentStepId,
+			what: annotation.what,
+			why: annotation.why,
+			editable: annotation.editable,
+			expectedEffect: annotation.expectedEffect,
+		};
+	} catch {
+		return undefined;
+	}
+}
 type BlocklyWorkspace = import('blockly').WorkspaceSvg;
 type BlocklyEvent = import('blockly').Events.Abstract;
 type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
@@ -245,7 +331,30 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 				: i18n.baseText('blocklyEditor.ariaLabel')
 		"
 	>
-		<div ref="editorContainer" :class="$style.workspace" data-test-id="blockly-workspace" />
+		<header :class="$style.header">
+			<div :class="$style.heading">
+				<N8nText tag="h3" size="medium" bold>{{ editorTitle }}</N8nText>
+				<N8nText tag="p" size="small">{{ editorDescription }}</N8nText>
+			</div>
+			<span :class="$style.locationBadge">
+				{{ i18n.baseText('blocklyEditor.location.node') }}
+			</span>
+		</header>
+		<div :class="$style.editorGrid">
+			<div :class="$style.blockPanel">
+				<N8nText tag="h4" size="small" bold>
+					{{ i18n.baseText('blocklyEditor.workspace.title') }}
+				</N8nText>
+				<div ref="editorContainer" :class="$style.workspace" data-test-id="blockly-workspace" />
+			</div>
+			<div :class="$style.preview">
+				<N8nText tag="h4" size="small" bold>{{ previewTitle }}</N8nText>
+				<pre
+					:class="$style.code"
+					data-test-id="blockly-javascript-preview"
+				><code>{{ javascriptPreview }}</code></pre>
+			</div>
+		</div>
 		<N8nNotice
 			v-if="compileError"
 			type="warning"
@@ -254,13 +363,30 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 		>
 			{{ i18n.baseText('blocklyEditor.compileError', { interpolate: { error: compileError } }) }}
 		</N8nNotice>
-		<div :class="$style.preview">
-			<N8nText tag="h3" size="small" bold>{{ previewTitle }}</N8nText>
-			<pre
-				:class="$style.code"
-				data-test-id="blockly-javascript-preview"
-			><code>{{ javascriptPreview }}</code></pre>
-		</div>
+		<aside
+			v-if="selectedTeaching"
+			:class="$style.teaching"
+			data-test-id="blockly-teaching-annotation"
+		>
+			<div :class="$style.teachingHeading">
+				<N8nText tag="h4" size="small" bold>{{ selectedTeaching.what }}</N8nText>
+				<span :class="$style.intentStep">{{ selectedTeaching.intentStepId }}</span>
+			</div>
+			<dl :class="$style.teachingDetails">
+				<div>
+					<dt>{{ i18n.baseText('blocklyEditor.teaching.why') }}</dt>
+					<dd>{{ selectedTeaching.why }}</dd>
+				</div>
+				<div>
+					<dt>{{ i18n.baseText('blocklyEditor.teaching.expectedEffect') }}</dt>
+					<dd>{{ selectedTeaching.expectedEffect }}</dd>
+				</div>
+				<div v-if="selectedTeaching.editable.length > 0">
+					<dt>{{ i18n.baseText('blocklyEditor.teaching.editable') }}</dt>
+					<dd>{{ selectedTeaching.editable.join(' · ') }}</dd>
+				</div>
+			</dl>
+		</aside>
 	</section>
 </template>
 
@@ -268,11 +394,48 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 .editor {
 	display: flex;
 	flex-direction: column;
+	gap: var(--spacing--md);
+}
+.header {
+	display: flex;
+	align-items: flex-start;
+	justify-content: space-between;
+	gap: var(--spacing--md);
+}
+.heading {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing--3xs);
+}
+.heading p {
+	margin: 0;
+	color: var(--text-color--subtle);
+}
+.locationBadge {
+	flex: 0 0 auto;
+	padding: var(--spacing--3xs) var(--spacing--2xs);
+	color: var(--text-color--subtle);
+	background: var(--background--surface);
+	border: var(--border-width) var(--border-style) var(--border-color--subtle);
+	border-radius: var(--radius--xl);
+	font-size: var(--font-size--3xs);
+	font-weight: var(--font-weight--bold);
+}
+.editorGrid {
+	display: grid;
+	grid-template-columns: minmax(0, 3fr) minmax(16rem, 2fr);
 	gap: var(--spacing--sm);
+}
+.blockPanel,
+.preview {
+	display: flex;
+	min-width: 0;
+	flex-direction: column;
+	gap: var(--spacing--2xs);
 }
 .workspace {
 	min-height: var(--spacing--5xl);
-	height: calc(var(--spacing--5xl) + var(--spacing--4xl));
+	height: calc(var(--spacing--5xl) + var(--spacing--5xl));
 	background: var(--background--surface);
 	border: var(--border-width) var(--border-style) var(--border-color--subtle);
 	border-radius: var(--radius--md);
@@ -280,12 +443,50 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 .compileError {
 	margin: 0;
 }
-.preview {
+.teaching {
 	display: flex;
 	flex-direction: column;
-	gap: var(--spacing--2xs);
+	gap: var(--spacing--xs);
+	padding: var(--spacing--sm);
+	background: var(--background--surface);
+	border: var(--border-width) var(--border-style) var(--border-color--subtle);
+	border-radius: var(--radius--md);
+}
+.teachingHeading {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--spacing--sm);
+}
+.intentStep {
+	color: var(--text-color--subtler);
+	font-family: var(--font-family--monospace);
+	font-size: var(--font-size--3xs);
+}
+.teachingDetails {
+	display: grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
+	gap: var(--spacing--sm);
+	margin: 0;
+}
+.teachingDetails div {
+	min-width: 0;
+}
+.teachingDetails dt {
+	margin-bottom: var(--spacing--3xs);
+	color: var(--text-color--subtler);
+	font-size: var(--font-size--3xs);
+	font-weight: var(--font-weight--bold);
+	text-transform: uppercase;
+}
+.teachingDetails dd {
+	margin: 0;
+	color: var(--text-color);
+	font-size: var(--font-size--2xs);
 }
 .code {
+	min-height: var(--spacing--5xl);
+	height: calc(var(--spacing--5xl) + var(--spacing--5xl));
 	margin: 0;
 	padding: var(--spacing--sm);
 	color: var(--text-color);
@@ -294,5 +495,21 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 	border-radius: var(--radius--md);
 	overflow: auto;
 	white-space: pre-wrap;
+}
+
+@media (max-width: 900px) {
+	.header {
+		flex-direction: column;
+	}
+	.editorGrid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.teachingDetails {
+		grid-template-columns: minmax(0, 1fr);
+	}
+	.code {
+		height: auto;
+		max-height: calc(var(--spacing--5xl) + var(--spacing--5xl));
+	}
 }
 </style>

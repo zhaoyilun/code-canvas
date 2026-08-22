@@ -770,7 +770,11 @@ function createWorkspace(
 		const action = createActionBlock(step);
 		if (head !== undefined) action.next = { block: head };
 		if (step.draft.kind !== 'wait' && step.draft.when !== undefined) {
-			const guard = createGuardBlock(step.draft.when, step.guardBlockId ?? `${step.blockId}-guard`);
+			const guard = createGuardBlock(
+				step.draft.when,
+				step.guardBlockId ?? `${step.blockId}-guard`,
+				serializeStepData(step.draft),
+			);
 			guard.next = { block: action };
 			head = guard;
 		} else {
@@ -789,10 +793,12 @@ function createWorkspace(
 }
 
 function createActionBlock(step: NormalizedStep): BlocklyBlock {
+	const data = serializeStepData(step.draft);
 	if (step.draft.kind === 'wait') {
 		return {
 			type: 'robot_wait',
 			id: step.blockId,
+			data,
 			inputs: {
 				SECONDS: {
 					block: numberBlock(
@@ -808,6 +814,7 @@ function createActionBlock(step: NormalizedStep): BlocklyBlock {
 		return {
 			type: 'robot_execute_primitive',
 			id: step.blockId,
+			data,
 			fields: { PRIMITIVE: 'move_to_named_pose' },
 			inputs: {
 				TARGET: {
@@ -826,6 +833,7 @@ function createActionBlock(step: NormalizedStep): BlocklyBlock {
 	const block: BlocklyBlock = {
 		type: step.draft.kind === 'skill' ? 'robot_execute_skill' : 'robot_execute_primitive',
 		id: step.blockId,
+		data,
 		fields,
 	};
 	const params = step.draft.params ?? {};
@@ -878,17 +886,25 @@ function timeoutInput(timeoutSec: number | undefined, blockId: string): JsonReco
 	};
 }
 
-function createGuardBlock(when: RobotPlanDraftGuard, id: string): BlocklyBlock {
+function createGuardBlock(when: RobotPlanDraftGuard, id: string, data: string): BlocklyBlock {
 	const op = when.op === 'eq' ? '!=' : '==';
 	const value = typeof when.value === 'boolean' ? String(when.value) : when.value;
 	return {
 		type: 'robot_condition',
 		id,
+		data,
 		fields: { FIELD: when.field, OP: op },
 		inputs: {
 			VALUE: { block: textBlock(value, stableAuxiliaryBlockId(id, 'input', 'value')) },
 		},
 	};
+}
+
+function serializeStepData(step: RobotStepDraft): string {
+	return JSON.stringify({
+		intentStepId: step.stepRef,
+		...(step.teaching === undefined ? {} : { teaching: step.teaching }),
+	});
 }
 
 function textBlock(value: string, id: string): BlocklyBlock {

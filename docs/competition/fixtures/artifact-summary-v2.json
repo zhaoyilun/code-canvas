@@ -1,0 +1,243 @@
+{
+  "schemaVersion": "2.0",
+  "designId": "lesson.ai-code-understanding",
+  "revisionId": "revision-2",
+  "catalogDigest": "rk3588-classroom-demo-v2",
+  "n8nNodeCount": 15,
+  "logicNodes": [
+    {
+      "nodeRef": "logic.normalize-lesson-input",
+      "label": "规范化课程输入",
+      "workspace": {
+        "blocks": {
+          "languageVersion": 0,
+          "blocks": [
+            {
+              "type": "n8n_transform_item",
+              "id": "logic-1b734dba-75ff-58c1-8c07-a630153bd121",
+              "x": 24,
+              "y": 24,
+              "fields": {
+                "MODE": "COPY"
+              },
+              "inputs": {
+                "STATEMENTS": {
+                  "block": {
+                    "type": "n8n_set_field",
+                    "id": "logic-e351f08f-f3be-5cb3-a29d-4788619b4f2f",
+                    "data": "{\"intentStepId\":\"logic.normalize-score\",\"teaching\":{\"what\":\"把输入分数转换为数字并乘以 1.2\",\"why\":\"让学员观察类型转换和乘法积木对应的 JavaScript\",\"editable\":[\"输入字段 score\",\"倍率 1.2\",\"输出字段 normalizedScore\"],\"expectedEffect\":\"输出包含统一量纲的 normalizedScore\"}}",
+                    "fields": {
+                      "KEY": "normalizedScore"
+                    },
+                    "inputs": {
+                      "VALUE": {
+                        "block": {
+                          "type": "math_arithmetic",
+                          "id": "logic-24750806-fd9a-5738-b15c-a1f1f249c195",
+                          "fields": {
+                            "OP": "MULTIPLY"
+                          },
+                          "inputs": {
+                            "A": {
+                              "block": {
+                                "type": "n8n_convert",
+                                "id": "logic-2bd9b719-95fc-50db-9fe8-15bda137c910",
+                                "fields": {
+                                  "TYPE": "NUMBER"
+                                },
+                                "inputs": {
+                                  "VALUE": {
+                                    "block": {
+                                      "type": "n8n_get_field",
+                                      "id": "logic-26350d78-e4dd-5d37-b9f4-98c34b4b59c0",
+                                      "fields": {
+                                        "PATH": "score"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "B": {
+                              "block": {
+                                "type": "math_number",
+                                "id": "logic-b85ea599-effe-5437-99f2-35fea509558e",
+                                "fields": {
+                                  "NUM": 1.2
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "next": {
+                      "block": {
+                        "type": "n8n_set_field",
+                        "id": "logic-c286397c-bfd5-5b6a-a48e-1d4d5aec9e42",
+                        "data": "{\"intentStepId\":\"logic.select-active-students\",\"teaching\":{\"what\":\"筛选活跃学员并读取姓名\",\"why\":\"展示数组筛选和字段映射如何替代 Code 节点\",\"editable\":[\"数组路径 students\",\"筛选字段 active\",\"姓名路径 profile.name\"],\"expectedEffect\":\"activeStudentNames 只包含活跃学员姓名\"}}",
+                        "fields": {
+                          "KEY": "activeStudentNames"
+                        },
+                        "inputs": {
+                          "VALUE": {
+                            "block": {
+                              "type": "n8n_array_map_path",
+                              "id": "logic-1bfebe7b-9331-51ab-bff1-bb627ee4e92d",
+                              "fields": {
+                                "PATH": "profile.name"
+                              },
+                              "inputs": {
+                                "ARRAY": {
+                                  "block": {
+                                    "type": "n8n_array_filter_path",
+                                    "id": "logic-a23a7736-d441-5b29-a9dc-8f8a7ba4ad3a",
+                                    "fields": {
+                                      "PATH": "active",
+                                      "OP": "EQ"
+                                    },
+                                    "inputs": {
+                                      "ARRAY": {
+                                        "block": {
+                                          "type": "n8n_get_field",
+                                          "id": "logic-c145c227-70e3-5069-bfd8-8f929f4ba1b4",
+                                          "fields": {
+                                            "PATH": "students"
+                                          }
+                                        }
+                                      },
+                                      "VALUE": {
+                                        "block": {
+                                          "type": "logic_boolean",
+                                          "id": "logic-f8984e3e-34c5-5406-809a-650596bcaf82",
+                                          "fields": {
+                                            "BOOL": "TRUE"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "blocklyPayload": "{\"schemaVersion\":2,\"workspace\":{\"blocks\":{\"languageVersion\":0,\"blocks\":[{\"type\":\"n8n_transform_item\",\"id\":\"logic-1b734dba-75ff-58c1-8c07-a630153bd121\",\"x\":24,\"y\":24,\"fields\":{\"MODE\":\"COPY\"},\"inputs\":{\"STATEMENTS\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-e351f08f-f3be-5cb3-a29d-4788619b4f2f\",\"data\":\"{\\\"intentStepId\\\":\\\"logic.normalize-score\\\",\\\"teaching\\\":{\\\"what\\\":\\\"把输入分数转换为数字并乘以 1.2\\\",\\\"why\\\":\\\"让学员观察类型转换和乘法积木对应的 JavaScript\\\",\\\"editable\\\":[\\\"输入字段 score\\\",\\\"倍率 1.2\\\",\\\"输出字段 normalizedScore\\\"],\\\"expectedEffect\\\":\\\"输出包含统一量纲的 normalizedScore\\\"}}\",\"fields\":{\"KEY\":\"normalizedScore\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"math_arithmetic\",\"id\":\"logic-24750806-fd9a-5738-b15c-a1f1f249c195\",\"fields\":{\"OP\":\"MULTIPLY\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_convert\",\"id\":\"logic-2bd9b719-95fc-50db-9fe8-15bda137c910\",\"fields\":{\"TYPE\":\"NUMBER\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-26350d78-e4dd-5d37-b9f4-98c34b4b59c0\",\"fields\":{\"PATH\":\"score\"}}}}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-b85ea599-effe-5437-99f2-35fea509558e\",\"fields\":{\"NUM\":1.2}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-c286397c-bfd5-5b6a-a48e-1d4d5aec9e42\",\"data\":\"{\\\"intentStepId\\\":\\\"logic.select-active-students\\\",\\\"teaching\\\":{\\\"what\\\":\\\"筛选活跃学员并读取姓名\\\",\\\"why\\\":\\\"展示数组筛选和字段映射如何替代 Code 节点\\\",\\\"editable\\\":[\\\"数组路径 students\\\",\\\"筛选字段 active\\\",\\\"姓名路径 profile.name\\\"],\\\"expectedEffect\\\":\\\"activeStudentNames 只包含活跃学员姓名\\\"}}\",\"fields\":{\"KEY\":\"activeStudentNames\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_array_map_path\",\"id\":\"logic-1bfebe7b-9331-51ab-bff1-bb627ee4e92d\",\"fields\":{\"PATH\":\"profile.name\"},\"inputs\":{\"ARRAY\":{\"block\":{\"type\":\"n8n_array_filter_path\",\"id\":\"logic-a23a7736-d441-5b29-a9dc-8f8a7ba4ad3a\",\"fields\":{\"PATH\":\"active\",\"OP\":\"EQ\"},\"inputs\":{\"ARRAY\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-c145c227-70e3-5069-bfd8-8f929f4ba1b4\",\"fields\":{\"PATH\":\"students\"}}},\"VALUE\":{\"block\":{\"type\":\"logic_boolean\",\"id\":\"logic-f8984e3e-34c5-5406-809a-650596bcaf82\",\"fields\":{\"BOOL\":\"TRUE\"}}}}}}}}}}}}}}}}]}},\"javascript\":\"const output = { ...$json };\\noutput[\\\"normalizedScore\\\"] = (((value) => { if (value === null || value === '') return null; const number = Number(value); return Number.isFinite(number) ? number : null; })(($json?.[\\\"score\\\"] ?? null)) * 1.2);\\noutput[\\\"activeStudentNames\\\"] = ((items) => Array.isArray(items) ? items.map((item) => (item?.[\\\"profile\\\"]?.[\\\"name\\\"] ?? null)) : [])(((items, expected) => Array.isArray(items) ? items.filter((item) => ((item?.[\\\"active\\\"] ?? null) === expected)) : [])(($json?.[\\\"students\\\"] ?? null), true));\\nreturn { json: output };\\n\"}",
+      "javascript": "const output = { ...$json };\noutput[\"normalizedScore\"] = (((value) => { if (value === null || value === '') return null; const number = Number(value); return Number.isFinite(number) ? number : null; })(($json?.[\"score\"] ?? null)) * 1.2);\noutput[\"activeStudentNames\"] = ((items) => Array.isArray(items) ? items.map((item) => (item?.[\"profile\"]?.[\"name\"] ?? null)) : [])(((items, expected) => Array.isArray(items) ? items.filter((item) => ((item?.[\"active\"] ?? null) === expected)) : [])(($json?.[\"students\"] ?? null), true));\nreturn { json: output };\n",
+      "sourceMap": [
+        {
+          "logicNodeRef": "logic.normalize-lesson-input",
+          "intentStepId": "logic.normalize-score",
+          "blockId": "logic-e351f08f-f3be-5cb3-a29d-4788619b4f2f",
+          "statementKind": "set",
+          "targetField": "normalizedScore"
+        },
+        {
+          "logicNodeRef": "logic.normalize-lesson-input",
+          "intentStepId": "logic.select-active-students",
+          "blockId": "logic-c286397c-bfd5-5b6a-a48e-1d4d5aec9e42",
+          "statementKind": "set",
+          "targetField": "activeStudentNames"
+        }
+      ],
+      "n8nNodeId": "d3759c88-5f79-591a-b3b0-9888f5bcdf42"
+    }
+  ],
+  "robotPlan": {
+    "schemaVersion": 1,
+    "robot": "rk3588_training_arm",
+    "configDigest": "rk3588-classroom-demo-v2",
+    "plan": [
+      {
+        "step": "skill",
+        "skill": "inspect_scene",
+        "timeoutSec": 30,
+        "blockId": "robot-5e2d88fb4e7dc467",
+        "planStepId": "step:robot-5e2d88fb4e7dc467"
+      },
+      {
+        "step": "wait",
+        "seconds": 0.5,
+        "blockId": "robot-69e0635b7499fd07",
+        "planStepId": "step:robot-69e0635b7499fd07"
+      },
+      {
+        "step": "skill",
+        "skill": "wave_hello",
+        "timeoutSec": 30,
+        "skipIf": {
+          "field": "last.success",
+          "op": "!=",
+          "value": true
+        },
+        "blockId": "robot-2fb8bda35fb9563f",
+        "planStepId": "step:robot-2fb8bda35fb9563f"
+      }
+    ]
+  },
+  "traceMap": [
+    {
+      "logicNodeRef": "logic.normalize-lesson-input",
+      "intentStepId": "logic.normalize-score",
+      "blockId": "logic-e351f08f-f3be-5cb3-a29d-4788619b4f2f",
+      "statementKind": "set",
+      "targetField": "normalizedScore",
+      "surface": "blocklyLogic",
+      "n8nNodeId": "d3759c88-5f79-591a-b3b0-9888f5bcdf42"
+    },
+    {
+      "logicNodeRef": "logic.normalize-lesson-input",
+      "intentStepId": "logic.select-active-students",
+      "blockId": "logic-c286397c-bfd5-5b6a-a48e-1d4d5aec9e42",
+      "statementKind": "set",
+      "targetField": "activeStudentNames",
+      "surface": "blocklyLogic",
+      "n8nNodeId": "d3759c88-5f79-591a-b3b0-9888f5bcdf42"
+    },
+    {
+      "planRef": "plan.observe-and-greet",
+      "stepRef": "robot.observe",
+      "blockId": "robot-5e2d88fb4e7dc467",
+      "planStepId": "step:robot-5e2d88fb4e7dc467",
+      "kind": "skill",
+      "capabilityName": "inspect_scene",
+      "surface": "robotPlan",
+      "intentStepId": "robot.observe",
+      "n8nNodeId": "d5002e8e-2d3c-5b48-86e7-cc1b103a0ad6",
+      "n8nExecutionNodeId": "6418c8c7-b73a-5ab0-b4a0-b44079ccd447"
+    },
+    {
+      "planRef": "plan.observe-and-greet",
+      "stepRef": "robot.pause",
+      "blockId": "robot-69e0635b7499fd07",
+      "planStepId": "step:robot-69e0635b7499fd07",
+      "kind": "wait",
+      "surface": "robotPlan",
+      "intentStepId": "robot.pause",
+      "n8nNodeId": "d5002e8e-2d3c-5b48-86e7-cc1b103a0ad6",
+      "n8nExecutionNodeId": "6418c8c7-b73a-5ab0-b4a0-b44079ccd447"
+    },
+    {
+      "planRef": "plan.observe-and-greet",
+      "stepRef": "robot.wave",
+      "blockId": "robot-2fb8bda35fb9563f",
+      "planStepId": "step:robot-2fb8bda35fb9563f",
+      "kind": "skill",
+      "guardBlockId": "robot-2fb8bda35fb9563f-guard",
+      "capabilityName": "wave_hello",
+      "surface": "robotPlan",
+      "intentStepId": "robot.wave",
+      "n8nNodeId": "d5002e8e-2d3c-5b48-86e7-cc1b103a0ad6",
+      "n8nExecutionNodeId": "6418c8c7-b73a-5ab0-b4a0-b44079ccd447"
+    }
+  ]
+}

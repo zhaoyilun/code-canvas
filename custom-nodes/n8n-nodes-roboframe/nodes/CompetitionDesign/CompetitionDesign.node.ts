@@ -17,10 +17,31 @@ const TARGET_CREDENTIAL_ID_PLACEHOLDER = 'REPLACE_WITH_ROBOFRAME_CREDENTIAL_ID';
 const TARGET_CREDENTIAL_NAME_PLACEHOLDER = 'REPLACE_WITH_ROBOFRAME_CREDENTIAL_NAME';
 const DEFAULT_DESIGN_DRAFT = JSON.stringify(
 	{
-		schemaVersion: '1.0',
+		schemaVersion: '2.0',
 		designId: 'lesson.demo',
 		revisionId: 'revision-1',
 		name: 'AI 可解释机器人课程',
+		logicNodes: [
+			{
+				nodeRef: 'logic.prepare-input',
+				label: '准备课程数据',
+				outputMode: 'copyInput',
+				statements: [
+					{
+						kind: 'set',
+						intentStepId: 'logic.mark-prepared',
+						targetField: 'prepared',
+						value: { kind: 'boolean', value: true },
+						teaching: {
+							what: '标记数据已经准备完成',
+							why: '让后续机器人节点读取明确的数据状态',
+							editable: ['目标字段', '布尔值'],
+							expectedEffect: '输出数据包含 prepared=true',
+						},
+					},
+				],
+			},
+		],
 		robotPlan: {
 			schemaVersion: 1,
 			planRef: 'plan.demo',
@@ -39,6 +60,7 @@ type DesignStage =
 	| 'live-catalog'
 	| 'target-credential'
 	| 'design-draft'
+	| 'blockly-logic'
 	| 'robot-plan'
 	| 'workflow-policy'
 	| 'generation';
@@ -50,8 +72,8 @@ export class CompetitionDesign implements INodeType {
 		icon: { light: 'file:roboframe.svg', dark: 'file:roboframe.dark.svg' },
 		group: ['transform'],
 		version: 1,
-		description: 'Generate linked n8n and Blockly diagrams from an AI design draft',
-		subtitle: 'AI draft → n8n workflow + Blockly plan',
+		description: 'Generate an n8n workflow with Blockly Logic and Robot Plan nodes',
+		subtitle: 'AI draft → n8n workflow + node-internal Blockly',
 		defaults: { name: 'Competition Design' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
@@ -64,7 +86,7 @@ export class CompetitionDesign implements INodeType {
 				type: 'json',
 				default: DEFAULT_DESIGN_DRAFT,
 				description:
-					'Structured AI design draft. The live robot catalog remains authoritative during generation.',
+					'Structured AI design draft for the n8n graph, local Blockly Logic, and Blockly Robot Plan. The live robot catalog remains authoritative.',
 			},
 			{
 				displayName: 'Target Credential ID',
@@ -213,6 +235,7 @@ function normalizeGenerationResult(result: CompetitionDesignGenerationResult): I
 			revisionId: result.artifact.revisionId,
 			catalogDigest: result.artifact.catalogDigest,
 			n8nWorkflow: result.artifact.n8nWorkflow,
+			logicNodes: result.artifact.logicNodes,
 			blocklyPayload: result.artifact.blocklyPayload,
 			blocklyWorkspace: result.artifact.blocklyWorkspace,
 			semanticDraft: result.artifact.semanticDraft,
@@ -221,6 +244,14 @@ function normalizeGenerationResult(result: CompetitionDesignGenerationResult): I
 		});
 	}
 	if (result.stage === 'robot-plan') {
+		return failure(
+			result.stage,
+			result.error.code,
+			result.error.message,
+			result.error.path,
+		);
+	}
+	if (result.stage === 'blockly-logic') {
 		return failure(
 			result.stage,
 			result.error.code,

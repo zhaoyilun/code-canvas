@@ -1,3 +1,4 @@
+import { compileBlocklyWorkspace, parseBlocklyDataPayload } from '@n8n/blockly-data-transform';
 import type { WorkflowJSON } from '@n8n/workflow-sdk';
 import type { IConnections } from 'n8n-workflow';
 import { getParentNodes, mapConnectionsByDestination, NodeConnectionTypes } from 'n8n-workflow';
@@ -66,7 +67,7 @@ export function validateCompetitionWorkflow(workflow: WorkflowJSON): Competition
 				code: 'ROBOT_PLAN_BINDING_MISSING',
 				severity: 'error',
 				ref: taskName,
-				message: 'Robot Task requires an upstream Robot Skill Plan.',
+				message: 'Robot Task requires an upstream Robot Plan.',
 			});
 		}
 		const statusNodes = workflow.nodes.filter(
@@ -89,7 +90,8 @@ export function validateCompetitionWorkflow(workflow: WorkflowJSON): Competition
 		const validReadinessDecision = readinessDecisions.find(
 			(candidate) =>
 				hasFalseBranch(workflow, candidate.name ?? candidate.id) &&
-				hasExactReadinessConditions(candidate),
+				hasExactReadinessConditions(candidate) &&
+				hasExactReadinessRouting(workflow, candidate.name ?? candidate.id, taskName),
 		);
 		if (!readinessBranchExists) {
 			diagnostics.push({
@@ -98,7 +100,13 @@ export function validateCompetitionWorkflow(workflow: WorkflowJSON): Competition
 				ref: taskName,
 				message: 'Robot Status requires ready and not-ready branches before plan compilation.',
 			});
-		} else if (validReadinessDecision === undefined) {
+		} else if (
+			!readinessDecisions.some(
+				(candidate) =>
+					hasFalseBranch(workflow, candidate.name ?? candidate.id) &&
+					hasExactReadinessConditions(candidate),
+			)
+		) {
 			const readinessDecision = readinessDecisions.find((candidate) =>
 				hasFalseBranch(workflow, candidate.name ?? candidate.id),
 			);
@@ -108,6 +116,14 @@ export function validateCompetitionWorkflow(workflow: WorkflowJSON): Competition
 				ref: readinessDecision?.name ?? readinessDecision?.id ?? taskName,
 				message:
 					'Robot readiness must require motionAuthorized=true and busy=false with an AND condition.',
+			});
+		} else if (validReadinessDecision === undefined) {
+			diagnostics.push({
+				code: 'ROBOT_READINESS_BRANCH_MISSING',
+				severity: 'error',
+				ref: taskName,
+				message:
+					'Robot readiness true output must pass through Robot Plan before Robot Task, and its false output must reach neither.',
 			});
 		}
 		if (
@@ -131,12 +147,17 @@ export function validateCompetitionWorkflow(workflow: WorkflowJSON): Competition
 		);
 		for (const approval of approvalNodes) {
 			const parameters = parametersOf(approval);
-			if (parameters.resume !== 'form' || parameters.limitWaitTime === true) {
+			if (
+				parameters.resume !== 'form' ||
+				parameters.limitWaitTime === true ||
+				!hasExactApprovalForm(approval)
+			) {
 				diagnostics.push({
 					code: 'MOTION_REVIEW_PATH_INVALID',
 					severity: 'error',
 					ref: approval.name ?? approval.id,
-					message: 'Human approval uses an explicit decision form without auto-release.',
+					message:
+						'Human approval requires a non-expiring form with one required Approval Decision radio field containing exactly Approve and Reject.',
 				});
 			}
 		}
@@ -156,7 +177,8 @@ export function validateCompetitionWorkflow(workflow: WorkflowJSON): Competition
 		const validApprovalDecision = approvalDecisions.find(
 			(candidate) =>
 				hasFalseBranch(workflow, candidate.name ?? candidate.id) &&
-				hasExactApprovalCondition(candidate),
+				hasExactApprovalCondition(candidate) &&
+				hasExactApprovalRouting(workflow, candidate.name ?? candidate.id, taskName),
 		);
 		if (!approvalBranchExists) {
 			diagnostics.push({
@@ -165,7 +187,13 @@ export function validateCompetitionWorkflow(workflow: WorkflowJSON): Competition
 				ref: taskName,
 				message: 'Human approval requires separate approved and rejected branches.',
 			});
-		} else if (validApprovalDecision === undefined) {
+		} else if (
+			!approvalDecisions.some(
+				(candidate) =>
+					hasFalseBranch(workflow, candidate.name ?? candidate.id) &&
+					hasExactApprovalCondition(candidate),
+			)
+		) {
 			const approvalDecision = approvalDecisions.find((candidate) =>
 				hasFalseBranch(workflow, candidate.name ?? candidate.id),
 			);
@@ -175,6 +203,14 @@ export function validateCompetitionWorkflow(workflow: WorkflowJSON): Competition
 				ref: approvalDecision?.name ?? approvalDecision?.id ?? taskName,
 				message:
 					'Human approval must require Approval Decision to equal Approve with an AND condition.',
+			});
+		} else if (validApprovalDecision === undefined) {
+			diagnostics.push({
+				code: 'MOTION_REVIEW_PATH_INVALID',
+				severity: 'error',
+				ref: taskName,
+				message:
+					'Robot Validate must enter Merge input 0 and only the approval true output may enter Merge input 1 and reach Robot Task.',
 			});
 		}
 		const taskOutputs = workflow.connections[taskName]?.main ?? [];
@@ -219,9 +255,55 @@ export function validateCompetitionWorkflow(workflow: WorkflowJSON): Competition
 				code: 'ROBOT_PLAN_BINDING_MISSING',
 				severity: 'error',
 				ref: planName,
-				message: 'Robot Skill Plan requires a serialized Blockly payload.',
+				message: 'Robot Plan requires a serialized Blockly payload.',
 			});
 		}
+	}
+
+	for (const logicNode of workflow.nodes.filter(
+		(candidate) => candidate.type === COMPETITION_NODE_TYPES.blocklyCode,
+	)) {
+		const nodeName = logicNode.name ?? logicNode.id;
+		const payload = parametersOf(logicNode).blocklyPayload;
+		if (typeof payload !== 'string') {
+			diagnostics.push({
+				code: 'BLOCKLY_LOGIC_PAYLOAD_INVALID',
+				severity: 'error',
+				ref: nodeName,
+				message: 'Blockly Logic requires a serialized Blockly data payload.',
+			});
+			continue;
+		}
+		const parsedPayload = parseBlocklyDataPayload(payload);
+		if (!parsedPayload.ok) {
+			diagnostics.push({
+				code: 'BLOCKLY_LOGIC_PAYLOAD_INVALID',
+				severity: 'error',
+				ref: nodeName,
+				message: `Blockly Logic payload is invalid: ${parsedPayload.error}`,
+			});
+			continue;
+		}
+		const compiled = compileBlocklyWorkspace(parsedPayload.payload.workspace);
+		if (!compiled.ok) {
+			diagnostics.push({
+				code: 'BLOCKLY_LOGIC_PAYLOAD_INVALID',
+				severity: 'error',
+				ref: nodeName,
+				message: `Blockly Logic workspace is invalid: ${compiled.error}`,
+			});
+		}
+	}
+
+	for (const codeNode of workflow.nodes.filter(
+		(candidate) => candidate.type === COMPETITION_NODE_TYPES.code,
+	)) {
+		diagnostics.push({
+			code: 'ARBITRARY_CODE_NODE_FORBIDDEN',
+			severity: 'error',
+			ref: codeNode.name ?? codeNode.id,
+			message: 'Competition local data logic uses Blockly Logic instead of an arbitrary Code node.',
+		});
 	}
 
 	for (const candidate of workflow.nodes) {
@@ -248,6 +330,122 @@ function hasFalseBranch(workflow: WorkflowJSON, nodeName: string): boolean {
 function directChildren(workflow: WorkflowJSON, nodeName: string): string[] {
 	const outputs = workflow.connections[nodeName]?.main ?? [];
 	return outputs.flatMap((output) => output?.map((connection) => connection.node) ?? []);
+}
+
+function directChildrenAtOutput(
+	workflow: WorkflowJSON,
+	nodeName: string,
+	outputIndex: number,
+): string[] {
+	return (
+		workflow.connections[nodeName]?.main?.[outputIndex]?.map((connection) => connection.node) ?? []
+	);
+}
+
+function hasExactReadinessRouting(
+	workflow: WorkflowJSON,
+	decisionName: string,
+	taskName: string,
+): boolean {
+	const typesByName = nodeTypeByName(workflow);
+	const trueReachable = reachableFrom(workflow, directChildrenAtOutput(workflow, decisionName, 0));
+	const falseReachable = reachableFrom(workflow, directChildrenAtOutput(workflow, decisionName, 1));
+	const plansOnTrueTaskPath = workflow.nodes
+		.filter((candidate) => candidate.type === COMPETITION_NODE_TYPES.robotSkillPlan)
+		.map((candidate) => candidate.name ?? candidate.id)
+		.filter(
+			(planName) =>
+				trueReachable.has(planName) && reachableFrom(workflow, [planName]).has(taskName),
+		);
+
+	if (!trueReachable.has(taskName) || plansOnTrueTaskPath.length === 0) return false;
+	if (
+		falseReachable.has(taskName) ||
+		[...falseReachable].some(
+			(nodeName) => typesByName.get(nodeName) === COMPETITION_NODE_TYPES.robotSkillPlan,
+		)
+	) {
+		return false;
+	}
+
+	return !reachableFrom(
+		workflow,
+		directChildrenAtOutput(workflow, decisionName, 0),
+		new Set(plansOnTrueTaskPath),
+	).has(taskName);
+}
+
+function hasExactApprovalRouting(
+	workflow: WorkflowJSON,
+	decisionName: string,
+	taskName: string,
+): boolean {
+	const typesByName = nodeTypeByName(workflow);
+	const trueReachable = reachableFrom(workflow, directChildrenAtOutput(workflow, decisionName, 0));
+	const falseReachable = reachableFrom(workflow, directChildrenAtOutput(workflow, decisionName, 1));
+	const validatedMerges = workflow.nodes
+		.filter((candidate) => candidate.type === COMPETITION_NODE_TYPES.merge)
+		.map((candidate) => candidate.name ?? candidate.id)
+		.filter(
+			(mergeName) =>
+				trueReachable.has(mergeName) &&
+				reachableFrom(workflow, [mergeName]).has(taskName) &&
+				hasDirectConnection(workflow, decisionName, 0, mergeName, 1) &&
+				workflow.nodes.some(
+					(candidate) =>
+						candidate.type === COMPETITION_NODE_TYPES.robotValidate &&
+						hasDirectConnection(workflow, candidate.name ?? candidate.id, 0, mergeName, 0),
+				),
+		);
+
+	if (!trueReachable.has(taskName) || validatedMerges.length === 0) return false;
+	if (
+		falseReachable.has(taskName) ||
+		[...falseReachable].some(
+			(nodeName) => typesByName.get(nodeName) === COMPETITION_NODE_TYPES.merge,
+		)
+	) {
+		return false;
+	}
+
+	return !reachableFrom(
+		workflow,
+		directChildrenAtOutput(workflow, decisionName, 0),
+		new Set(validatedMerges),
+	).has(taskName);
+}
+
+function hasDirectConnection(
+	workflow: WorkflowJSON,
+	sourceName: string,
+	outputIndex: number,
+	destinationName: string,
+	destinationInputIndex: number,
+): boolean {
+	return (
+		workflow.connections[sourceName]?.main?.[outputIndex]?.some(
+			(connection) =>
+				connection.node === destinationName && connection.index === destinationInputIndex,
+		) === true
+	);
+}
+
+function reachableFrom(
+	workflow: WorkflowJSON,
+	startNames: string[],
+	blockedNames: ReadonlySet<string> = new Set<string>(),
+): Set<string> {
+	const reachable = new Set<string>();
+	const queue = startNames.filter((name) => !blockedNames.has(name));
+	for (let index = 0; index < queue.length; index += 1) {
+		const nodeName = queue[index];
+		if (reachable.has(nodeName) || blockedNames.has(nodeName)) continue;
+		reachable.add(nodeName);
+		for (const childName of directChildren(workflow, nodeName)) {
+			if (!reachable.has(childName) && !blockedNames.has(childName)) queue.push(childName);
+		}
+	}
+	return reachable;
 }
 
 function hasExactReadinessConditions(node: WorkflowJSON['nodes'][number]): boolean {
@@ -277,6 +475,34 @@ function hasExactApprovalCondition(node: WorkflowJSON['nodes'][number]): boolean
 		condition.rightValue === 'Approve' &&
 		condition.operator.type === 'string' &&
 		condition.operator.operation === 'equals'
+	);
+}
+
+function hasExactApprovalForm(node: WorkflowJSON['nodes'][number]): boolean {
+	const formFields = parametersOf(node).formFields;
+	if (!isRecord(formFields) || !Array.isArray(formFields.values)) return false;
+	const fields = formFields.values as unknown[];
+	const decisions = fields.filter(
+		(field) => isRecord(field) && field.fieldLabel === 'Approval Decision',
+	);
+	if (decisions.length !== 1) return false;
+	const decision = decisions[0];
+	if (
+		!isRecord(decision) ||
+		decision.fieldType !== 'radio' ||
+		decision.requiredField !== true ||
+		!isRecord(decision.fieldOptions) ||
+		!Array.isArray(decision.fieldOptions.values)
+	) {
+		return false;
+	}
+	const options = decision.fieldOptions.values as unknown[];
+	return (
+		options.length === 2 &&
+		isRecord(options[0]) &&
+		options[0].option === 'Approve' &&
+		isRecord(options[1]) &&
+		options[1].option === 'Reject'
 	);
 }
 

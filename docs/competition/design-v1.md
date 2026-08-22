@@ -2,7 +2,7 @@
 ## n8n × Blockly × RoboFrame 软件平台详细设计稿 v1.0
 
 > 分支：`codex/competition-blockly-robot-framework-n8n`
-> 文档状态：设计评审稿，尚未进入功能开发
+> 文档状态：历史设计评审稿。当前实现契约与验收以 `software-slice-2-blockly-logic.md` 为准；本文中的 draft schema 1.0 不再用于生成或导入。
 > 编写日期：2026-08-22
 > 软件审计基线：`zhaoyilun/n8n-blockly@cd13e77691943e501b4978dfaa2e28be9684b021`，n8n `2.35.4`
 > OpenHarmony 端审计基线：当前 `harmony-blockly` 比赛分支，基线提交 `11d8532`

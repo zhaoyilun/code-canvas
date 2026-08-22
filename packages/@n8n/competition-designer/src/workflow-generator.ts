@@ -38,6 +38,16 @@ export function generateCompetitionWorkflow(
 			parameters: {},
 		},
 	});
+	const logicNodes = draft.logicNodes.map((logicNode, index) =>
+		node({
+			type: COMPETITION_NODE_TYPES.blocklyCode,
+			version: 1,
+			config: {
+				name: `01.${index + 1} Blockly Logic · ${logicNode.label}`,
+				parameters: { blocklyPayload: logicNode.blocklyPayload },
+			},
+		}),
+	);
 	const status = node({
 		type: COMPETITION_NODE_TYPES.robotStatus,
 		version: 1,
@@ -198,7 +208,16 @@ export function generateCompetitionWorkflow(
 		'Robot motion is not authorized or another task is active.',
 	);
 
-	start.to(status).to(ready);
+	if (logicNodes.length === 0) {
+		start.to(status);
+	} else {
+		start.to(logicNodes[0]);
+		for (let index = 0; index < logicNodes.length - 1; index += 1) {
+			logicNodes[index].to(logicNodes[index + 1]);
+		}
+		logicNodes[logicNodes.length - 1].to(status);
+	}
+	status.to(ready);
 	ready.to(plan, 0);
 	ready.to(notReady, 1);
 	plan.to(validate);
@@ -211,8 +230,9 @@ export function generateCompetitionWorkflow(
 	taskCompleted.to(completed, 0);
 	taskCompleted.to(needsInspection, 1);
 
-	const builder = workflow(draft.designId, draft.name)
-		.add(start)
+	const builder = workflow(draft.designId, draft.name).add(start);
+	for (const logicNode of logicNodes) builder.add(logicNode);
+	builder
 		.add(status)
 		.add(ready)
 		.add(plan)
@@ -227,15 +247,23 @@ export function generateCompetitionWorkflow(
 		.add(rejected)
 		.add(notReady);
 	const generatedJson = builder.toJSON({ tidyUp: true });
+	const logicNodeRefByName = new Map(
+		draft.logicNodes.map((logicNode, index) => [logicNodes[index].name, logicNode.nodeRef]),
+	);
 	const json: WorkflowJSON = {
 		...generatedJson,
 		nodes: generatedJson.nodes.map((candidate) => ({
 			...candidate,
-			id: stableCompetitionId(draft.designId, `node:${candidate.name ?? candidate.type}`),
+			id: stableCompetitionId(
+				draft.designId,
+				logicNodeRefByName.has(candidate.name ?? '')
+					? `node:logic:${logicNodeRefByName.get(candidate.name ?? '')}`
+					: `node:${candidate.name ?? candidate.type}`,
+			),
 		})),
 	};
 	const meta: CompetitionDesignMeta = {
-		schemaVersion: '1.0',
+		schemaVersion: '2.0',
 		designId: draft.designId,
 		revisionId: draft.revisionId,
 		planRef: draft.planRef,

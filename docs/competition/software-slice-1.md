@@ -1,6 +1,6 @@
 # 比赛软件切片一：双图生成与受审查执行基线
 
-> 文档状态：当前实现说明，不替代 `design-v1.md`
+> 文档状态：第一软件切片历史记录。当前实现契约与验收以 `software-slice-2-blockly-logic.md` 为准。
 > 分支：`codex/competition-blockly-robot-framework-n8n`
 > n8n-blockly 基线：`cd13e77691943e501b4978dfaa2e28be9684b021` 加本分支工作区实现
 > RoboFrame 对照基线：`HEAD a2592f`

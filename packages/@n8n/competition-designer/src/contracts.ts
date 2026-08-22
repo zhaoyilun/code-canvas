@@ -6,23 +6,51 @@ export const stableReference = z
 	.max(128)
 	.regex(/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/);
 
-export const competitionWorkflowDraftSchema = z.object({
-	schemaVersion: z.literal('1.0'),
-	designId: stableReference,
-	revisionId: stableReference,
-	name: z.string().trim().min(1).max(128),
-	planRef: stableReference,
-	blocklyPayload: z.string().min(1),
-	robotCredential: z.object({
-		id: z.string().trim().min(1),
-		name: z.string().trim().min(1),
-	}),
-});
+export const competitionWorkflowDraftSchema = z
+	.object({
+		schemaVersion: z.literal('2.0'),
+		designId: stableReference,
+		revisionId: stableReference,
+		name: z.string().trim().min(1).max(128),
+		planRef: stableReference,
+		blocklyPayload: z.string().min(1),
+		logicNodes: z
+			.array(
+				z
+					.object({
+						nodeRef: stableReference,
+						label: z.string().trim().min(1).max(128),
+						blocklyPayload: z.string().min(1),
+					})
+					.strict(),
+			)
+			.max(32),
+		robotCredential: z
+			.object({
+				id: z.string().trim().min(1),
+				name: z.string().trim().min(1),
+			})
+			.strict(),
+	})
+	.strict()
+	.superRefine((draft, context) => {
+		const nodeRefs = new Set<string>();
+		for (const [index, logicNode] of draft.logicNodes.entries()) {
+			if (nodeRefs.has(logicNode.nodeRef)) {
+				context.addIssue({
+					code: 'custom',
+					path: ['logicNodes', index, 'nodeRef'],
+					message: `duplicate nodeRef "${logicNode.nodeRef}"`,
+				});
+			}
+			nodeRefs.add(logicNode.nodeRef);
+		}
+	});
 
 export type CompetitionWorkflowDraft = z.infer<typeof competitionWorkflowDraftSchema>;
 
 export type CompetitionDesignMeta = {
-	schemaVersion: '1.0';
+	schemaVersion: '2.0';
 	designId: string;
 	revisionId: string;
 	planRef: string;
@@ -42,7 +70,9 @@ export type CompetitionDiagnosticCode =
 	| 'TASK_RESULT_BRANCH_MISSING'
 	| 'ROBOT_PLAN_BINDING_MISSING'
 	| 'ROBOT_DIRECT_HTTP_FORBIDDEN'
-	| 'ROBOT_CREDENTIAL_REFERENCE_INVALID';
+	| 'ROBOT_CREDENTIAL_REFERENCE_INVALID'
+	| 'BLOCKLY_LOGIC_PAYLOAD_INVALID'
+	| 'ARBITRARY_CODE_NODE_FORBIDDEN';
 
 export type CompetitionDiagnostic = {
 	code: CompetitionDiagnosticCode;

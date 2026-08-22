@@ -12,19 +12,21 @@ flowchart LR
     AI[AI 结构化 designDraft] --> D[Competition Design]
     C[RoboFrame live catalog + poses] --> D
     D --> N[可导入 n8n workflow]
-    D --> B[Blockly payload + workspace]
+    D --> L[Blockly Logic payloads + workspaces]
+    D --> B[Blockly Robot Plan payload + workspace]
     D --> P[RobotTaskPlan + traceMap]
 ```
 
 `Competition Design` 把 AI 的受约束语义草稿交给
-`@n8n/competition-designer`，同一次生成得到外层 n8n 编排图与内层 Blockly
-机器人计划图。节点先从 bridge 同时读取 action catalog 和 named poses，并严格核对
+`@n8n/competition-designer`，同一次生成得到外层 n8n 编排图、节点内 Blockly Logic
+与节点内 Blockly Robot Plan。局部数据代码统一生成 `CUSTOM.blocklyCode`，不生成普通
+Code 节点。节点先从 bridge 同时读取 action catalog 和 named poses，并严格核对
 `robot_name/config_digest`，因此生成使用的是当前机器人能力，而非固定样例目录。
 动作超时按 `timeout_sec` → `timeout_policy.timeout_sec` →
 `timeout_policy.default_skill_timeout_sec` → `timeout_policy.default_timeout_sec`
 的优先级映射，保留 Bridge enriched catalog 的实际执行预算。
 
-生成的工作流使用实际节点类型 `CUSTOM.robotStatus`、`CUSTOM.robotSkillPlan`、
+生成的工作流使用实际节点类型 `CUSTOM.blocklyCode`、`CUSTOM.robotStatus`、`CUSTOM.robotSkillPlan`、
 `CUSTOM.robotValidate`、`CUSTOM.robotTask`，并包含表单审核、批准/驳回、执行结果分流。
 它还会在编译计划前按 `motionAuthorized/busy` 分出 Robot Ready 与 Not Ready 路径。
 `Target Credential ID/Name` 会写入生成工作流的 RoboFrame 节点；默认值是醒目的
@@ -34,25 +36,25 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    B[Robot Skill Plan\nBlockly 编译] --> V[Robot Validate\n整计划校验]
+    B[Robot Plan\n节点内 Blockly 编译] --> V[Robot Validate\n整计划校验]
     V --> A[Wait / Form\n人工审核]
     A --> T[Robot Task\n顺序执行]
     T --> R{success / finalStatus}
 ```
 
-`Robot Skill Plan` 只负责编译。机器人动作统一由下游 `Robot Task` 执行，避免编辑器节点与执行节点形成两条语义重复的路径。`Robot Validate` 的 `Plan` operation 会保留上游 item 和 `plan`，并附加 `validation` 汇总及绑定该计划的 `planDigest`，因此审核节点之后仍可直接交给 `Robot Task`。
+`Robot Plan` 只负责编译。机器人动作统一由下游 `Robot Task` 执行，避免编辑器节点与执行节点形成两条语义重复的路径。`Robot Validate` 的 `Plan` operation 会保留上游 item 和 `plan`，并附加 `validation` 汇总及绑定该计划的 `planDigest`，因此审核节点之后仍可直接交给 `Robot Task`。
 
 ## 节点
 
 | 节点 | 用途 |
 | --- | --- |
-| **Competition Design** | 消费 AI `designDraft`，结合 live catalog/poses 生成可导入 n8n workflow、Blockly payload/workspace、语义教学草稿、`RobotTaskPlan` 与 `traceMap` |
+| **Competition Design** | 消费严格 v2 AI `designDraft`，结合 live catalog/poses 生成可导入 n8n workflow、一个或多个 Blockly Logic、Blockly Robot Plan、教学草稿、`RobotTaskPlan` 与 `traceMap` |
 | **Robot Catalog** | 列出 skill 与 primitive action，所有项携带同一份 `configDigest`；`Include Details` 附带参数 schema 与策略 |
 | **Robot Status** | 查询 Gateway：授权/控制模式/busy、robot 与 catalog digest、registry、control-plane、capability readiness |
 | **Robot Skill** | 单 skill 调试：校验（可选）→ 提交 → 轮询至终态；也可仅返回 `accepted` |
 | **Robot Validate** | 默认 `Plan`：逐步校验编译计划；`Action (Debug)`：校验一个带 `kind/name` 的动作 |
 | **Robot Task** | 顺序执行已编译计划；每步一个 task；首个失败、取消或未知状态即停 |
-| **Robot Skill Plan** | 严格解析内嵌 catalog 的 Blockly payload v2，回编译为 `RobotTaskPlan` 并输出 compilation 元数据 |
+| **Robot Plan** | 严格解析内嵌 catalog 的 Blockly payload v2，回编译为 `RobotTaskPlan` 并输出 compilation 元数据 |
 
 ### Competition Design 输出
 
@@ -64,22 +66,32 @@ flowchart LR
   "stage": "complete",
   "catalogDigest": "sha256:LIVE_DIGEST",
   "n8nWorkflow": { "nodes": [], "connections": {} },
+  "logicNodes": [
+    {
+      "nodeRef": "logic.prepare-input",
+      "blocklyPayload": "{...}",
+      "workspace": { "blocks": { "blocks": [] } },
+      "javascript": "const output = { ...$json }; ..."
+    }
+  ],
   "blocklyPayload": "{...}",
   "blocklyWorkspace": { "blocks": { "blocks": [] } },
-  "semanticDraft": { "steps": [] },
+  "semanticDraft": { "schemaVersion": "2.0", "logicNodes": [], "robotPlan": { "steps": [] } },
   "robotTaskPlan": { "schemaVersion": 1, "plan": [] },
   "traceMap": []
 }
 ```
 
-其中 `semanticDraft` 保留每步教学所需的 `what/why/editable/expectedEffect`，
-`traceMap` 连接 AI 意图步骤、Blockly block 和 n8n 计划/执行节点。失败 item 统一输出
+其中 `semanticDraft` 保留 Logic 与 Robot 每步教学所需的
+`what/why/editable/expectedEffect`。AI 生成的 Logic statement 也把该教学说明写入
+Blockly block 的标准 `data` 字段，选中积木即可在节点内查看。
+`traceMap` 连接 AI 意图步骤、n8n 节点和 Blockly block。失败 item 统一输出
 `ok=false`、`stage`、`diagnostics[]`；例如目录漂移落在 `robot-plan`，并给出
 `CATALOG_DIGEST_MISMATCH` 与字段路径，供 AI 定点修订后重新生成。
 
 ## Blockly payload v2
 
-Robot Skill Plan 只接受唯一结构：
+Robot Plan 只接受唯一结构：
 
 ```json
 {
@@ -162,8 +174,8 @@ payload 仅包含 `schemaVersion/catalog/workspace`。运行时始终使用 `pay
 ## Catalog digest 路径
 
 1. AI/编辑器把本次设计采用的 catalog 与 workspace 一起封入 payload v2。
-2. `Robot Skill Plan` 严格解析 payload，用其中的 catalog 回编译，并把该 catalog digest 写入 `plan.configDigest`。
-3. `Robot Skill Plan` 在 `compilation.catalogDigest` 以 `source=payloadCatalog` 标记来源和值。
+2. `Robot Plan` 严格解析 payload，用其中的 catalog 回编译，并把该 catalog digest 写入 `plan.configDigest`。
+3. `Robot Plan` 在 `compilation.catalogDigest` 以 `source=payloadCatalog` 标记来源和值。
 4. `Robot Validate` 拉取 live catalog，在 `validation.catalogDigest` 输出 plan/live 对照。
 5. `Robot Validate` 同时把计划的规范化 JSON SHA-256 写入 `validation.planDigest`。
 6. 人工审核之后，`Robot Task` 先重算 plan digest，再拉一次 live catalog，分别识别计划篡改与目录漂移。

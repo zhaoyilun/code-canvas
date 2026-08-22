@@ -20,7 +20,7 @@ function runnerItem(item: number, json: Record<string, unknown> = {}) {
 }
 
 function createContext(inputCount: number, runnerResults: unknown[] = []) {
-	const node = { name: 'Blockly Data Transform' } as INode;
+	const node = { name: 'Blockly Logic' } as INode;
 	const startJob = vi.fn();
 	for (const runnerResult of runnerResults) {
 		startJob.mockResolvedValueOnce(runnerResult);
@@ -60,13 +60,17 @@ beforeEach(() => {
 });
 
 describe('BlocklyCode', () => {
-	it('declares Blockly Data Transform with a wide, expression-free payload editor', () => {
+	it('declares Blockly Logic with a wide, expression-free embedded editor', () => {
 		const node = new BlocklyCode();
 		const parameter = node.description.properties.find(({ name }) => name === 'blocklyPayload');
 
-		expect(node.description.displayName).toBe('Blockly Data Transform');
+		expect(node.description.displayName).toBe('Blockly Logic');
 		expect(node.description.name).toBe('blocklyCode');
+		expect(node.description.version).toEqual([1]);
 		expect(node.description.parameterPane).toBe('wide');
+		expect(node.description.properties).toHaveLength(1);
+		expect(parameter?.name).toBe('blocklyPayload');
+		expect(parameter?.displayName).toBe('Logic');
 		expect(parameter?.noDataExpression).toBe(true);
 		expect(parameter?.typeOptions?.editor).toBe('blocklyEditor');
 	});

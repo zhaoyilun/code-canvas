@@ -11,7 +11,19 @@ const dangerousSegments = new Set(['__proto__', 'prototype', 'constructor']);
 const supportedTypes = new Set([
 	'n8n_transform_item',
 	'n8n_set_field',
+	'n8n_delete_field',
+	'n8n_if',
+	'n8n_assert',
 	'n8n_get_field',
+	'n8n_get_path',
+	'n8n_convert',
+	'lists_create_with',
+	'lists_length',
+	'n8n_array_at',
+	'n8n_array_map_path',
+	'n8n_array_filter_path',
+	'n8n_object_create',
+	'n8n_object_property',
 	'math_number',
 	'math_arithmetic',
 	'text',
@@ -26,7 +38,19 @@ const supportedTypes = new Set([
 const allowedInputs: Record<string, readonly string[]> = {
 	n8n_transform_item: ['STATEMENTS'],
 	n8n_set_field: ['VALUE'],
+	n8n_delete_field: [],
+	n8n_if: ['CONDITION', 'THEN', 'ELSE'],
+	n8n_assert: ['CONDITION', 'MESSAGE'],
 	n8n_get_field: [],
+	n8n_get_path: ['VALUE'],
+	n8n_convert: ['VALUE'],
+	lists_create_with: [],
+	lists_length: ['VALUE'],
+	n8n_array_at: ['ARRAY', 'INDEX'],
+	n8n_array_map_path: ['ARRAY'],
+	n8n_array_filter_path: ['ARRAY', 'VALUE'],
+	n8n_object_create: ['PROPERTIES'],
+	n8n_object_property: ['VALUE'],
 	math_number: [],
 	math_arithmetic: ['A', 'B'],
 	text: [],
@@ -37,6 +61,9 @@ const allowedInputs: Record<string, readonly string[]> = {
 	logic_negate: ['BOOL'],
 	logic_ternary: ['IF', 'THEN', 'ELSE'],
 };
+
+const statementTypes = new Set(['n8n_set_field', 'n8n_delete_field', 'n8n_if', 'n8n_assert']);
+const chainedTypes = new Set([...statementTypes, 'n8n_object_property']);
 
 type JsonRecord = Record<string, unknown>;
 type Block = JsonRecord & { type: string };
@@ -104,6 +131,14 @@ export function parseBlocklyDataPayload(
 		return failure('Payload is not valid JSON');
 	}
 	if (!isRecord(parsed)) return failure('Payload must be an object');
+	const payloadKeys = Object.keys(parsed);
+	if (
+		payloadKeys.length !== 3 ||
+		payloadKeys.some(
+			(key) => key !== 'schemaVersion' && key !== 'workspace' && key !== 'javascript',
+		)
+	)
+		return failure('Payload must contain only schemaVersion, workspace, and javascript');
 	if (parsed.schemaVersion !== BLOCKLY_DATA_SCHEMA_VERSION)
 		return failure('Unsupported payload schema version');
 	if (!isRecord(parsed.workspace)) return failure('Payload workspace must be an object');
@@ -163,15 +198,51 @@ class WorkspaceCompiler {
 		return root;
 	}
 
-	private compileStatements(block: Block, lines: string[], depth: number): void {
+	private compileStatements(block: Block, lines: string[], depth: number, indent = 0): void {
 		if (depth > MAX_DEPTH) this.fail('Block depth exceeds 40');
-		if (block.type !== 'n8n_set_field')
-			this.fail('Only n8n_set_field may appear in a statement chain');
-		const key = this.safePath(this.stringField(block, 'KEY'), 'Output key');
-		const value = this.requiredChild(block, 'VALUE');
-		lines.push(`output[${JSON.stringify(key)}] = ${this.expression(value, depth + 1).code};`);
+		if (!statementTypes.has(block.type))
+			this.fail(`${block.type} cannot appear in a statement chain`);
+
+		const padding = '\t'.repeat(indent);
+		switch (block.type) {
+			case 'n8n_set_field': {
+				const path = this.safePath(this.stringField(block, 'KEY'), 'Output path');
+				const value = this.requiredChild(block, 'VALUE');
+				lines.push(
+					...this.pathAssignment('output', path, this.expression(value, depth + 1).code, padding),
+				);
+				break;
+			}
+			case 'n8n_delete_field': {
+				const path = this.safePath(this.stringField(block, 'KEY'), 'Output path');
+				lines.push(...this.pathDeletion('output', path, padding));
+				break;
+			}
+			case 'n8n_if': {
+				const condition = this.expression(this.requiredChild(block, 'CONDITION'), depth + 1);
+				lines.push(`${padding}if (${condition.code}) {`);
+				const thenBranch = this.optionalChild(block, 'THEN');
+				if (thenBranch) this.compileStatements(thenBranch, lines, depth + 1, indent + 1);
+				const elseBranch = this.optionalChild(block, 'ELSE');
+				if (elseBranch) {
+					lines.push(`${padding}} else {`);
+					this.compileStatements(elseBranch, lines, depth + 1, indent + 1);
+				}
+				lines.push(`${padding}}`);
+				break;
+			}
+			case 'n8n_assert': {
+				const condition = this.expression(this.requiredChild(block, 'CONDITION'), depth + 1);
+				const message = this.expression(this.requiredChild(block, 'MESSAGE'), depth + 1);
+				lines.push(`${padding}if (!(${condition.code})) {`);
+				lines.push(`${padding}\tthrow new Error(String(${message.code}));`);
+				lines.push(`${padding}}`);
+				break;
+			}
+		}
+
 		const next = this.optionalNext(block);
-		if (next) this.compileStatements(next, lines, depth + 1);
+		if (next) this.compileStatements(next, lines, depth + 1, indent);
 	}
 
 	private expression(block: Block, depth: number): Expression {
@@ -179,12 +250,36 @@ class WorkspaceCompiler {
 		switch (block.type) {
 			case 'n8n_get_field': {
 				const path = this.safePath(this.stringField(block, 'PATH'), 'Field path');
-				const read = path
-					.split('.')
-					.map((segment) => `[${JSON.stringify(segment)}]`)
-					.join('?.');
-				return { code: `($json?.${read} ?? null)` };
+				return { code: `(${this.pathRead('$json', path)} ?? null)` };
 			}
+			case 'n8n_get_path': {
+				const path = this.safePath(this.stringField(block, 'PATH'), 'Field path');
+				const value = this.expression(this.requiredChild(block, 'VALUE'), depth + 1);
+				return { code: `(${this.pathRead(`(${value.code})`, path)} ?? null)` };
+			}
+			case 'n8n_convert':
+				return this.convert(block, depth);
+			case 'lists_create_with':
+				return this.arrayLiteral(block, depth);
+			case 'lists_length': {
+				const value = this.expression(this.requiredChild(block, 'VALUE'), depth + 1);
+				return {
+					code: `((value) => Array.isArray(value) || typeof value === 'string' ? value.length : 0)(${value.code})`,
+				};
+			}
+			case 'n8n_array_at': {
+				const array = this.expression(this.requiredChild(block, 'ARRAY'), depth + 1);
+				const index = this.expression(this.requiredChild(block, 'INDEX'), depth + 1);
+				return {
+					code: `((items, index) => Array.isArray(items) && Number.isInteger(index) ? (items.at(index) ?? null) : null)(${array.code}, ${index.code})`,
+				};
+			}
+			case 'n8n_array_map_path':
+				return this.mapArrayPath(block, depth);
+			case 'n8n_array_filter_path':
+				return this.filterArrayPath(block, depth);
+			case 'n8n_object_create':
+				return this.objectLiteral(block, depth);
 			case 'math_number': {
 				const numericValue = this.field(block, 'NUM');
 				if (!isFiniteNumber(numericValue)) this.fail('math_number NUM must be finite');
@@ -255,10 +350,198 @@ class WorkspaceCompiler {
 			.sort((a, b) => Number(a.slice(3)) - Number(b.slice(3)));
 		if (keys.length === 0 || keys.some((key, index) => key !== `ADD${index}`))
 			this.fail('text_join inputs are malformed');
+		this.validateItemCount(block, keys.length);
 		const values = keys.map(
 			(key) => this.expression(this.childFromInput(inputs[key]), depth + 1).code,
 		);
 		return { code: `[${values.join(', ')}].join('')` };
+	}
+
+	private convert(block: Block, depth: number): Expression {
+		const value = this.expression(this.requiredChild(block, 'VALUE'), depth + 1);
+		switch (this.stringField(block, 'TYPE')) {
+			case 'TEXT':
+				return {
+					code: `((value) => value === null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value))(${value.code})`,
+				};
+			case 'NUMBER':
+				return {
+					code: `((value) => { if (value === null || value === '') return null; const number = Number(value); return Number.isFinite(number) ? number : null; })(${value.code})`,
+				};
+			case 'BOOLEAN':
+				return { code: `Boolean(${value.code})` };
+			default:
+				this.fail('n8n_convert TYPE must be TEXT, NUMBER, or BOOLEAN');
+		}
+	}
+
+	private arrayLiteral(block: Block, depth: number): Expression {
+		const inputs = this.inputs(block);
+		const declaredItemCount = this.itemCount(block);
+		const keys = this.sequentialInputKeys(
+			inputs,
+			'ADD',
+			'lists_create_with',
+			true,
+			declaredItemCount !== undefined,
+		);
+		const itemCount = declaredItemCount ?? keys.length;
+		if (keys.some((key) => Number(key.slice(3)) >= itemCount))
+			this.fail('lists_create_with inputs exceed itemCount');
+		const values = Array.from({ length: itemCount }, (_, index) => {
+			const input = inputs[`ADD${index}`];
+			return input === undefined
+				? 'null'
+				: this.expression(this.childFromInput(input), depth + 1).code;
+		});
+		return { code: `[${values.join(', ')}]` };
+	}
+
+	private mapArrayPath(block: Block, depth: number): Expression {
+		const path = this.safePath(this.stringField(block, 'PATH'), 'Field path');
+		const array = this.expression(this.requiredChild(block, 'ARRAY'), depth + 1);
+		return {
+			code: `((items) => Array.isArray(items) ? items.map((item) => (${this.pathRead('item', path)} ?? null)) : [])(${array.code})`,
+		};
+	}
+
+	private filterArrayPath(block: Block, depth: number): Expression {
+		const path = this.safePath(this.stringField(block, 'PATH'), 'Field path');
+		const operator = this.stringField(block, 'OP');
+		const operators: Record<string, string> = {
+			EQ: '===',
+			NEQ: '!==',
+			LT: '<',
+			LTE: '<=',
+			GT: '>',
+			GTE: '>=',
+		};
+		const code = operators[operator];
+		if (!code) this.fail('Unsupported n8n_array_filter_path operator');
+		const array = this.expression(this.requiredChild(block, 'ARRAY'), depth + 1);
+		const expected = this.expression(this.requiredChild(block, 'VALUE'), depth + 1);
+		return {
+			code: `((items, expected) => Array.isArray(items) ? items.filter((item) => ((${this.pathRead('item', path)} ?? null) ${code} expected)) : [])(${array.code}, ${expected.code})`,
+		};
+	}
+
+	private objectLiteral(block: Block, depth: number): Expression {
+		const firstProperty = this.optionalChild(block, 'PROPERTIES');
+		if (!firstProperty) return { code: '{}' };
+
+		const properties: string[] = [];
+		this.compileObjectProperties(firstProperty, properties, new Set<string>(), depth + 1);
+		return { code: `{ ${properties.join(', ')} }` };
+	}
+
+	private compileObjectProperties(
+		block: Block,
+		properties: string[],
+		keys: Set<string>,
+		depth: number,
+	): void {
+		if (depth > MAX_DEPTH) this.fail('Block depth exceeds 40');
+		if (block.type !== 'n8n_object_property')
+			this.fail(`${block.type} cannot appear in an object property chain`);
+		const key = this.safeObjectKey(this.stringField(block, 'KEY'));
+		if (keys.has(key)) this.fail(`Object contains duplicate key: ${key}`);
+		keys.add(key);
+		const value = this.expression(this.requiredChild(block, 'VALUE'), depth + 1);
+		properties.push(`[${JSON.stringify(key)}]: ${value.code}`);
+		const next = this.optionalNext(block);
+		if (next) this.compileObjectProperties(next, properties, keys, depth + 1);
+	}
+
+	private sequentialInputKeys(
+		inputs: JsonRecord,
+		prefix: string,
+		blockType: string,
+		allowEmpty = false,
+		allowGaps = false,
+	): string[] {
+		const matcher = new RegExp(`^${prefix}\\d+$`);
+		const keys = Object.keys(inputs)
+			.filter((key) => matcher.test(key))
+			.sort((a, b) => Number(a.slice(prefix.length)) - Number(b.slice(prefix.length)));
+		if (
+			(!allowEmpty && keys.length === 0) ||
+			keys.some((key, index) => {
+				const numericIndex = Number(key.slice(prefix.length));
+				return key !== `${prefix}${numericIndex}` || (!allowGaps && numericIndex !== index);
+			})
+		)
+			this.fail(`${blockType} inputs are malformed`);
+		return keys;
+	}
+
+	private pathRead(receiver: string, path: string): string {
+		const read = path
+			.split('.')
+			.map((segment) => `[${JSON.stringify(segment)}]`)
+			.join('?.');
+		return `${receiver}?.${read}`;
+	}
+
+	private pathAssignment(receiver: string, path: string, value: string, padding: string): string[] {
+		const segments = path.split('.');
+		if (segments.length === 1) {
+			return [`${padding}${this.pathAccess(receiver, segments)} = ${value};`];
+		}
+
+		const lines: string[] = [];
+		for (let index = 1; index < segments.length; index += 1) {
+			const target = this.pathAccess(receiver, segments.slice(0, index));
+			lines.push(
+				`${padding}${target} = typeof ${target} === 'object' && ${target} !== null && !Array.isArray(${target}) ? { ...${target} } : {};`,
+			);
+		}
+		lines.push(`${padding}${this.pathAccess(receiver, segments)} = ${value};`);
+		return lines;
+	}
+
+	private pathDeletion(receiver: string, path: string, padding: string): string[] {
+		const segments = path.split('.');
+		if (segments.length === 1) {
+			return [`${padding}delete ${this.pathAccess(receiver, segments)};`];
+		}
+
+		const parentSegments = segments.slice(0, -1);
+		const conditions = parentSegments.flatMap((_, index) => {
+			const target = this.pathAccess(receiver, parentSegments.slice(0, index + 1));
+			return [`typeof ${target} === 'object'`, `${target} !== null`, `!Array.isArray(${target})`];
+		});
+		const lines = [`${padding}if (${conditions.join(' && ')}) {`];
+		for (let index = 1; index <= parentSegments.length; index += 1) {
+			const target = this.pathAccess(receiver, parentSegments.slice(0, index));
+			lines.push(`${padding}\t${target} = { ...${target} };`);
+		}
+		lines.push(`${padding}\tdelete ${this.pathAccess(receiver, segments)};`);
+		lines.push(`${padding}}`);
+		return lines;
+	}
+
+	private pathAccess(receiver: string, segments: string[]): string {
+		return `${receiver}${segments.map((segment) => `[${JSON.stringify(segment)}]`).join('')}`;
+	}
+
+	private itemCount(block: Block): number | undefined {
+		if (!('extraState' in block)) return undefined;
+		if (!isRecord(block.extraState)) this.fail(`${block.type} extraState is malformed`);
+		const itemCount = block.extraState.itemCount;
+		if (
+			typeof itemCount !== 'number' ||
+			!Number.isInteger(itemCount) ||
+			itemCount < 0 ||
+			itemCount > MAX_BLOCKS
+		)
+			this.fail(`${block.type} itemCount is malformed`);
+		return itemCount;
+	}
+
+	private validateItemCount(block: Block, connectedItemCount: number): void {
+		const itemCount = this.itemCount(block);
+		if (itemCount !== undefined && itemCount !== connectedItemCount)
+			this.fail(`${block.type} contains an empty or unexpected item input`);
 	}
 
 	private block(value: unknown, depth: number): Block {
@@ -272,13 +555,13 @@ class WorkspaceCompiler {
 		if (this.blockCount > MAX_BLOCKS) this.fail('Workspace exceeds 200 blocks');
 		const inputs = this.inputs(value);
 		const permittedInputs = allowedInputs[value.type];
-		if (value.type === 'text_join') {
+		if (value.type === 'text_join' || value.type === 'lists_create_with') {
 			if (Object.keys(inputs).some((key) => !/^ADD\d+$/.test(key)))
-				this.fail('text_join inputs are malformed');
+				this.fail(`${value.type} inputs are malformed`);
 		} else if (Object.keys(inputs).some((key) => !permittedInputs.includes(key))) {
 			this.fail(`${value.type} contains an unsupported input`);
 		}
-		if (value.type !== 'n8n_set_field' && 'next' in value)
+		if (!chainedTypes.has(value.type) && 'next' in value)
 			this.fail(`${value.type} cannot have a next block`);
 		return value;
 	}
@@ -340,6 +623,19 @@ class WorkspaceCompiler {
 		const segments = value.split('.');
 		if (segments.some((segment) => segment.length === 0 || dangerousSegments.has(segment)))
 			this.fail(`${label} contains a forbidden path segment`);
+		return value;
+	}
+
+	private safeObjectKey(value: string | number): string {
+		if (
+			typeof value !== 'string' ||
+			value.length === 0 ||
+			value.length > MAX_PATH_LENGTH ||
+			value.includes('.') ||
+			dangerousSegments.has(value)
+		) {
+			this.fail('Object key must be one safe segment of 1 to 128 characters');
+		}
 		return value;
 	}
 

@@ -40,7 +40,7 @@ export class RobotValidate implements INodeType {
 					{ name: 'Action (Debug)', value: 'action' },
 				],
 				default: 'plan',
-				description: 'Plan validates every action from the upstream Robot Skill Plan output',
+				description: 'Plan validates every action from the upstream Robot Plan output',
 			},
 			{
 				displayName: 'Action Kind',

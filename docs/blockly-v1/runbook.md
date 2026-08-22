@@ -149,4 +149,4 @@ tamper 模式会额外校验 `execution.workflowId` 与 `--workflow` 文档 id �
 
 - 在运行 `run-demo.sh` 的终端按 `Ctrl-C` 停止；先确认进程已退出，再删除 `scripts/blockly-v1/.runtime/`，仅清理本验收隔离数据。
 - 回滚本 worker 资产：删除 `scripts/blockly-v1/` 与 `docs/blockly-v1/`，或用 `git restore --source=HEAD -- scripts/blockly-v1 docs/blockly-v1`（仅对已跟踪文件有效）。
-- 不要删除 `scripts/blockly-mvp/.runtime/` 或其他 n8n 用户目录。
+- 不要删除其他 n8n 用户目录；清理范围只限本手册明确创建的隔离目录。
