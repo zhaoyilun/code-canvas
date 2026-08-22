@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import TabBar from '@/app/components/MainHeader/TabBar.vue';
 import WorkflowDetails from '@/app/components/MainHeader/WorkflowDetails.vue';
+import CompetitionWorkbenchHeader from '@/app/components/competition/CompetitionWorkbenchHeader.vue';
+import { isCompetitionWorkbenchWorkflow } from '@/app/components/competition/competitionWorkbench';
 import { useI18n } from '@n8n/i18n';
 import { usePushConnection } from '@/app/composables/usePushConnection';
 import { MAIN_HEADER_TABS, STICKY_NODE_TYPE, VIEWS } from '@/app/constants';
@@ -68,6 +70,16 @@ const workflowTags = computed(() => workflowDocumentStore?.value?.tags ?? []);
 const workflowIsArchived = computed(() => workflowDocumentStore?.value?.isArchived ?? false);
 const workflowDescription = computed(() => workflowDocumentStore?.value?.description ?? '');
 const onWorkflowPage = computed(() => !!(route.meta.nodeView || route.meta.keepWorkflowAlive));
+const workflowNodes = computed(() => workflowDocumentStore?.value?.allNodes ?? []);
+const isCompetitionWorkflow = computed(() => isCompetitionWorkbenchWorkflow(workflowNodes.value));
+const competitionExecutionStatus = computed(() => {
+	const activeExecution = executionsStore.activeExecution;
+	if (activeExecution?.workflowId !== workflowId.value) return null;
+	return activeExecution.status;
+});
+const isCompetitionExecutionView = computed(
+	() => activeHeaderTab.value === MAIN_HEADER_TABS.EXECUTIONS,
+);
 
 const parentFolderForBreadcrumbs = computed<FolderShortInfo | undefined>(() => {
 	const folder = workflowDocumentStore?.value?.parentFolder;
@@ -271,6 +283,14 @@ async function onWorkflowDeactivated() {
 					@workflow:deactivated="onWorkflowDeactivated"
 				/>
 			</div>
+			<CompetitionWorkbenchHeader
+				v-if="isCompetitionWorkflow && onWorkflowPage && !settingsStore.isCanvasOnly"
+				:workflow-name="workflowName"
+				:nodes="workflowNodes"
+				:active-node-type="activeNode?.type"
+				:execution-status="competitionExecutionStatus"
+				:is-execution-view="isCompetitionExecutionView"
+			/>
 			<TabBar
 				v-if="onWorkflowPage"
 				:items="tabBarItems"

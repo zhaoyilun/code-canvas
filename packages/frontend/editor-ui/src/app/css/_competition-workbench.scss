@@ -1,0 +1,31 @@
+html[data-competition-workbench='true'] {
+	--canvas--color--background: light-dark(
+		color-mix(in oklab, var(--color--blue-500) 4%, var(--background--surface)),
+		color-mix(in oklab, var(--color--blue-500) 9%, var(--background--surface))
+	);
+	--canvas--dot--color: light-dark(
+		color-mix(in oklab, var(--color--blue-500) 20%, transparent),
+		color-mix(in oklab, var(--color--blue-300) 28%, transparent)
+	);
+
+	[data-test-id='canvas-wrapper'] {
+		background:
+			radial-gradient(
+				circle at 7% 0%,
+				color-mix(in oklab, var(--color--purple-500) 5%, transparent),
+				transparent 24%
+			),
+			var(--canvas--color--background);
+	}
+
+	[data-test-id='canvas'] .vue-flow__edge-path {
+		stroke: color-mix(in oklab, var(--color--blue-600) 52%, var(--border-color--strong));
+	}
+
+	[data-test-id='canvas-controls'] {
+		border: var(--border-width) var(--border-style)
+			color-mix(in oklab, var(--color--blue-500) 24%, var(--border-color--subtle));
+		border-radius: var(--radius--lg);
+		box-shadow: var(--shadow--md);
+	}
+}

@@ -42,6 +42,15 @@ const workspace = {
 
 const blockly = {
 	Blocks: {},
+	Theme: {
+		defineTheme: vi.fn((name: string, configuration: { name: string }) => ({
+			...configuration,
+			name,
+		})),
+	},
+	Themes: {
+		Classic: { name: 'Classic' },
+	},
 	Events: events,
 	FieldDropdown: class {
 		constructor(_options: Array<[string, string]>) {}
@@ -180,19 +189,61 @@ describe('BlocklyEditor.vue', () => {
 			},
 			title: 'robotSkillEditor.title',
 		},
-	])('identifies the $name Blockly editor as part of the current n8n node', async ({ props, title }) => {
-		const editorProps: {
-			modelValue: string;
-			editorMode?: 'data-transform' | 'robot-skills';
-		} = props;
-		const wrapper = mount(BlocklyEditor, { props: editorProps });
+	])(
+		'identifies the $name Blockly editor as part of the current n8n node',
+		async ({ props, title }) => {
+			const editorProps: {
+				modelValue: string;
+				editorMode?: 'data-transform' | 'robot-skills';
+			} = props;
+			const wrapper = mount(BlocklyEditor, { props: editorProps });
 
-		await flushPromises();
+			await flushPromises();
 
-		expect(wrapper.text()).toContain(title);
-		expect(wrapper.text()).toContain('blocklyEditor.location.node');
-		wrapper.unmount();
-	});
+			expect(wrapper.text()).toContain(title);
+			expect(wrapper.text()).toContain('blocklyEditor.location.node');
+			wrapper.unmount();
+		},
+	);
+
+	it.each([
+		{
+			editorMode: 'data-transform' as const,
+			modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()),
+			themeName: 'n8n-competition-data-transform',
+		},
+		{
+			editorMode: 'robot-skills' as const,
+			modelValue: serializeRobotPlanPayload({
+				catalog: {
+					robotName: 'rk3588_lab_arm',
+					configDigest: 'rk3588-live-digest',
+					skills: [],
+					primitives: [],
+					namedPoses: [],
+				},
+				workspace: { blocks: { blocks: [] } },
+			}),
+			themeName: 'n8n-competition-robot-skills',
+		},
+	])(
+		'injects a native Blockly competition theme for $editorMode',
+		async ({ editorMode, modelValue, themeName }) => {
+			const wrapper = mount(BlocklyEditor, { props: { editorMode, modelValue } });
+
+			await flushPromises();
+
+			expect(blockly.Theme.defineTheme).toHaveBeenCalledWith(
+				themeName,
+				expect.objectContaining({ name: themeName, componentStyles: expect.any(Object) }),
+			);
+			expect(blockly.inject).toHaveBeenLastCalledWith(
+				expect.any(HTMLDivElement),
+				expect.objectContaining({ theme: expect.objectContaining({ name: themeName }) }),
+			);
+			wrapper.unmount();
+		},
+	);
 
 	it('shows the AI teaching annotation for the selected generated block', async () => {
 		const wrapper = mount(BlocklyEditor, {

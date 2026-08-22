@@ -100,6 +100,14 @@ const nodes = computed(() => {
 		: workflowDocumentStore.value.allNodes;
 });
 const connections = computed(() => workflowDocumentStore.value.connectionsBySourceNode);
+const isCompetitionCanvas = computed(() =>
+	nodes.value.some(
+		(node) =>
+			node.type === 'CUSTOM.blocklyCode' ||
+			node.type === 'CUSTOM.robotSkillPlan' ||
+			node.type.startsWith('CUSTOM.robot'),
+	),
+);
 
 const nodeGroupView = useCanvasNodeGroupView({
 	workflowId: () => workflowDocumentStore.value.workflowId,
@@ -296,7 +304,10 @@ defineExpose({
 </script>
 
 <template>
-	<div :class="$style.wrapper" data-test-id="canvas-wrapper">
+	<div
+		:class="[$style.wrapper, { 'competition-canvas': isCompetitionCanvas }]"
+		data-test-id="canvas-wrapper"
+	>
 		<div id="canvas" :class="$style.canvas">
 			<Canvas
 				:id="id"
@@ -338,3 +349,5 @@ defineExpose({
 	background-color: var(--canvas--color--background);
 }
 </style>
+
+<style lang="scss" src="./WorkflowCanvas.competition.scss"></style>
