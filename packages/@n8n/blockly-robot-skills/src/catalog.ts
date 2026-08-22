@@ -20,13 +20,25 @@ export type CatalogSkillEntry = {
 	timeoutSec?: number;
 };
 
+export type CatalogPrimitiveEntry = {
+	name: string;
+	summary?: string;
+	parameters?: SkillParamSchema;
+	timeoutSec?: number;
+};
+
 export type RobotCatalog = {
 	robotName: string;
 	configDigest: string;
 	skills: CatalogSkillEntry[];
 	primitives: string[];
+	primitiveDetails?: CatalogPrimitiveEntry[];
 	namedPoses: string[];
 };
+
+export type RobotCatalogParseResult =
+	| { ok: true; catalog: RobotCatalog }
+	| { ok: false; error: string };
 
 export const MOTION_DIRECTIONS = ['forward', 'backward', 'left', 'right', 'up', 'down'] as const;
 
@@ -297,4 +309,242 @@ export function validateParamsAgainstSchema(
 
 export function isJsonRecord(value: unknown): value is JsonRecord {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+const CATALOG_KEYS = new Set([
+	'robotName',
+	'configDigest',
+	'skills',
+	'primitives',
+	'primitiveDetails',
+	'namedPoses',
+]);
+const SKILL_KEYS = new Set([
+	'name',
+	'summary',
+	'domain',
+	'requiredControlMode',
+	'movesRobot',
+	'parameters',
+	'recoveryPolicy',
+	'timeoutSec',
+]);
+const PRIMITIVE_KEYS = new Set(['name', 'summary', 'parameters', 'timeoutSec']);
+const PARAM_SCHEMA_KEYS = new Set(['type', 'properties', 'required', 'additionalProperties']);
+const MAX_CATALOG_TEXT_LENGTH = 1000;
+const MAX_CATALOG_TIMEOUT_SEC = 600;
+
+/** Parse and normalize the catalog format persisted beside a Blockly workspace. */
+export function parseRobotCatalog(value: unknown): RobotCatalogParseResult {
+	if (!isJsonRecord(value)) return { ok: false, error: 'catalog must be an object' };
+	const unknownKey = firstUnknownKey(value, CATALOG_KEYS);
+	if (unknownKey !== null) {
+		return { ok: false, error: `catalog contains unknown field "${unknownKey}"` };
+	}
+	if (!isCatalogText(value.robotName)) {
+		return { ok: false, error: 'catalog robotName must be a non-empty string' };
+	}
+	if (!isCatalogText(value.configDigest)) {
+		return { ok: false, error: 'catalog configDigest must be a non-empty string' };
+	}
+	if (!Array.isArray(value.skills)) return { ok: false, error: 'catalog skills must be an array' };
+	if (!Array.isArray(value.primitives)) {
+		return { ok: false, error: 'catalog primitives must be an array' };
+	}
+	if (!Array.isArray(value.namedPoses)) {
+		return { ok: false, error: 'catalog namedPoses must be an array' };
+	}
+
+	const skills: CatalogSkillEntry[] = [];
+	for (const [index, entry] of value.skills.entries()) {
+		const parsed = parseCatalogSkill(entry, `catalog.skills[${index}]`);
+		if (typeof parsed === 'string') return { ok: false, error: parsed };
+		skills.push(parsed);
+	}
+	const skillNames = skills.map((entry) => entry.name);
+	if (new Set(skillNames).size !== skillNames.length) {
+		return { ok: false, error: 'catalog skill names must be unique' };
+	}
+
+	const primitives = parseCatalogNames(value.primitives, 'catalog.primitives');
+	if (typeof primitives === 'string') return { ok: false, error: primitives };
+	const namedPoses = parseCatalogNames(value.namedPoses, 'catalog.namedPoses');
+	if (typeof namedPoses === 'string') return { ok: false, error: namedPoses };
+
+	let primitiveDetails: CatalogPrimitiveEntry[] | undefined;
+	if (value.primitiveDetails !== undefined) {
+		if (!Array.isArray(value.primitiveDetails)) {
+			return { ok: false, error: 'catalog primitiveDetails must be an array' };
+		}
+		primitiveDetails = [];
+		for (const [index, entry] of value.primitiveDetails.entries()) {
+			const parsed = parseCatalogPrimitive(entry, `catalog.primitiveDetails[${index}]`);
+			if (typeof parsed === 'string') return { ok: false, error: parsed };
+			if (!primitives.includes(parsed.name)) {
+				return {
+					ok: false,
+					error: `catalog.primitiveDetails[${index}].name is absent from catalog.primitives`,
+				};
+			}
+			primitiveDetails.push(parsed);
+		}
+		const detailNames = primitiveDetails.map((entry) => entry.name);
+		if (new Set(detailNames).size !== detailNames.length) {
+			return { ok: false, error: 'catalog primitive detail names must be unique' };
+		}
+	}
+
+	const catalog: RobotCatalog = {
+		robotName: value.robotName,
+		configDigest: value.configDigest,
+		skills,
+		primitives,
+		namedPoses,
+	};
+	if (primitiveDetails !== undefined) catalog.primitiveDetails = primitiveDetails;
+	return { ok: true, catalog };
+}
+
+function parseCatalogSkill(value: unknown, path: string): CatalogSkillEntry | string {
+	if (!isJsonRecord(value)) return `${path} must be an object`;
+	const unknownKey = firstUnknownKey(value, SKILL_KEYS);
+	if (unknownKey !== null) return `${path} contains unknown field "${unknownKey}"`;
+	if (!isCatalogName(value.name)) return `${path}.name must be a safe non-empty string`;
+	if (!isCatalogText(value.summary)) return `${path}.summary must be a non-empty string`;
+
+	const parsed: CatalogSkillEntry = { name: value.name, summary: value.summary };
+	const optionalTextError = copyOptionalCatalogText(
+		value,
+		parsed,
+		['domain', 'requiredControlMode', 'recoveryPolicy'],
+		path,
+	);
+	if (optionalTextError !== null) return optionalTextError;
+	if (value.movesRobot !== undefined) {
+		if (typeof value.movesRobot !== 'boolean') return `${path}.movesRobot must be a boolean`;
+		parsed.movesRobot = value.movesRobot;
+	}
+	const timeout = parseCatalogTimeout(value.timeoutSec, `${path}.timeoutSec`);
+	if (typeof timeout === 'string') return timeout;
+	if (timeout !== undefined) parsed.timeoutSec = timeout;
+	const schema = parseCatalogParamSchema(value.parameters, `${path}.parameters`);
+	if (typeof schema === 'string') return schema;
+	if (schema !== undefined) parsed.parameters = schema;
+	return parsed;
+}
+
+function parseCatalogPrimitive(value: unknown, path: string): CatalogPrimitiveEntry | string {
+	if (!isJsonRecord(value)) return `${path} must be an object`;
+	const unknownKey = firstUnknownKey(value, PRIMITIVE_KEYS);
+	if (unknownKey !== null) return `${path} contains unknown field "${unknownKey}"`;
+	if (!isCatalogName(value.name)) return `${path}.name must be a safe non-empty string`;
+	const parsed: CatalogPrimitiveEntry = { name: value.name };
+	if (value.summary !== undefined) {
+		if (!isCatalogText(value.summary)) return `${path}.summary must be a non-empty string`;
+		parsed.summary = value.summary;
+	}
+	const timeout = parseCatalogTimeout(value.timeoutSec, `${path}.timeoutSec`);
+	if (typeof timeout === 'string') return timeout;
+	if (timeout !== undefined) parsed.timeoutSec = timeout;
+	const schema = parseCatalogParamSchema(value.parameters, `${path}.parameters`);
+	if (typeof schema === 'string') return schema;
+	if (schema !== undefined) parsed.parameters = schema;
+	return parsed;
+}
+
+function parseCatalogParamSchema(
+	value: unknown,
+	path: string,
+): SkillParamSchema | string | undefined {
+	if (value === undefined) return undefined;
+	if (!isJsonRecord(value)) return `${path} must be an object`;
+	const unknownKey = firstUnknownKey(value, PARAM_SCHEMA_KEYS);
+	if (unknownKey !== null) return `${path} contains unknown field "${unknownKey}"`;
+	if (containsDangerousKey(value)) return `${path} contains a forbidden key`;
+
+	const schema: SkillParamSchema = {};
+	if (value.type !== undefined) {
+		if (typeof value.type !== 'string') return `${path}.type must be a string`;
+		schema.type = value.type;
+	}
+	if (value.properties !== undefined) {
+		if (!isJsonRecord(value.properties)) return `${path}.properties must be an object`;
+		const properties: Record<string, JsonRecord> = {};
+		for (const [name, property] of Object.entries(value.properties)) {
+			if (isDangerousSegment(name)) return `${path}.properties contains forbidden key "${name}"`;
+			if (!isJsonRecord(property)) return `${path}.properties.${name} must be an object`;
+			properties[name] = property;
+		}
+		schema.properties = properties;
+	}
+	if (value.required !== undefined) {
+		if (!Array.isArray(value.required) || !value.required.every(isCatalogName)) {
+			return `${path}.required must contain safe parameter names`;
+		}
+		if (new Set(value.required).size !== value.required.length) {
+			return `${path}.required must contain unique parameter names`;
+		}
+		if (
+			schema.properties !== undefined &&
+			value.required.some((name) => !(name in (schema.properties ?? {})))
+		) {
+			return `${path}.required references an undefined property`;
+		}
+		schema.required = [...value.required];
+	}
+	if (value.additionalProperties !== undefined) {
+		if (typeof value.additionalProperties !== 'boolean') {
+			return `${path}.additionalProperties must be a boolean`;
+		}
+		schema.additionalProperties = value.additionalProperties;
+	}
+	return schema;
+}
+
+function parseCatalogNames(value: unknown[], path: string): string[] | string {
+	if (!value.every(isCatalogName)) return `${path} must contain safe non-empty strings`;
+	if (new Set(value).size !== value.length) return `${path} must contain unique names`;
+	return [...value];
+}
+
+function parseCatalogTimeout(value: unknown, path: string): number | string | undefined {
+	if (value === undefined) return undefined;
+	if (
+		typeof value !== 'number' ||
+		!Number.isFinite(value) ||
+		value <= 0 ||
+		value > MAX_CATALOG_TIMEOUT_SEC
+	) {
+		return `${path} must be a positive number at most ${MAX_CATALOG_TIMEOUT_SEC}`;
+	}
+	return value;
+}
+
+function copyOptionalCatalogText(
+	source: JsonRecord,
+	target: CatalogSkillEntry,
+	keys: Array<'domain' | 'requiredControlMode' | 'recoveryPolicy'>,
+	path: string,
+): string | null {
+	for (const key of keys) {
+		const value = source[key];
+		if (value === undefined) continue;
+		if (!isCatalogText(value)) return `${path}.${key} must be a non-empty string`;
+		target[key] = value;
+	}
+	return null;
+}
+
+function firstUnknownKey(value: JsonRecord, allowed: ReadonlySet<string>): string | null {
+	return Object.keys(value).find((key) => !allowed.has(key)) ?? null;
+}
+
+function isCatalogText(value: unknown): value is string {
+	return (
+		typeof value === 'string' && value.trim() !== '' && value.length <= MAX_CATALOG_TEXT_LENGTH
+	);
+}
+
+function isCatalogName(value: unknown): value is string {
+	return isCatalogText(value) && !isDangerousSegment(value);
 }

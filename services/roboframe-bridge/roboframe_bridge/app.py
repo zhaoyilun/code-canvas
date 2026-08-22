@@ -12,16 +12,20 @@ import os
 import secrets
 import threading
 
-
 from fastapi import Depends, FastAPI, HTTPException, Response, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from . import __version__
-from .client import RobotClient, RobotClientError, SkillNotFound
-from .memory import TaskRegistry
+from .client import RobotClient, RobotClientError
+from .memory import TaskConflict, TaskRegistry
 from .models import (
+    CONFIRMED_STATES,
+    TERMINAL_STATES,
+    ActionRef,
     CancelResult,
     Catalog,
+    CatalogCapability,
+    CatalogPrimitive,
     CatalogSkill,
     ExecuteAccepted,
     ExecuteRequest,
@@ -32,8 +36,6 @@ from .models import (
     ValidateRequest,
     ValidateResult,
 )
-
-TERMINAL_STATES = {"completed", "failed", "canceled", "unknown"}
 
 
 def create_app(
@@ -56,7 +58,9 @@ def create_app(
     ) -> None:
         if not token:
             return
-        if credentials is None or not secrets.compare_digest(credentials.credentials, token):
+        if credentials is None or not secrets.compare_digest(
+            credentials.credentials, token
+        ):
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="invalid or missing bearer token",
@@ -80,6 +84,16 @@ def create_app(
                 return skill
         raise HTTPException(status_code=404, detail=f"unknown skill: {skill_name}")
 
+    @app.get("/v1/catalog/primitives/{primitive_name}", dependencies=[guarded])
+    def catalog_primitive(primitive_name: str) -> CatalogPrimitive:
+        catalog_data = _dispatch(client.catalog)
+        for primitive in catalog_data.primitives:
+            if primitive.name == primitive_name:
+                return primitive
+        raise HTTPException(
+            status_code=404, detail=f"unknown primitive: {primitive_name}"
+        )
+
     @app.get("/v1/catalog/poses", dependencies=[guarded])
     def poses() -> PoseCatalog:
         return _dispatch(client.poses)
@@ -88,58 +102,177 @@ def create_app(
     def robot_status() -> GatewayStatus:
         return _dispatch(client.status)
 
-    @app.post("/v1/skills/validate", dependencies=[guarded])
+    @app.post("/v1/actions/validate", dependencies=[guarded])
     def validate(request: ValidateRequest) -> ValidateResult:
+        catalog_data = _dispatch(client.catalog)
+        _require_catalog_action(catalog_data, request.action)
         return _dispatch(lambda: client.validate(request))
 
-    @app.post("/v1/skills/execute", dependencies=[guarded], status_code=202)
+    @app.post("/v1/actions/execute", dependencies=[guarded], status_code=202)
     def execute(request: ExecuteRequest) -> ExecuteAccepted:
+        existing = registry.get(request.task_id)
+        if existing is not None:
+            _raise_task_conflict(existing)
+
         catalog_data = _dispatch(client.catalog)
-        if request.skill not in {skill.name for skill in catalog_data.skills}:
-            raise HTTPException(status_code=404, detail=f"unknown skill: {request.skill}")
+        _require_catalog_action(catalog_data, request.action)
+
+        try:
+            registry.accept(request)
+        except TaskConflict as exc:
+            _raise_task_conflict(exc.existing, cause=exc)
 
         def run() -> None:
-            # Failures surface through the task registry, never the request.
-            result = client.execute(request)
+            running = registry.mark_running(request.task_id)
+            if running is None or running.state in TERMINAL_STATES:
+                return
+            try:
+                result = client.execute(request)
+                if not isinstance(result, TaskResult):
+                    raise TypeError("robot client execute returned an invalid result")
+                if result.state not in TERMINAL_STATES:
+                    result = TaskResult(
+                        task_id=request.task_id,
+                        action=request.action,
+                        state="unknown",
+                        error_code="NON_TERMINAL_EXECUTION_RESULT",
+                        message=f"robot boundary returned non-terminal state: {result.state}",
+                    )
+                else:
+                    result = result.model_copy(
+                        update={"task_id": request.task_id, "action": request.action}
+                    )
+            except RobotClientError as exc:
+                result = TaskResult(
+                    task_id=request.task_id,
+                    action=request.action,
+                    state="failed",
+                    success=False,
+                    error_code="ROBOT_BOUNDARY_ERROR",
+                    message=str(exc),
+                )
+            except Exception as exc:
+                result = TaskResult(
+                    task_id=request.task_id,
+                    action=request.action,
+                    state="unknown",
+                    error_code="BRIDGE_EXECUTION_EXCEPTION",
+                    message=f"{type(exc).__name__}: {exc}",
+                )
             registry.record(result)
 
-        threading.Thread(target=run, daemon=True).start()
-        return ExecuteAccepted(task_id=request.task_id, skill=request.skill)
+        try:
+            threading.Thread(target=run, daemon=True).start()
+        except Exception as exc:
+            registry.record(
+                TaskResult(
+                    task_id=request.task_id,
+                    action=request.action,
+                    state="unknown",
+                    error_code="BRIDGE_THREAD_START_FAILED",
+                    message=f"{type(exc).__name__}: {exc}",
+                )
+            )
+        return ExecuteAccepted(task_id=request.task_id, action=request.action)
 
     @app.get("/v1/tasks/{task_id}", dependencies=[guarded])
     def task(task_id: str, response: Response) -> TaskResult:
         result = registry.get(task_id)
         if result is None:
             result = _dispatch(lambda: client.query(task_id))
+            if result is not None:
+                result = registry.record(result)
         if result is None:
             raise HTTPException(status_code=404, detail=f"unknown task: {task_id}")
-        response.headers["X-Terminal-State"] = str(result.state in TERMINAL_STATES)
+        response.headers["X-Terminal-State"] = str(result.terminal)
         return result
 
     @app.post("/v1/tasks/{task_id}/cancel", dependencies=[guarded])
     def cancel(task_id: str) -> CancelResult:
-        result = _dispatch(lambda: client.cancel(task_id))
-        if result.task_id in TERMINAL_STATES or result.state in TERMINAL_STATES:
-            registry.record(
+        current = registry.get(task_id)
+        if current is not None and current.state in CONFIRMED_STATES:
+            return CancelResult(
+                task_id=task_id,
+                requested=False,
+                state=current.state,
+                message="task already has a confirmed terminal state",
+            )
+
+        if current is not None:
+            current = registry.mark_cancel_requested(task_id)
+
+        try:
+            result = client.cancel(task_id)
+            if not isinstance(result, CancelResult):
+                raise TypeError("robot client cancel returned an invalid result")
+        except Exception as exc:
+            result = CancelResult(
+                task_id=task_id,
+                requested=False,
+                state="unknown",
+                message=f"{type(exc).__name__}: {exc}",
+            )
+
+        if current is None:
+            return result
+
+        if result.state in TERMINAL_STATES:
+            stored = registry.record(
                 TaskResult(
                     task_id=task_id,
-                    skill="",
+                    action=current.action,
                     state=result.state,
+                    success=_success_for_state(result.state),
                     message=result.message,
+                    cancel_requested=True,
                 )
             )
-        return result
+            return result.model_copy(update={"task_id": task_id, "state": stored.state})
+
+        latest = registry.get(task_id)
+        state_value = latest.state if latest is not None else "unknown"
+        return result.model_copy(update={"task_id": task_id, "state": state_value})
 
     return app
+
+
+def _require_catalog_action(catalog: Catalog, action: ActionRef) -> CatalogCapability:
+    capabilities: list[CatalogCapability]
+    if action.kind == "skill":
+        capabilities = list(catalog.skills)
+    else:
+        capabilities = list(catalog.primitives)
+    for capability in capabilities:
+        if capability.name == action.name:
+            return capability
+    raise HTTPException(status_code=404, detail=f"unknown {action.kind}: {action.name}")
+
+
+def _success_for_state(state_value: str) -> bool | None:
+    if state_value == "completed":
+        return True
+    if state_value in {"failed", "canceled"}:
+        return False
+    return None
+
+
+def _raise_task_conflict(existing: TaskResult, cause: Exception | None = None) -> None:
+    error = HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail=f"task_id already exists: {existing.task_id} (state={existing.state})",
+    )
+    if cause is not None:
+        raise error from cause
+    raise error
 
 
 def _dispatch(call):
     try:
         return call()
-    except SkillNotFound as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
     except RobotClientError as exc:
-        raise HTTPException(status_code=502, detail=f"robot boundary error: {exc}") from exc
+        raise HTTPException(
+            status_code=502, detail=f"robot boundary error: {exc}"
+        ) from exc
 
 
 def build_default_client():  # pragma: no cover - wiring only, exercised on the robot

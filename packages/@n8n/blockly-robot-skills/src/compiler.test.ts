@@ -35,6 +35,20 @@ describe('compileRobotWorkspace', () => {
 		]);
 		expect(result.plan.robot).toBe('so101_single_arm');
 		expect(result.plan.configDigest).toBe(SO101_CATALOG_SNAPSHOT.configDigest);
+		expect(result.blockCount).toBe(3);
+	});
+
+	it('preserves stable Blockly IDs on compiled plan steps', () => {
+		const result = compileRobotWorkspace(
+			planRoot({ ...skillBlock('inspect_scene'), id: 'robot-action-1' }),
+			SO101_CATALOG_SNAPSHOT,
+		);
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.plan.plan[0]).toMatchObject({
+			blockId: 'robot-action-1',
+			planStepId: 'step:robot-action-1',
+		});
 	});
 
 	it('compiles skills with parameters from connected value blocks', () => {
@@ -210,6 +224,125 @@ describe('compileRobotWorkspace', () => {
 		).toEqual({
 			ok: false,
 			error: 'unsupported block "controls_if"',
+		});
+	});
+
+	it('rejects empty plans, unknown inputs, and malformed child inputs', () => {
+		expect(
+			compileRobotWorkspace(
+				{ blocks: { blocks: [{ type: 'robot_task_plan' }] } },
+				SO101_CATALOG_SNAPSHOT,
+			),
+		).toEqual({ ok: false, error: 'robot task plan must contain at least one step' });
+
+		expect(
+			compileRobotWorkspace(
+				planRoot({
+					...skillBlock('inspect_scene'),
+					inputs: { SECRET: { block: { type: 'text', fields: { TEXT: 'hidden' } } } },
+				}),
+				SO101_CATALOG_SNAPSHOT,
+			),
+		).toEqual({
+			ok: false,
+			error: 'unknown input "SECRET" on block "robot_execute_skill"',
+		});
+
+		expect(
+			compileRobotWorkspace(
+				planRoot({
+					...skillBlock('inspect_scene'),
+					inputs: { TARGET: { block: { type: 'math_number', fields: { NUM: 1 } } } },
+				}),
+				SO101_CATALOG_SNAPSHOT,
+			),
+		).toEqual({
+			ok: false,
+			error: 'input "TARGET" on block "robot_execute_skill" does not accept "math_number"',
+		});
+
+		expect(
+			compileRobotWorkspace(
+				planRoot({ ...skillBlock('inspect_scene'), inputs: { TARGET: {} } }),
+				SO101_CATALOG_SNAPSHOT,
+			),
+		).toEqual({
+			ok: false,
+			error: 'input "TARGET" on block "robot_execute_skill" is malformed',
+		});
+	});
+
+	it('rejects hidden value chains, malformed next links, and duplicate block IDs', () => {
+		const hiddenValueNext = planRoot({
+			...skillBlock('inspect_scene'),
+			inputs: {
+				TARGET: {
+					block: {
+						type: 'text',
+						fields: { TEXT: 'home' },
+						next: { block: skillBlock('recover_safe_pose') },
+					},
+				},
+			},
+		});
+		expect(compileRobotWorkspace(hiddenValueNext, SO101_CATALOG_SNAPSHOT)).toEqual({
+			ok: false,
+			error: 'value block "text" must not contain a next block',
+		});
+
+		expect(
+			compileRobotWorkspace(
+				planRoot({ ...skillBlock('inspect_scene'), next: {} }),
+				SO101_CATALOG_SNAPSHOT,
+			),
+		).toEqual({
+			ok: false,
+			error: 'next block after "robot_execute_skill" is malformed',
+		});
+
+		const duplicateIds = {
+			blocks: {
+				blocks: [
+					{
+						type: 'robot_task_plan',
+						id: 'same-id',
+						inputs: {
+							DO: { block: { ...skillBlock('inspect_scene'), id: 'same-id' } },
+						},
+					},
+				],
+			},
+		};
+		expect(compileRobotWorkspace(duplicateIds, SO101_CATALOG_SNAPSHOT)).toEqual({
+			ok: false,
+			error: 'workspace contains duplicate block id "same-id"',
+		});
+	});
+
+	it('applies PARAMS_JSON limits to UTF-8 bytes', () => {
+		const catalog: import('./catalog').RobotCatalog = {
+			...SO101_CATALOG_SNAPSHOT,
+			skills: [
+				...SO101_CATALOG_SNAPSHOT.skills,
+				{
+					name: 'say_note',
+					summary: 'Say a note',
+					parameters: {
+						type: 'object',
+						properties: { note: { type: 'string' } },
+						required: ['note'],
+						additionalProperties: false,
+					},
+				},
+			],
+		};
+		const workspace = planRoot({
+			type: 'robot_execute_skill',
+			fields: { SKILL: 'say_note', PARAMS_JSON: JSON.stringify({ note: '课'.repeat(6000) }) },
+		});
+		expect(compileRobotWorkspace(workspace, catalog)).toEqual({
+			ok: false,
+			error: 'PARAMS_JSON is too large',
 		});
 	});
 

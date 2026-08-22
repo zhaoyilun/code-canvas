@@ -1,8 +1,10 @@
 import type * as Blockly from 'blockly';
+import type { RobotCatalog } from '@n8n/blockly-robot-skills';
 import {
 	SO101_CATALOG_SNAPSHOT,
 	MOTION_DIRECTIONS,
 	compileRobotWorkspace,
+	createDefaultRobotPlanPayload,
 	createDefaultRobotWorkspace,
 	parseRobotPlanPayload,
 	serializeRobotPlanPayload,
@@ -18,7 +20,10 @@ export const ROBOT_WAIT_BLOCK = 'robot_wait';
 export const ROBOT_GRIPPER_BLOCK = 'robot_gripper';
 export const ROBOT_CONDITION_BLOCK = 'robot_condition';
 
-type BlocklyRuntime = Pick<typeof Blockly, 'Blocks' | 'FieldDropdown' | 'serialization'>;
+type BlocklyRuntime = Pick<
+	typeof Blockly,
+	'Blocks' | 'FieldDropdown' | 'FieldTextInput' | 'serialization'
+>;
 
 export type RobotToolboxLabels = {
 	robot: string;
@@ -51,6 +56,8 @@ export type RobotBlockLabels = {
 	timeout: string;
 	extraParams: string;
 };
+
+export type { RobotCatalog };
 
 const DIRECTION_NONE = '';
 type MenuOption = [string, string];
@@ -101,13 +108,13 @@ export function createRobotToolbox(labels: RobotToolboxLabels): Blockly.utils.to
 	};
 }
 
-export function registerRobotBlocks(blockly: BlocklyRuntime, labels: RobotBlockLabels) {
-	const skillOptions: MenuOption[] = SO101_CATALOG_SNAPSHOT.skills.map(
-		(skill): MenuOption => [skill.name, skill.name],
-	);
-	const primitiveOptions: MenuOption[] = SO101_CATALOG_SNAPSHOT.primitives.map(
-		(name): MenuOption => [name, name],
-	);
+export function registerRobotBlocks(
+	blockly: BlocklyRuntime,
+	labels: RobotBlockLabels,
+	catalog: RobotCatalog,
+) {
+	const skillOptions = createCatalogOptions(catalog.skills.map(({ name }) => name));
+	const primitiveOptions = createCatalogOptions(catalog.primitives);
 	const directionOptions: MenuOption[] = [
 		[labels.directionNone, DIRECTION_NONE],
 		...MOTION_DIRECTIONS.map((direction): MenuOption => [direction, direction]),
@@ -126,6 +133,9 @@ export function registerRobotBlocks(blockly: BlocklyRuntime, labels: RobotBlockL
 			this.appendDummyInput()
 				.appendField(labels.executeSkill)
 				.appendField(new blockly.FieldDropdown(skillOptions), 'SKILL');
+			this.appendDummyInput()
+				.appendField(labels.extraParams)
+				.appendField(new blockly.FieldTextInput('{}'), 'PARAMS_JSON');
 			this.appendValueInput('TARGET').setCheck('String').appendField(labels.target);
 			this.appendValueInput('PLACE').setCheck('String').appendField(labels.place);
 			this.appendDummyInput()
@@ -144,6 +154,9 @@ export function registerRobotBlocks(blockly: BlocklyRuntime, labels: RobotBlockL
 			this.appendDummyInput()
 				.appendField(labels.executePrimitive)
 				.appendField(new blockly.FieldDropdown(primitiveOptions), 'PRIMITIVE');
+			this.appendDummyInput()
+				.appendField(labels.extraParams)
+				.appendField(new blockly.FieldTextInput('{}'), 'PARAMS_JSON');
 			this.appendValueInput('TARGET').setCheck('String').appendField(labels.target);
 			this.appendValueInput('TIMEOUT').setCheck('Number').appendField(labels.timeout);
 			this.setPreviousStatement(true);
@@ -197,9 +210,14 @@ export function registerRobotBlocks(blockly: BlocklyRuntime, labels: RobotBlockL
 	};
 }
 
+function createCatalogOptions(names: string[]): MenuOption[] {
+	return names.length > 0 ? names.map((name): MenuOption => [name, name]) : [['-', '']];
+}
+
 /** Payload adapter over the shared package so BlocklyEditor stays mode-agnostic. */
 export {
 	compileRobotWorkspace,
+	createDefaultRobotPlanPayload,
 	createDefaultRobotWorkspace,
 	parseRobotPlanPayload,
 	serializeRobotPlanPayload,

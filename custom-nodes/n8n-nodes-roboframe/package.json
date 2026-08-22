@@ -22,6 +22,7 @@
 			"dist/credentials/RoboFrameBridgeApi.credentials.js"
 		],
 		"nodes": [
+			"dist/nodes/CompetitionDesign/CompetitionDesign.node.js",
 			"dist/nodes/RobotCatalog/RobotCatalog.node.js",
 			"dist/nodes/RobotStatus/RobotStatus.node.js",
 			"dist/nodes/RobotSkill/RobotSkill.node.js",
@@ -32,6 +33,7 @@
 	},
 	"devDependencies": {
 		"@n8n/blockly-robot-skills": "workspace:*",
+		"@n8n/competition-designer": "workspace:*",
 		"@n8n/node-cli": "^0.44.3",
 		"esbuild": "catalog:",
 		"n8n-workflow": "workspace:*",

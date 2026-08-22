@@ -68,11 +68,14 @@ describe('robotSkills editor configuration', () => {
 	});
 
 	it('registers the robot blocks and loads the default workspace', () => {
-		registerRobotBlocks(Blockly, labels);
+		registerRobotBlocks(Blockly, labels, SO101_CATALOG_SNAPSHOT);
 		const workspace = new Blockly.Workspace();
 		try {
 			const parsed = parseRobotPlanPayload(
-				serializeRobotPlanPayload(createDefaultRobotWorkspace(), undefined),
+				serializeRobotPlanPayload({
+					catalog: SO101_CATALOG_SNAPSHOT,
+					workspace: createDefaultRobotWorkspace(),
+				}),
 			);
 			expect(parsed.ok).toBe(true);
 			if (!parsed.ok) return;
@@ -87,21 +90,22 @@ describe('robotSkills editor configuration', () => {
 
 			const compiled = compileRobotWorkspace(
 				Blockly.serialization.workspaces.save(workspace),
-				SO101_CATALOG_SNAPSHOT,
+				parsed.payload.catalog,
 			);
 			expect(compiled.ok).toBe(true);
 			if (!compiled.ok) return;
-			expect(compiled.plan.plan).toEqual([
+			expect(compiled.plan.plan).toMatchObject([
 				{ step: 'skill', skill: 'inspect_scene', timeoutSec: 30 },
 				{ step: 'skill', skill: 'recover_safe_pose', timeoutSec: 30 },
 			]);
+			expect(compiled.plan.plan[0]?.planStepId).toBe(`step:${compiled.plan.plan[0]?.blockId}`);
 		} finally {
 			workspace.dispose();
 		}
 	});
 
 	it('serializes a skill block with direction and distance that compiles', () => {
-		registerRobotBlocks(Blockly, labels);
+		registerRobotBlocks(Blockly, labels, SO101_CATALOG_SNAPSHOT);
 		const workspace = new Blockly.Workspace();
 		try {
 			Blockly.serialization.workspaces.load(
@@ -154,8 +158,89 @@ describe('robotSkills editor configuration', () => {
 			},
 		};
 		expect(compileRobotWorkspace(invalid, SO101_CATALOG_SNAPSHOT).ok).toBe(false);
-		const serialized = serializeRobotPlanPayload(invalid, undefined);
+		const serialized = serializeRobotPlanPayload({
+			catalog: SO101_CATALOG_SNAPSHOT,
+			workspace: invalid,
+		});
 		const parsed = parseRobotPlanPayload(serialized);
 		expect(parsed.ok).toBe(true);
+	});
+
+	it('keeps a live catalog attached through import, compile, and save', () => {
+		const liveCatalog = {
+			robotName: 'rk3588_lab_arm',
+			configDigest: 'live-catalog-digest-42',
+			skills: [
+				{
+					name: 'inspect_training_part',
+					summary: 'Inspect the current training part.',
+					parameters: {
+						type: 'object',
+						properties: { lesson_stage: { type: 'string' } },
+						required: ['lesson_stage'],
+						additionalProperties: false,
+					},
+				},
+			],
+			primitives: ['move_joint_live'],
+			namedPoses: ['home'],
+		};
+		const generatedWorkspace = {
+			blocks: {
+				languageVersion: 0,
+				blocks: [
+					{
+						type: ROBOT_TASK_PLAN_BLOCK,
+						inputs: {
+							DO: {
+								block: {
+									id: 'ai-live-skill',
+									type: ROBOT_EXECUTE_SKILL_BLOCK,
+									fields: {
+										SKILL: 'inspect_training_part',
+										PARAMS_JSON: '{"lesson_stage":"explain"}',
+									},
+								},
+							},
+						},
+					},
+				],
+			},
+		};
+		const imported = parseRobotPlanPayload(
+			serializeRobotPlanPayload({ catalog: liveCatalog, workspace: generatedWorkspace }),
+		);
+		expect(imported.ok).toBe(true);
+		if (!imported.ok) return;
+		expect(imported.payload.catalog).toEqual(liveCatalog);
+
+		registerRobotBlocks(Blockly, labels, imported.payload.catalog);
+		const workspace = new Blockly.Workspace();
+		try {
+			Blockly.serialization.workspaces.load(imported.payload.workspace, workspace);
+			const state = Blockly.serialization.workspaces.save(workspace);
+			const compiled = compileRobotWorkspace(state, imported.payload.catalog);
+			expect(compiled.ok).toBe(true);
+			if (!compiled.ok) return;
+			expect(compiled.plan).toMatchObject({
+				robot: 'rk3588_lab_arm',
+				configDigest: 'live-catalog-digest-42',
+				plan: [
+					{
+						blockId: 'ai-live-skill',
+						step: 'skill',
+						skill: 'inspect_training_part',
+						params: { lesson_stage: 'explain' },
+					},
+				],
+			});
+
+			const saved = parseRobotPlanPayload(
+				serializeRobotPlanPayload({ catalog: imported.payload.catalog, workspace: state }),
+			);
+			expect(saved.ok && saved.payload.catalog.configDigest).toBe('live-catalog-digest-42');
+		} finally {
+			workspace.dispose();
+		}
 	});
 });

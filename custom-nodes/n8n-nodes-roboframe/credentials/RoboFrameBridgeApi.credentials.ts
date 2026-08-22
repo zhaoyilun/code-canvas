@@ -7,7 +7,7 @@ export class RoboFrameBridgeApi implements ICredentialType {
 
 	documentationUrl = 'https://gitcode.com/openeuler/IB_Robot';
 
-	icon: 'file:roboframe.svg' = 'file:roboframe.svg';
+	icon = { light: 'file:roboframe.svg', dark: 'file:roboframe.svg' } as const;
 
 	properties: INodeProperties[] = [
 		{
@@ -29,22 +29,19 @@ export class RoboFrameBridgeApi implements ICredentialType {
 	];
 
 	// Declarative test (ICredentialTestRequest): the credential test button
-	// issues GET {baseUrl}/v1/health and treats 2xx as OK. The bearer token
-	// header is injected by the authenticate rule below.
+	// issues an authenticated status request so both endpoint and token are checked.
 	test: ICredentialType['test'] = {
 		request: {
 			baseURL: '={{$credentials.baseUrl.replace(/\\/+$/, "")}}',
-			url: '/v1/health',
+			url: '/v1/status',
 			headers: {
-				// Health is public per the bridge contract; send the token when
-				// present anyway so misconfigured tokens surface in the test.
 				Authorization: '={{$credentials.token ? `Bearer ${$credentials.token}` : ""}}',
 			},
 		},
 		rules: [
 			{
 				type: 'responseCode',
-				properties: { value: 200, message: 'Bridge health check failed' },
+				properties: { value: 200, message: 'Bridge authorization check failed' },
 			},
 		],
 	};

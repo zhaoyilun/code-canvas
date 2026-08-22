@@ -2,6 +2,12 @@ import { flushPromises, mount } from '@vue/test-utils';
 
 import BlocklyEditor from './BlocklyEditor.vue';
 import { createDefaultWorkspace, serializeBlocklyDataPayload } from './payload';
+import {
+	ROBOT_EXECUTE_SKILL_BLOCK,
+	ROBOT_TASK_PLAN_BLOCK,
+	parseRobotPlanPayload,
+	serializeRobotPlanPayload,
+} from './robotSkills';
 
 type ChangeListener = (event: { isUiEvent: boolean }) => void;
 
@@ -15,6 +21,7 @@ const events = {
 	}),
 };
 let changeListener: ChangeListener | undefined;
+let savedWorkspace: Record<string, unknown> = createDefaultWorkspace();
 
 function notifyProgrammaticChange() {
 	if (events.disabled) return;
@@ -33,15 +40,23 @@ const workspace = {
 };
 
 const blockly = {
+	Blocks: {},
 	Events: events,
+	FieldDropdown: class {
+		constructor(_options: Array<[string, string]>) {}
+	},
+	FieldTextInput: class {
+		constructor(_value: string) {}
+	},
 	inject: vi.fn(() => workspace),
 	svgResize: vi.fn(),
 	serialization: {
 		workspaces: {
-			load: vi.fn((_state: Record<string, unknown>, _workspace: typeof workspace) => {
+			load: vi.fn((state: Record<string, unknown>, _workspace: typeof workspace) => {
+				savedWorkspace = state;
 				notifyProgrammaticChange();
 			}),
-			save: vi.fn(() => createDefaultWorkspace()),
+			save: vi.fn(() => savedWorkspace),
 		},
 	},
 };
@@ -77,6 +92,7 @@ describe('BlocklyEditor.vue', () => {
 	beforeEach(() => {
 		events.disabled = false;
 		changeListener = undefined;
+		savedWorkspace = createDefaultWorkspace();
 		vi.clearAllMocks();
 		vi.stubGlobal(
 			'ResizeObserver',
@@ -85,6 +101,57 @@ describe('BlocklyEditor.vue', () => {
 				disconnect() {}
 			},
 		);
+	});
+
+	it('uses the payload catalog to compile and save an imported robot workspace', async () => {
+		const catalog = {
+			robotName: 'rk3588_lab_arm',
+			configDigest: 'rk3588-live-digest',
+			skills: [{ name: 'teach_ai_code', summary: 'Explain an AI-generated robot step.' }],
+			primitives: [],
+			namedPoses: [],
+		};
+		const robotWorkspace = {
+			blocks: {
+				blocks: [
+					{
+						type: ROBOT_TASK_PLAN_BLOCK,
+						inputs: {
+							DO: {
+								block: {
+									id: 'teaching-step',
+									type: ROBOT_EXECUTE_SKILL_BLOCK,
+									fields: { SKILL: 'teach_ai_code' },
+								},
+							},
+						},
+					},
+				],
+			},
+		};
+		const wrapper = mount(BlocklyEditor, {
+			props: {
+				modelValue: serializeRobotPlanPayload({ catalog, workspace: robotWorkspace }),
+				editorMode: 'robot-skills',
+			},
+		});
+
+		await flushPromises();
+
+		expect(wrapper.get('[data-test-id="blockly-javascript-preview"]').text()).toContain(
+			'rk3588_lab_arm',
+		);
+		expect(wrapper.emitted('update:modelValue')).toBeUndefined();
+
+		savedWorkspace = JSON.parse(
+			JSON.stringify(robotWorkspace).replace('teaching-step', 'teaching-step-edited'),
+		) as Record<string, unknown>;
+		changeListener?.({ isUiEvent: false });
+		const emitted = wrapper.emitted('update:modelValue')?.at(-1)?.[0];
+		expect(typeof emitted).toBe('string');
+		const parsed = parseRobotPlanPayload(String(emitted));
+		expect(parsed.ok && parsed.payload.catalog.configDigest).toBe('rk3588-live-digest');
+		wrapper.unmount();
 	});
 
 	afterEach(() => {

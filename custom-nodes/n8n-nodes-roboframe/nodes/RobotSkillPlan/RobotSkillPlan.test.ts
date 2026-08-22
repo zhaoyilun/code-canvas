@@ -1,12 +1,13 @@
-import { describe, expect, it, vi } from 'vitest';
-
-import type { IExecuteFunctions, INode, INodeExecutionData } from 'n8n-workflow';
+import type { RobotCatalog } from '@n8n/blockly-robot-skills';
 import {
+	SO101_CATALOG_SNAPSHOT,
+	compileRobotWorkspace,
 	createDefaultRobotWorkspace,
 	serializeRobotPlanPayload,
-	compileRobotWorkspace,
-	SO101_CATALOG_SNAPSHOT,
 } from '@n8n/blockly-robot-skills';
+import type { IExecuteFunctions, INode, INodeExecutionData } from 'n8n-workflow';
+import { describe, expect, it, vi } from 'vitest';
+
 import { RobotSkillPlan } from './RobotSkillPlan.node';
 
 function makeContext(params: Record<string, unknown>) {
@@ -19,51 +20,81 @@ function makeContext(params: Record<string, unknown>) {
 			const value = values.get(_name);
 			return value === undefined ? fallback : value;
 		}),
-		getInputData: (): INodeExecutionData[] => [{ json: {}, pairedItem: { item: 0 } }],
+		getInputData: (): INodeExecutionData[] => [
+			{ json: { lessonId: 'lesson-1' }, pairedItem: { item: 0 } },
+		],
 		getCredentials: vi.fn(async () => ({ baseUrl: 'http://bridge', token: 't' })),
 	} as unknown as IExecuteFunctions;
 }
 
+function payloadCatalog(digest = 'payload-catalog-digest'): RobotCatalog {
+	return { ...structuredClone(SO101_CATALOG_SNAPSHOT), configDigest: digest };
+}
+
 describe('RobotSkillPlan node', () => {
-	it('compile mode outputs the recompiled plan and ignores the payload preview', async () => {
-		const compiled = compileRobotWorkspace(createDefaultRobotWorkspace(), SO101_CATALOG_SNAPSHOT);
+	it('recompiles exclusively against the catalog embedded in payload v2', async () => {
+		const catalog = payloadCatalog();
+		const workspace = createDefaultRobotWorkspace();
+		const compiled = compileRobotWorkspace(workspace, catalog);
 		expect(compiled.ok).toBe(true);
 		if (!compiled.ok) return;
-
-		// Tamper the preview plan the runtime must never trust.
-		const tampered = structuredClone(compiled.plan);
-		tampered.plan = [{ step: 'skill', skill: 'dance_basic' }, { step: 'skill', skill: 'dance_basic' }, { step: 'skill', skill: 'dance_basic' }, { step: 'skill', skill: 'dance_basic' }, { step: 'skill', skill: 'dance_basic' }, { step: 'skill', skill: 'dance_basic' }, { step: 'skill', skill: 'dance_basic' }];
-		const payload = serializeRobotPlanPayload(
-			{ ...createDefaultRobotWorkspace() },
-			tampered,
-		);
+		const payload = serializeRobotPlanPayload({ catalog, workspace });
 
 		const instance = new RobotSkillPlan();
-		const result = await instance.execute.call(
-			makeContext({ blocklyPayload: payload, mode: 'compile' }),
-		);
-		expect(result[0][0].json).toEqual({ plan: compiled.plan }); // workspace is the truth
+		const result = await instance.execute.call(makeContext({ blocklyPayload: payload }));
+		expect(result[0][0].json).toEqual({
+			lessonId: 'lesson-1',
+			plan: compiled.plan,
+			compilation: {
+				valid: true,
+				blockCount: compiled.blockCount,
+				catalogDigest: {
+					source: 'payloadCatalog',
+					value: 'payload-catalog-digest',
+				},
+			},
+		});
 	});
 
-	it('rejects workspaces that do not compile', async () => {
-		const payload = serializeRobotPlanPayload({ blocks: { blocks: [] } }, undefined);
+	it('rejects workspaces that do not compile against their payload catalog', async () => {
+		const payload = serializeRobotPlanPayload({
+			catalog: payloadCatalog(),
+			workspace: { blocks: { blocks: [] } },
+		});
 		const instance = new RobotSkillPlan();
 		await expect(
-			instance.execute.call(makeContext({ blocklyPayload: payload, mode: 'compile' })),
+			instance.execute.call(makeContext({ blocklyPayload: payload })),
 		).rejects.toThrow('workspace has no root block');
 	});
 
-	it('rejects malformed payloads', async () => {
+	it('rejects malformed payloads and payloads carrying the retired plan preview', async () => {
 		const instance = new RobotSkillPlan();
 		await expect(
-			instance.execute.call(makeContext({ blocklyPayload: 'not-json', mode: 'compile' })),
+			instance.execute.call(makeContext({ blocklyPayload: 'not-json' })),
+		).rejects.toThrow('invalid Blockly payload');
+		const withPreview = JSON.stringify({
+			schemaVersion: 2,
+			catalog: payloadCatalog(),
+			workspace: createDefaultRobotWorkspace(),
+			plan: { schemaVersion: 1, plan: [] },
+		});
+		await expect(
+			instance.execute.call(makeContext({ blocklyPayload: withPreview })),
 		).rejects.toThrow('invalid Blockly payload');
 	});
 
-	it('default payload compiles', async () => {
+	it('default payload compiles with its embedded catalog', async () => {
 		const instance = new RobotSkillPlan();
-		const result = await instance.execute.call(makeContext({ mode: 'compile' }));
-		const json = result[0][0].json as { plan: { plan: unknown[] } };
+		const result = await instance.execute.call(makeContext({}));
+		const json = result[0][0].json as {
+			plan: { plan: unknown[]; configDigest: string };
+			compilation: { catalogDigest: { source: string; value: string } };
+		};
 		expect(json.plan.plan.length).toBe(2);
+		expect(json.plan.configDigest).toBe(SO101_CATALOG_SNAPSHOT.configDigest);
+		expect(json.compilation.catalogDigest).toEqual({
+			source: 'payloadCatalog',
+			value: SO101_CATALOG_SNAPSHOT.configDigest,
+		});
 	});
 });

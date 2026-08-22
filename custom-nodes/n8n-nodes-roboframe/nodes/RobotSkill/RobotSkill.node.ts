@@ -19,6 +19,8 @@ import {
 } from '../shared/engine';
 import { collectSkillParams, skillParams } from '../shared/skillParams';
 
+const SKILL_ACTION = 'skill' as const;
+
 export class RobotSkill implements INodeType {
 	description: INodeTypeDescription = {
 		displayName: 'Robot Skill',
@@ -115,7 +117,7 @@ export async function runSkill(
 	const { params, timeoutSec } = collectSkillParams(values);
 
 	if (options.validateFirst) {
-		const verdict = await client.validate(values.skill, params);
+		const verdict = await client.validate({ kind: SKILL_ACTION, name: values.skill }, params);
 		if (verdict.valid !== true) {
 			const reason = typeof verdict.message === 'string' ? verdict.message : 'unknown reason';
 			throw new UserError(`skill "${values.skill}" rejected by validation: ${reason}`);
@@ -129,8 +131,18 @@ export async function runSkill(
 
 	if (!options.waitForResult) {
 		const taskId = generateTaskId();
-		await client.execute(taskId, step.skill, step.params ?? {}, step.timeoutSec);
-		return { taskId, skill: values.skill, state: 'submitted', success: null };
+		await client.execute(
+			taskId,
+			{ kind: SKILL_ACTION, name: step.skill },
+			params,
+			step.timeoutSec,
+		);
+		return {
+			taskId,
+			action: { kind: SKILL_ACTION, name: step.skill },
+			state: 'accepted',
+			success: null,
+		};
 	}
 
 	const outcome: StepOutcome = await runAction(client, step, 0);
@@ -142,7 +154,10 @@ export function outcomeJson(outcome: StepOutcome): IDataObject {
 		taskId: outcome.taskId ?? '',
 		state: outcome.state ?? outcome.status,
 		success: outcome.success ?? null,
-		skill: stepName(outcome.step),
+		action: {
+			kind: outcome.step.step,
+			name: stepName(outcome.step),
+		},
 	};
 	if (outcome.errorCode !== undefined) json.errorCode = outcome.errorCode;
 	if (outcome.message !== undefined) json.message = outcome.message;

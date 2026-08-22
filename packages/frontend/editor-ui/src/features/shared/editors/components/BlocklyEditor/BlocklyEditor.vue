@@ -18,6 +18,7 @@ import {
 	serializeRobotPlanPayload,
 	SO101_CATALOG_SNAPSHOT,
 } from './robotSkills';
+import type { RobotBlockLabels, RobotCatalog } from './robotSkills';
 
 type Props = {
 	modelValue: string;
@@ -36,6 +37,7 @@ const javascriptPreview = ref('');
 const compileError = ref('');
 let workspace: BlocklyWorkspace | undefined;
 let blockly: Awaited<ReturnType<typeof loadBlocklyModule>> | undefined;
+let robotCatalog: RobotCatalog = SO101_CATALOG_SNAPSHOT;
 let isSynchronizing = false;
 let resizeObserver: ResizeObserver | undefined;
 
@@ -54,30 +56,9 @@ onMounted(async () => {
 	if (!container) return;
 	blockly = loadedBlockly;
 	if (isRobotMode.value) {
-		registerRobotBlocks(blockly, {
-			taskPlan: i18n.baseText('robotSkillEditor.blocks.taskPlan'),
-			executeSkill: i18n.baseText('robotSkillEditor.blocks.executeSkill'),
-			skill: i18n.baseText('robotSkillEditor.blocks.skill'),
-			executePrimitive: i18n.baseText('robotSkillEditor.blocks.executePrimitive'),
-			primitive: i18n.baseText('robotSkillEditor.blocks.primitive'),
-			wait: i18n.baseText('robotSkillEditor.blocks.wait'),
-			seconds: i18n.baseText('robotSkillEditor.blocks.seconds'),
-			gripper: i18n.baseText('robotSkillEditor.blocks.gripper'),
-			gripperOpen: i18n.baseText('robotSkillEditor.blocks.gripperOpen'),
-			gripperClose: i18n.baseText('robotSkillEditor.blocks.gripperClose'),
-			gripperRotateCw: i18n.baseText('robotSkillEditor.blocks.gripperRotateCw'),
-			gripperRotateCcw: i18n.baseText('robotSkillEditor.blocks.gripperRotateCcw'),
-			condition: i18n.baseText('robotSkillEditor.blocks.condition'),
-			conditionField: i18n.baseText('robotSkillEditor.blocks.conditionField'),
-			conditionOp: i18n.baseText('robotSkillEditor.blocks.conditionOp'),
-			target: i18n.baseText('robotSkillEditor.blocks.target'),
-			place: i18n.baseText('robotSkillEditor.blocks.place'),
-			direction: i18n.baseText('robotSkillEditor.blocks.direction'),
-			directionNone: i18n.baseText('robotSkillEditor.blocks.directionNone'),
-			distance: i18n.baseText('robotSkillEditor.blocks.distance'),
-			timeout: i18n.baseText('robotSkillEditor.blocks.timeout'),
-			extraParams: i18n.baseText('robotSkillEditor.blocks.extraParams'),
-		});
+		const initialPayload = parseRobotPlanPayload(props.modelValue);
+		if (initialPayload.ok) robotCatalog = initialPayload.payload.catalog;
+		registerRobotBlocks(blockly, createRobotBlockLabels(), robotCatalog);
 	} else {
 		registerN8nBlocks(blockly, {
 			transformItem: i18n.baseText('blocklyEditor.blocks.transformItem'),
@@ -141,6 +122,8 @@ function loadModelValue(value: string) {
 			compileError.value = payload.error;
 			return;
 		}
+		robotCatalog = payload.payload.catalog;
+		registerRobotBlocks(currentBlockly, createRobotBlockLabels(), robotCatalog);
 		const loadedWorkspace = withWorkspaceEventsDisabled(currentBlockly, () =>
 			loadWorkspaceOrDefault(
 				currentBlockly,
@@ -203,7 +186,7 @@ function updateCompileState() {
 	if (!workspace || !blockly) return;
 	const state = blockly.serialization.workspaces.save(workspace);
 	if (isRobotMode.value) {
-		const result = compileRobotWorkspace(state, SO101_CATALOG_SNAPSHOT);
+		const result = compileRobotWorkspace(state, robotCatalog);
 		javascriptPreview.value = result.ok ? JSON.stringify(result.plan, null, 2) : '';
 		compileError.value = result.ok ? '' : result.error;
 		return;
@@ -216,8 +199,34 @@ function serializeWorkspace(): string {
 	if (!workspace || !blockly) return '';
 	const state = blockly.serialization.workspaces.save(workspace);
 	return isRobotMode.value
-		? serializeRobotPlanPayload(state, undefined)
+		? serializeRobotPlanPayload({ catalog: robotCatalog, workspace: state })
 		: serializeBlocklyDataPayload(state);
+}
+function createRobotBlockLabels(): RobotBlockLabels {
+	return {
+		taskPlan: i18n.baseText('robotSkillEditor.blocks.taskPlan'),
+		executeSkill: i18n.baseText('robotSkillEditor.blocks.executeSkill'),
+		skill: i18n.baseText('robotSkillEditor.blocks.skill'),
+		executePrimitive: i18n.baseText('robotSkillEditor.blocks.executePrimitive'),
+		primitive: i18n.baseText('robotSkillEditor.blocks.primitive'),
+		wait: i18n.baseText('robotSkillEditor.blocks.wait'),
+		seconds: i18n.baseText('robotSkillEditor.blocks.seconds'),
+		gripper: i18n.baseText('robotSkillEditor.blocks.gripper'),
+		gripperOpen: i18n.baseText('robotSkillEditor.blocks.gripperOpen'),
+		gripperClose: i18n.baseText('robotSkillEditor.blocks.gripperClose'),
+		gripperRotateCw: i18n.baseText('robotSkillEditor.blocks.gripperRotateCw'),
+		gripperRotateCcw: i18n.baseText('robotSkillEditor.blocks.gripperRotateCcw'),
+		condition: i18n.baseText('robotSkillEditor.blocks.condition'),
+		conditionField: i18n.baseText('robotSkillEditor.blocks.conditionField'),
+		conditionOp: i18n.baseText('robotSkillEditor.blocks.conditionOp'),
+		target: i18n.baseText('robotSkillEditor.blocks.target'),
+		place: i18n.baseText('robotSkillEditor.blocks.place'),
+		direction: i18n.baseText('robotSkillEditor.blocks.direction'),
+		directionNone: i18n.baseText('robotSkillEditor.blocks.directionNone'),
+		distance: i18n.baseText('robotSkillEditor.blocks.distance'),
+		timeout: i18n.baseText('robotSkillEditor.blocks.timeout'),
+		extraParams: i18n.baseText('robotSkillEditor.blocks.extraParams'),
+	};
 }
 async function loadBlocklyModule(): Promise<typeof import('blockly')> {
 	return await import('blockly');

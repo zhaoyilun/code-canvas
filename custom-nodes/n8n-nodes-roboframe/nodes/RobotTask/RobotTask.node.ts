@@ -7,9 +7,11 @@ import type {
 } from 'n8n-workflow';
 import { NodeConnectionTypes, UserError } from 'n8n-workflow';
 import { extractPlan, type RobotTaskPlan } from '@n8n/blockly-robot-skills';
+import { toDataObject } from '../shared/bridge';
+import { catalogDigestJson, checkCatalogDigest } from '../shared/catalogDigest';
 import { clientFromCredentials } from '../shared/context';
 import { wrapError } from '../shared/errors';
-import { booleanParam } from '../shared/params';
+import { computePlanDigest } from '../shared/planDigest';
 import {
 	executePlan,
 	stepName,
@@ -31,16 +33,7 @@ export class RobotTask implements INodeType {
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
 		credentials: [{ name: 'robframeBridgeApi', required: true }],
-		properties: [
-			{
-				displayName: 'Verify Catalog Digest',
-				name: 'verifyCatalog',
-				type: 'boolean',
-				default: true,
-				description:
-					'Whether to fail when the live catalog digest differs from the plan (plan is stale)',
-			},
-		],
+		properties: [],
 	};
 
 	async execute(this: IExecuteFunctions): Promise<INodeExecutionData[][]> {
@@ -50,16 +43,15 @@ export class RobotTask implements INodeType {
 			const output: INodeExecutionData[] = [];
 			for (let index = 0; index < items.length; index++) {
 				const item = items[index];
-				const verifyCatalog = booleanParam(this, 'verifyCatalog', index, true);
 				const extracted = extractPlan(item.json.plan ?? item.json);
 				if (typeof extracted === 'string') {
 					throw new UserError(`item ${index}: ${extracted}`);
 				}
-				if (verifyCatalog) {
-					const error = await verifyDigest(client, extracted);
-					if (error !== null) throw new UserError(error);
-				}
+				requirePlanValidation(item.json.validation, extracted, index);
+				const digest = await checkCatalogDigest(client, extracted);
+				if (!digest.valid) throw new UserError(digest.message);
 				const result = await runPlan(client, extracted, {});
+				result.catalogDigest = catalogDigestJson(digest);
 				output.push({ json: result, pairedItem: { item: index } });
 			}
 			return [output];
@@ -69,18 +61,32 @@ export class RobotTask implements INodeType {
 	}
 }
 
-export async function verifyDigest(client: ActionClient, plan: RobotTaskPlan): Promise<string | null> {
-	if (plan.configDigest === '') return null; // plans without a digest skip freshness check
-	const catalog = await client.catalog();
-	const live = typeof catalog.config_digest === 'string' ? catalog.config_digest : '';
-	if (live !== '' && live !== plan.configDigest) {
-		return `plan is stale: catalog digest changed (plan ${plan.configDigest}, live ${live})`;
+/** Enforce the plan-validation handoff before any live action can be submitted. */
+export function requirePlanValidation(
+	value: unknown,
+	plan: RobotTaskPlan,
+	itemIndex: number,
+): void {
+	const validation = toDataObject(value);
+	if (validation === null || validation.mode !== 'plan') {
+		throw new UserError(`item ${itemIndex}: Robot Validate plan verdict is required`);
 	}
-	return null;
+	if (validation.valid !== true) {
+		throw new UserError(`item ${itemIndex}: Robot Validate rejected the plan`);
+	}
+	const catalogDigest = toDataObject(validation.catalogDigest);
+	if (catalogDigest?.valid !== true) {
+		throw new UserError(`item ${itemIndex}: Robot Validate catalog digest verdict is required`);
+	}
+	if (typeof validation.planDigest !== 'string' || validation.planDigest === '') {
+		throw new UserError(`item ${itemIndex}: Robot Validate plan digest verdict is required`);
+	}
+	if (validation.planDigest !== computePlanDigest(plan)) {
+		throw new UserError(`item ${itemIndex}: plan changed after Robot Validate`);
+	}
 }
 
-/** Execute a plan and summarize; throws on the first failed step so the
- * workflow error branch fires (no auto-retry per recovery_policy). */
+/** Execute a plan and preserve the complete terminal summary for n8n branching. */
 export async function runPlan(
 	client: ActionClient,
 	plan: RobotTaskPlan,
@@ -92,6 +98,10 @@ export async function runPlan(
 		robot: plan.robot,
 		configDigest: plan.configDigest,
 		success,
+		finalStatus: success ? 'completed' : finalStatus(failedAt),
+		taskIds: outcomes.flatMap((outcome) =>
+			outcome.taskId === undefined ? [] : [outcome.taskId],
+		),
 		steps,
 	};
 	if (failedAt !== undefined) {
@@ -101,13 +111,12 @@ export async function runPlan(
 		json.error = {
 			step: failedName,
 			index: failedAt.index,
+			taskId: failedAt.taskId ?? '',
 			state: failedState,
+			errorCode: failedAt.errorCode ?? '',
 			message: failedAt.message ?? '',
 			completedSteps: completed,
 		};
-		throw new UserError(
-			`plan failed at step ${failedAt.index} "${failedName}" (${failedState}); ${completed} step(s) completed`,
-		);
 	}
 	return json;
 }
@@ -115,14 +124,34 @@ export async function runPlan(
 function outcomeSummary(outcome: StepOutcome): IDataObject {
 	const summary: IDataObject = {
 		index: outcome.index,
-		type: outcome.step.step,
 		status: outcome.status,
 	};
-	if (outcome.step.step === 'skill') summary.skill = outcome.step.skill;
-	if (outcome.step.step === 'primitive') summary.primitive = outcome.step.primitive;
-	if (outcome.step.step === 'wait') summary.seconds = outcome.step.seconds;
+	if (outcome.step.step === 'wait') {
+		summary.type = 'wait';
+		summary.seconds = outcome.step.seconds;
+	} else {
+		summary.action = {
+			kind: outcome.step.step,
+			name: stepName(outcome.step),
+		};
+	}
 	if (outcome.taskId !== undefined) summary.taskId = outcome.taskId;
+	if (outcome.step.blockId !== undefined) summary.blockId = outcome.step.blockId;
+	if (outcome.step.planStepId !== undefined) summary.planStepId = outcome.step.planStepId;
 	if (outcome.state !== undefined) summary.state = outcome.state;
+	if (outcome.success !== undefined) summary.success = outcome.success;
+	if (outcome.errorCode !== undefined) summary.errorCode = outcome.errorCode;
 	if (outcome.message !== undefined) summary.message = outcome.message;
+	if (outcome.executedPrimitives !== undefined) {
+		summary.executedPrimitives = outcome.executedPrimitives;
+	}
+	if (outcome.cancelRequested !== undefined) summary.cancelRequested = outcome.cancelRequested;
+	if (outcome.cancelConfirmed !== undefined) summary.cancelConfirmed = outcome.cancelConfirmed;
 	return summary;
+}
+
+function finalStatus(failedAt: StepOutcome | undefined): 'failed' | 'canceled' | 'unknown' {
+	if (failedAt?.status === 'canceled') return 'canceled';
+	if (failedAt?.status === 'unknown') return 'unknown';
+	return 'failed';
 }

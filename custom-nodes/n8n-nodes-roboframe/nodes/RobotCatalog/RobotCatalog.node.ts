@@ -19,8 +19,8 @@ export class RobotCatalog implements INodeType {
 		icon: { light: 'file:roboframe.svg', dark: 'file:roboframe.dark.svg' },
 		group: ['input'],
 		version: 1,
-		description: 'List robot skills from the RoboFrame bridge catalog',
-		subtitle: "Retrieves the robot skill catalog",
+		description: 'List robot skills and primitives from the RoboFrame bridge catalog',
+		subtitle: 'Retrieves the robot action catalog',
 		defaults: { name: 'Robot Catalog' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
@@ -31,7 +31,7 @@ export class RobotCatalog implements INodeType {
 				name: 'includeDetails',
 				type: 'boolean',
 				default: false,
-				description: 'Whether to include parameter schemas and policies in each skill item',
+				description: 'Whether to include parameter schemas and policies in each action item',
 			},
 		],
 	};
@@ -44,14 +44,20 @@ export class RobotCatalog implements INodeType {
 			const catalog = await client.catalog();
 			const robotName = typeof catalog.robot_name === 'string' ? catalog.robot_name : '';
 			const configDigest = typeof catalog.config_digest === 'string' ? catalog.config_digest : '';
-			const skills = Array.isArray(catalog.skills) ? catalog.skills : [];
+			const actions = [
+				...catalogEntries(catalog.skills, 'skill'),
+				...catalogEntries(catalog.primitives, 'primitive'),
+			];
 			const output: INodeExecutionData[] = [];
-			for (const [index, skill] of skills.entries()) {
-				const entry = toDataObject(skill) ?? {};
+			for (const [index, action] of actions.entries()) {
+				const entry = action.entry;
 				const json: IDataObject = {
 					robotName,
 					configDigest,
-					skill: typeof entry.name === 'string' ? entry.name : '',
+					action: {
+						kind: action.kind,
+						name: typeof entry.name === 'string' ? entry.name : '',
+					},
 				};
 				if (includeDetails) {
 					json.summary = entry.summary;
@@ -81,4 +87,15 @@ export class RobotCatalog implements INodeType {
 			},
 		},
 	};
+}
+
+function catalogEntries(
+	value: unknown,
+	kind: 'skill' | 'primitive',
+): Array<{ kind: 'skill' | 'primitive'; entry: IDataObject }> {
+	if (!Array.isArray(value)) return [];
+	return value.flatMap((candidate) => {
+		const entry = toDataObject(candidate);
+		return entry === null ? [] : [{ kind, entry }];
+	});
 }

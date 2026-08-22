@@ -1,45 +1,138 @@
 import { describe, expect, it } from 'vitest';
 
+import type { RobotCatalog } from './catalog';
 import { SO101_CATALOG_SNAPSHOT } from './catalog';
 import { compileRobotWorkspace } from './compiler';
 import {
+	createDefaultRobotPlanPayload,
 	createDefaultRobotWorkspace,
 	extractPlan,
 	parseRobotPlanPayload,
 	serializeRobotPlanPayload,
 } from './payload';
 
-describe('parseRobotPlanPayload', () => {
-	it('round-trips a serialized payload', () => {
+describe('RobotPlanPayload v2', () => {
+	it('round-trips workspace and the exact catalog used to compile it', () => {
 		const workspace = createDefaultRobotWorkspace();
-		const compiled = compileRobotWorkspace(workspace, SO101_CATALOG_SNAPSHOT);
-		expect(compiled.ok).toBe(true);
-		if (!compiled.ok) return;
-		const serialized = serializeRobotPlanPayload(workspace, compiled.plan);
+		const serialized = serializeRobotPlanPayload({
+			catalog: SO101_CATALOG_SNAPSHOT,
+			workspace,
+		});
 		const parsed = parseRobotPlanPayload(serialized);
 		expect(parsed.ok).toBe(true);
 		if (!parsed.ok) return;
-		expect(parsed.payload.workspace).toEqual(workspace);
+		expect(parsed.payload).toEqual({
+			schemaVersion: 2,
+			catalog: SO101_CATALOG_SNAPSHOT,
+			workspace,
+		});
+
+		const compiled = compileRobotWorkspace(parsed.payload.workspace, parsed.payload.catalog);
+		expect(compiled.ok).toBe(true);
 	});
 
-	it('accepts intermediate saves without a plan preview', () => {
-		const serialized = serializeRobotPlanPayload(createDefaultRobotWorkspace(), undefined);
-		expect(parseRobotPlanPayload(serialized).ok).toBe(true);
+	it('keeps a live catalog capability available after payload import', () => {
+		const catalog: RobotCatalog = {
+			robotName: 'classroom_robot',
+			configDigest: 'live-digest-42',
+			skills: [
+				{
+					name: 'lesson_wave',
+					summary: 'Wave for the current lesson.',
+					parameters: {
+						type: 'object',
+						properties: { repetitions: { type: 'number' } },
+						required: ['repetitions'],
+						additionalProperties: false,
+					},
+					timeoutSec: 20,
+				},
+			],
+			primitives: ['move_to_named_pose'],
+			primitiveDetails: [
+				{
+					name: 'move_to_named_pose',
+					parameters: {
+						type: 'object',
+						properties: { target_name: { type: 'string' } },
+						required: ['target_name'],
+						additionalProperties: false,
+					},
+				},
+			],
+			namedPoses: ['lesson_home'],
+		};
+		const workspace = {
+			blocks: {
+				blocks: [
+					{
+						type: 'robot_task_plan',
+						inputs: {
+							DO: {
+								block: {
+									type: 'robot_execute_skill',
+									fields: { SKILL: 'lesson_wave', PARAMS_JSON: '{"repetitions":2}' },
+								},
+							},
+						},
+					},
+				],
+			},
+		};
+		const parsed = parseRobotPlanPayload(serializeRobotPlanPayload({ catalog, workspace }));
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.payload.catalog.configDigest).toBe('live-digest-42');
+		expect(parsed.payload.catalog.skills[0]?.name).toBe('lesson_wave');
+		expect(compileRobotWorkspace(parsed.payload.workspace, parsed.payload.catalog)).toMatchObject({
+			ok: true,
+			plan: {
+				robot: 'classroom_robot',
+				configDigest: 'live-digest-42',
+				plan: [
+					{
+						step: 'skill',
+						skill: 'lesson_wave',
+						params: { repetitions: 2 },
+						timeoutSec: 20,
+					},
+				],
+			},
+		});
 	});
 
-	it('rejects empty, non-JSON, wrong-version, and oversized payloads', () => {
+	it('creates a complete default payload', () => {
+		const parsed = parseRobotPlanPayload(createDefaultRobotPlanPayload());
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.payload.catalog.configDigest).toBe(SO101_CATALOG_SNAPSHOT.configDigest);
+		expect(compileRobotWorkspace(parsed.payload.workspace, parsed.payload.catalog).ok).toBe(true);
+	});
+
+	it('rejects empty, non-JSON, old-version, unknown-field, and oversized payloads', () => {
 		expect(parseRobotPlanPayload('')).toEqual({ ok: false, error: 'payload is empty' });
 		expect(parseRobotPlanPayload('nope')).toEqual({
 			ok: false,
 			error: 'payload is not valid JSON',
 		});
-		expect(parseRobotPlanPayload('{"schemaVersion":9,"workspace":{}}')).toEqual({
+		expect(parseRobotPlanPayload('{"schemaVersion":1,"workspace":{}}')).toEqual({
 			ok: false,
-			error: 'unsupported payload schemaVersion 9',
+			error: 'unsupported payload schemaVersion 1',
+		});
+		const withPreview = JSON.stringify({
+			schemaVersion: 2,
+			catalog: SO101_CATALOG_SNAPSHOT,
+			workspace: {},
+			plan: {},
+		});
+		expect(parseRobotPlanPayload(withPreview)).toEqual({
+			ok: false,
+			error: 'payload contains unknown field "plan"',
 		});
 		const oversized = JSON.stringify({
-			schemaVersion: 1,
-			workspace: { padding: 'x'.repeat(300 * 1024) },
+			schemaVersion: 2,
+			catalog: SO101_CATALOG_SNAPSHOT,
+			workspace: { padding: '课'.repeat(100 * 1024) },
 		});
 		expect(parseRobotPlanPayload(oversized)).toEqual({
 			ok: false,
@@ -47,11 +140,26 @@ describe('parseRobotPlanPayload', () => {
 		});
 	});
 
-	it('rejects a workspace that is not an object', () => {
-		expect(parseRobotPlanPayload('{"schemaVersion":1,"workspace":5}')).toEqual({
+	it('rejects missing or malformed catalog data and invalid serializer input', () => {
+		expect(parseRobotPlanPayload('{"schemaVersion":2,"workspace":{}}')).toEqual({
 			ok: false,
-			error: 'payload workspace must be an object',
+			error: 'catalog must be an object',
 		});
+		const malformedCatalog = JSON.stringify({
+			schemaVersion: 2,
+			catalog: { ...SO101_CATALOG_SNAPSHOT, configDigest: '' },
+			workspace: {},
+		});
+		expect(parseRobotPlanPayload(malformedCatalog)).toEqual({
+			ok: false,
+			error: 'catalog configDigest must be a non-empty string',
+		});
+		expect(() =>
+			serializeRobotPlanPayload({
+				catalog: { ...SO101_CATALOG_SNAPSHOT, configDigest: '' },
+				workspace: {},
+			}),
+		).toThrow('catalog configDigest must be a non-empty string');
 	});
 });
 

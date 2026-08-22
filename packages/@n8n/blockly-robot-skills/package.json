@@ -1,7 +1,7 @@
 {
 	"name": "@n8n/blockly-robot-skills",
 	"version": "0.1.0",
-	"description": "Shared compiler from Blockly workspaces to structured RoboFrame task plans",
+	"description": "Deterministic Blockly workspace generator and compiler for RoboFrame task plans",
 	"main": "dist/index.js",
 	"module": "dist/index.js",
 	"types": "dist/index.d.ts",

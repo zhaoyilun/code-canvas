@@ -8,19 +8,22 @@ const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const nodesRoot = resolve(packageRoot, 'dist/nodes');
 const bundleDirectory = resolve(packageRoot, '.bundle-runtime');
 
-// Every dist JS that references the shared compiler package gets the same
+// Every dist JS that references a shared generation package gets the same
 // treatment as BlocklyCode.node.js in n8n-nodes-blockly-code: bundle the
 // workspace dependency into the file so the deployed dist has no external
 // @n8n/* require left. n8n-workflow stays external (provided by n8n runtime).
+const runtimePackages = ['@n8n/blockly-robot-skills', '@n8n/competition-designer'];
 const targets = [];
 for (const entry of await readdir(nodesRoot, { recursive: true, withFileTypes: true })) {
 	if (!entry.isFile() || !entry.name.endsWith('.js') || entry.name.endsWith('.test.js')) continue;
 	const path = resolve(entry.path, entry.name);
 	const source = await readFile(path, 'utf8');
-	if (source.includes("require(\"@n8n/blockly-robot-skills\")")) targets.push(path);
+	if (runtimePackages.some((packageName) => referencesPackage(source, packageName))) {
+		targets.push(path);
+	}
 }
 
-if (targets.length === 0) throw new Error('No dist file references @n8n/blockly-robot-skills — nothing to bundle');
+if (targets.length === 0) throw new Error('No dist file references a workspace runtime package');
 
 await rm(bundleDirectory, { force: true, recursive: true });
 await mkdir(bundleDirectory, { recursive: true });
@@ -44,13 +47,23 @@ try {
 		});
 		const bundled = resolve(bundleDirectory, relative);
 		const output = await readFile(bundled, 'utf8');
-		if (/require\(["']@n8n\/blockly-robot-skills["']\)/.test(output))
-			throw new Error(`Shared compiler was not bundled into ${relative}`);
+		for (const packageName of runtimePackages) {
+			if (referencesPackage(output, packageName)) {
+				throw new Error(`Workspace runtime ${packageName} was not bundled into ${relative}`);
+			}
+		}
 		await copyFile(bundled, target);
 		await copyFile(`${bundled}.map`, `${target}.map`);
 	}
-	console.log(`Bundled @n8n/blockly-robot-skills into ${targets.length} file(s):`);
+	console.log(`Bundled workspace runtime packages into ${targets.length} file(s):`);
 	for (const t of targets) console.log(`  ${t.slice(packageRoot.length + 1)}`);
 } finally {
 	await rm(bundleDirectory, { force: true, recursive: true });
+}
+
+function referencesPackage(source, packageName) {
+	return (
+		source.includes(`require(\"${packageName}\")`) ||
+		source.includes(`require('${packageName}')`)
+	);
 }

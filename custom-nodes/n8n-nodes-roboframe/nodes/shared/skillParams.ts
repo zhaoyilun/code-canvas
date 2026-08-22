@@ -1,4 +1,5 @@
 import type { IDataObject, INodeProperties } from 'n8n-workflow';
+import { toDataObject } from './bridge';
 
 /** Shared skill invocation parameters (Robot Skill / Robot Validate). */
 export const skillParams: INodeProperties[] = [
@@ -89,30 +90,16 @@ export function collectSkillParams(values: {
 	let extra: IDataObject = {};
 	if (typeof values.parametersJson === 'string' && values.parametersJson.trim() !== '') {
 		const parsed: unknown = JSON.parse(values.parametersJson);
-		if (isDataObject(parsed)) {
-			extra = parsed;
-		}
-	} else if (isDataObject(values.parametersJson)) {
-		extra = values.parametersJson;
+		const converted = toDataObject(parsed);
+		if (converted === null) throw new Error('parameters JSON must be an object');
+		extra = converted;
+	} else if (values.parametersJson !== undefined) {
+		const converted = toDataObject(values.parametersJson);
+		if (converted === null) throw new Error('parameters JSON must be an object');
+		extra = converted;
 	}
 	const merged: IDataObject = { ...extra, ...params };
 	return { params: merged, timeoutSec: timeoutOf(values.timeoutSec) };
-}
-
-function isDataObject(value: unknown): value is IDataObject {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
-	for (const entry of Object.values(value)) {
-		if (
-			entry !== null &&
-			typeof entry !== 'string' &&
-			typeof entry !== 'number' &&
-			typeof entry !== 'boolean' &&
-			!isDataObject(entry)
-		) {
-			return false;
-		}
-	}
-	return true;
 }
 
 function timeoutOf(value: string | number | undefined): number | undefined {

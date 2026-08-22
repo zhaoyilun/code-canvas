@@ -1,26 +1,30 @@
-/** Payload handling: the workspace is the source of truth; `plan` is a
- * read-only preview cache the runtime never trusts (mirrors v1 decisions). */
+/** Payload handling: workspace and its digest-pinned catalog travel together. */
 
-import { isJsonRecord } from './catalog';
+import type { RobotCatalog } from './catalog';
+import { SO101_CATALOG_SNAPSHOT, isJsonRecord, parseRobotCatalog } from './catalog';
 import type { RobotTaskPlan } from './compiler';
 
-export const ROBOT_SKILL_SCHEMA_VERSION = 1;
+export const ROBOT_SKILL_SCHEMA_VERSION = 2;
 
 export const MAX_PAYLOAD_BYTES = 256 * 1024;
 
 export type RobotPlanPayload = {
 	schemaVersion: typeof ROBOT_SKILL_SCHEMA_VERSION;
+	catalog: RobotCatalog;
 	workspace: Record<string, unknown>;
-	plan?: RobotTaskPlan;
 };
 
+export type SerializeRobotPlanPayloadInput = Omit<RobotPlanPayload, 'schemaVersion'>;
+
 export type ParseResult = { ok: true; payload: RobotPlanPayload } | { ok: false; error: string };
+
+const PAYLOAD_KEYS = new Set(['schemaVersion', 'catalog', 'workspace']);
 
 export function parseRobotPlanPayload(value: string): ParseResult {
 	if (typeof value !== 'string' || value.trim() === '') {
 		return { ok: false, error: 'payload is empty' };
 	}
-	if (value.length > MAX_PAYLOAD_BYTES) {
+	if (utf8ByteLength(value) > MAX_PAYLOAD_BYTES) {
 		return { ok: false, error: 'payload exceeds 256 KiB' };
 	}
 	let parsed: unknown;
@@ -36,23 +40,38 @@ export function parseRobotPlanPayload(value: string): ParseResult {
 			error: `unsupported payload schemaVersion ${String(parsed.schemaVersion)}`,
 		};
 	}
-	if (!isJsonRecord(parsed.workspace))
+	const unknownKey = Object.keys(parsed).find((key) => !PAYLOAD_KEYS.has(key));
+	if (unknownKey !== undefined) {
+		return { ok: false, error: `payload contains unknown field "${unknownKey}"` };
+	}
+	const catalogResult = parseRobotCatalog(parsed.catalog);
+	if (!catalogResult.ok) return { ok: false, error: catalogResult.error };
+	if (!isJsonRecord(parsed.workspace)) {
 		return { ok: false, error: 'payload workspace must be an object' };
+	}
 	return {
 		ok: true,
-		payload: { schemaVersion: ROBOT_SKILL_SCHEMA_VERSION, workspace: parsed.workspace },
+		payload: {
+			schemaVersion: ROBOT_SKILL_SCHEMA_VERSION,
+			catalog: catalogResult.catalog,
+			workspace: parsed.workspace,
+		},
 	};
 }
 
-export function serializeRobotPlanPayload(
-	workspace: Record<string, unknown>,
-	plan: RobotTaskPlan | undefined,
-): string {
-	return JSON.stringify({
+export function serializeRobotPlanPayload(input: SerializeRobotPlanPayloadInput): string {
+	if (!isJsonRecord(input.workspace)) throw new TypeError('payload workspace must be an object');
+	const catalogResult = parseRobotCatalog(input.catalog);
+	if (!catalogResult.ok) throw new TypeError(catalogResult.error);
+	const serialized = JSON.stringify({
 		schemaVersion: ROBOT_SKILL_SCHEMA_VERSION,
-		workspace,
-		plan,
+		catalog: catalogResult.catalog,
+		workspace: input.workspace,
 	});
+	if (utf8ByteLength(serialized) > MAX_PAYLOAD_BYTES) {
+		throw new RangeError('payload exceeds 256 KiB');
+	}
+	return serialized;
 }
 
 /** Default plan: observe the scene, then return to the safe pose. */
@@ -82,6 +101,13 @@ export function createDefaultRobotWorkspace(): Record<string, unknown> {
 	};
 }
 
+export function createDefaultRobotPlanPayload(): string {
+	return serializeRobotPlanPayload({
+		catalog: SO101_CATALOG_SNAPSHOT,
+		workspace: createDefaultRobotWorkspace(),
+	});
+}
+
 /** Runtime-side plan extraction from an item: accepts either a full
  * RobotTaskPlan or a bare `{ plan: [...] }` wrapper. */
 export function extractPlan(value: unknown): RobotTaskPlan | string {
@@ -105,5 +131,18 @@ export function extractPlan(value: unknown): RobotTaskPlan | string {
 }
 
 function isPlanShape(value: Record<string, unknown>): value is RobotTaskPlan {
-	return value.schemaVersion === ROBOT_SKILL_SCHEMA_VERSION && Array.isArray(value.plan);
+	return value.schemaVersion === 1 && Array.isArray(value.plan);
+}
+
+function utf8ByteLength(value: string): number {
+	let bytes = 0;
+	for (const character of value) {
+		const codePoint = character.codePointAt(0);
+		if (codePoint === undefined) continue;
+		if (codePoint <= 0x7f) bytes += 1;
+		else if (codePoint <= 0x7ff) bytes += 2;
+		else if (codePoint <= 0xffff) bytes += 3;
+		else bytes += 4;
+	}
+	return bytes;
 }

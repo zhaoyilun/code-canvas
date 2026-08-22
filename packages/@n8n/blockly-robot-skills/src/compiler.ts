@@ -6,7 +6,7 @@
  * read-only preview the runtime never trusts).
  */
 
-import type { CatalogSkillEntry, JsonRecord, RobotCatalog } from './catalog';
+import type { CatalogPrimitiveEntry, CatalogSkillEntry, JsonRecord, RobotCatalog } from './catalog';
 import {
 	DEFAULT_SKILL_TIMEOUT_SEC,
 	MOTION_DIRECTIONS,
@@ -29,6 +29,8 @@ export type SkillStep = {
 	params?: JsonRecord;
 	timeoutSec?: number;
 	skipIf?: SkipIfGuard;
+	blockId?: string;
+	planStepId?: string;
 };
 
 export type PrimitiveStep = {
@@ -37,9 +39,16 @@ export type PrimitiveStep = {
 	params?: JsonRecord;
 	timeoutSec?: number;
 	skipIf?: SkipIfGuard;
+	blockId?: string;
+	planStepId?: string;
 };
 
-export type WaitStep = { step: 'wait'; seconds: number };
+export type WaitStep = {
+	step: 'wait';
+	seconds: number;
+	blockId?: string;
+	planStepId?: string;
+};
 
 export type PlanStep = SkillStep | PrimitiveStep | WaitStep;
 
@@ -61,6 +70,7 @@ export const MAX_TEXT_LENGTH = 1000;
 export const MAX_WAIT_SECONDS = 60;
 export const MAX_TIMEOUT_SEC = 600;
 export const MAX_PARAM_JSON_BYTES = 16 * 1024;
+export const MAX_BLOCK_ID_LENGTH = 128;
 
 const STATEMENT_TYPES = new Set([
 	'robot_execute_skill',
@@ -85,6 +95,29 @@ const GUARD_OPS = ['==', '!='] as const;
 
 type Block = JsonRecord & { type: string };
 
+type WorkspaceValidationResult = { ok: true; blockCount: number } | { ok: false; error: string };
+
+const BLOCK_INPUTS: Record<string, Readonly<Record<string, readonly string[]>> | undefined> = {
+	robot_task_plan: { DO: ['*'] },
+	robot_execute_skill: {
+		TARGET: ['text'],
+		PLACE: ['text'],
+		DISTANCE: ['math_number'],
+		TIMEOUT: ['math_number'],
+	},
+	robot_execute_primitive: {
+		TARGET: ['text'],
+		PLACE: ['text'],
+		DISTANCE: ['math_number'],
+		TIMEOUT: ['math_number'],
+	},
+	robot_wait: { SECONDS: ['math_number'] },
+	robot_gripper: {},
+	robot_condition: { VALUE: ['text', 'math_number'] },
+	text: {},
+	math_number: {},
+};
+
 function isBlock(value: unknown): value is Block {
 	return isJsonRecord(value) && typeof value.type === 'string';
 }
@@ -97,15 +130,17 @@ export function compileRobotWorkspace(
 
 	if (!isJsonRecord(workspace) || !isJsonRecord(workspace.blocks))
 		return fail('workspace is malformed');
-	const rawRoots: unknown[] = Array.isArray(workspace.blocks.blocks) ? workspace.blocks.blocks : [];
+	if (!Array.isArray(workspace.blocks.blocks)) return fail('workspace blocks must be an array');
+	const rawRoots: unknown[] = workspace.blocks.blocks;
 	if (rawRoots.length === 0) return fail('workspace has no root block');
 	if (rawRoots.length > 1) return fail('workspace must contain exactly one root block');
 	const root = rawRoots[0];
 	if (!isBlock(root)) return fail('root block is malformed');
 	if (root.type !== 'robot_task_plan') return fail(`unexpected root block "${root.type}"`);
+	const validation = validateWorkspaceGraph(root);
+	if (!validation.ok) return fail(validation.error);
 
 	const plan: PlanStep[] = [];
-	let blockCount = 0;
 
 	const statementRoot = inputBlock(root, 'DO');
 	if (statementRoot !== null) {
@@ -115,6 +150,7 @@ export function compileRobotWorkspace(
 
 	const budgetError = planBudgetError(plan);
 	if (budgetError !== null) return fail(budgetError);
+	if (plan.length === 0) return fail('robot task plan must contain at least one step');
 
 	return {
 		ok: true,
@@ -124,12 +160,11 @@ export function compileRobotWorkspace(
 			configDigest: catalog.configDigest,
 			plan,
 		},
-		blockCount,
+		blockCount: validation.blockCount,
 	};
 
 	function walkChain(block: Block, depth: number, guard: SkipIfGuard | undefined): string | null {
 		if (depth > MAX_DEPTH) return `block chain exceeds depth ${MAX_DEPTH}`;
-		if (++blockCount > MAX_BLOCKS) return `workspace exceeds ${MAX_BLOCKS} blocks`;
 		if (!STATEMENT_TYPES.has(block.type)) return `unsupported block "${block.type}"`;
 
 		if (block.type === 'robot_condition') {
@@ -149,6 +184,7 @@ export function compileRobotWorkspace(
 			if (compiled.step.step === 'wait') return 'robot_condition cannot guard a wait step';
 			compiled.step.skipIf = guard;
 		}
+		attachBlockIdentity(compiled.step, block);
 		plan.push(compiled.step);
 
 		const next = nextBlock(block);
@@ -221,10 +257,17 @@ function compileSkillOrPrimitive(
 		const skill = findSkill(catalog, name);
 		const schemaError = validateParamsAgainstSchema(skill?.parameters, params.value);
 		if (schemaError !== null) return schemaError;
+	} else {
+		const primitive = findPrimitive(catalog, name);
+		const schemaError = validateParamsAgainstSchema(primitive?.parameters, params.value);
+		if (schemaError !== null) return schemaError;
 	}
 
 	const timeoutSec =
-		timeout.value ?? (kind === 'skill' ? findSkill(catalog, name)?.timeoutSec : undefined);
+		timeout.value ??
+		(kind === 'skill'
+			? findSkill(catalog, name)?.timeoutSec
+			: findPrimitive(catalog, name)?.timeoutSec);
 	const step: SkillStep | PrimitiveStep =
 		kind === 'skill' ? { step: 'skill', skill: name } : { step: 'primitive', primitive: name };
 	if (Object.keys(params.value).length > 0) step.params = params.value;
@@ -250,7 +293,7 @@ function collectParams(block: Block): { value: JsonRecord } | string {
 
 	const extraJson = fieldValue(block, 'PARAMS_JSON');
 	if (typeof extraJson === 'string' && extraJson.trim() !== '') {
-		if (extraJson.length > MAX_PARAM_JSON_BYTES) return 'PARAMS_JSON is too large';
+		if (utf8ByteLength(extraJson) > MAX_PARAM_JSON_BYTES) return 'PARAMS_JSON is too large';
 		let parsed: unknown;
 		try {
 			parsed = JSON.parse(extraJson);
@@ -268,6 +311,19 @@ function collectParams(block: Block): { value: JsonRecord } | string {
 		return 'parameter values contain a forbidden key';
 	}
 	return { value: params };
+}
+
+function utf8ByteLength(value: string): number {
+	let bytes = 0;
+	for (const character of value) {
+		const codePoint = character.codePointAt(0);
+		if (codePoint === undefined) continue;
+		if (codePoint <= 0x7f) bytes += 1;
+		else if (codePoint <= 0x7ff) bytes += 2;
+		else if (codePoint <= 0xffff) bytes += 3;
+		else bytes += 4;
+	}
+	return bytes;
 }
 
 function collectTimeout(block: Block): { value: number | undefined } | string {
@@ -313,6 +369,16 @@ function findSkill(catalog: RobotCatalog, name: string): CatalogSkillEntry | und
 	return catalog.skills.find((skill) => skill.name === name);
 }
 
+function findPrimitive(catalog: RobotCatalog, name: string): CatalogPrimitiveEntry | undefined {
+	return catalog.primitiveDetails?.find((primitive) => primitive.name === name);
+}
+
+function attachBlockIdentity(step: PlanStep, block: Block): void {
+	if (typeof block.id !== 'string' || block.id === '') return;
+	step.blockId = block.id;
+	step.planStepId = `step:${block.id}`;
+}
+
 /** Blockly serializes fields either as plain values or `{ id, name, value }`. */
 function fieldValue(block: Block, name: string): unknown {
 	const fields = block.fields;
@@ -354,6 +420,73 @@ function nextBlock(block: Block): Block | null {
 	const child = next.block;
 	if (!isJsonRecord(child) || typeof child.type !== 'string') return null;
 	return child as Block;
+}
+
+function validateWorkspaceGraph(root: Block): WorkspaceValidationResult {
+	const seenObjects = new Set<object>();
+	const seenIds = new Set<string>();
+	let blockCount = 0;
+
+	const error = visit(root, 0, false);
+	return error === null ? { ok: true, blockCount } : { ok: false, error };
+
+	function visit(block: Block, depth: number, valueBlock: boolean): string | null {
+		if (depth > MAX_DEPTH) return `block graph exceeds depth ${MAX_DEPTH}`;
+		if (seenObjects.has(block)) return 'workspace contains a block cycle or shared block object';
+		seenObjects.add(block);
+		if (++blockCount > MAX_BLOCKS) return `workspace exceeds ${MAX_BLOCKS} blocks`;
+
+		if (block.id !== undefined) {
+			if (
+				typeof block.id !== 'string' ||
+				block.id.length === 0 ||
+				block.id.length > MAX_BLOCK_ID_LENGTH
+			) {
+				return `block "${block.type}" has an invalid id`;
+			}
+			if (seenIds.has(block.id)) return `workspace contains duplicate block id "${block.id}"`;
+			seenIds.add(block.id);
+		}
+
+		const allowedInputs = BLOCK_INPUTS[block.type];
+		if (allowedInputs === undefined) return `unsupported block "${block.type}"`;
+		if (block.inputs !== undefined) {
+			if (!isJsonRecord(block.inputs)) return `inputs on block "${block.type}" are malformed`;
+			for (const [name, rawInput] of Object.entries(block.inputs)) {
+				const allowedChildTypes = allowedInputs[name];
+				if (allowedChildTypes === undefined) {
+					return `unknown input "${name}" on block "${block.type}"`;
+				}
+				if (!isJsonRecord(rawInput) || !isBlock(rawInput.block)) {
+					return `input "${name}" on block "${block.type}" is malformed`;
+				}
+				const child = rawInput.block;
+				if (!allowedChildTypes.includes('*') && !allowedChildTypes.includes(child.type)) {
+					return `input "${name}" on block "${block.type}" does not accept "${child.type}"`;
+				}
+				const childError = visit(child, depth + 1, !STATEMENT_TYPES.has(child.type));
+				if (childError !== null) return childError;
+			}
+		}
+
+		if (block.type === 'robot_task_plan' && block.next !== undefined) {
+			return 'robot_task_plan must not contain a next block';
+		}
+		if (valueBlock && block.next !== undefined) {
+			return `value block "${block.type}" must not contain a next block`;
+		}
+		if (block.next !== undefined) {
+			if (!isJsonRecord(block.next) || !isBlock(block.next.block)) {
+				return `next block after "${block.type}" is malformed`;
+			}
+			if (!STATEMENT_TYPES.has(block.next.block.type)) {
+				return `next block after "${block.type}" must be a robot statement`;
+			}
+			const nextError = visit(block.next.block, depth + 1, false);
+			if (nextError !== null) return nextError;
+		}
+		return null;
+	}
 }
 
 /** Total plan budget must stay within task_budget_sec (design §7.4). */

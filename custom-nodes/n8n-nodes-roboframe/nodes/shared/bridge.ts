@@ -17,6 +17,15 @@ export type BridgeClientOptions = {
 	transport: Transport;
 };
 
+export type ActionKind = 'skill' | 'primitive';
+
+export type RobotAction = {
+	kind: ActionKind;
+	name: string;
+};
+
+export type TaskLookup = { body: IDataObject; terminal: boolean } | null;
+
 /** Transport/boundary failure; wrapError maps it to NodeOperationError. */
 export class BridgeError extends Error {
 	constructor(
@@ -51,31 +60,42 @@ export class BridgeClient {
 	}
 
 	async poses(): Promise<string[]> {
-		const body = await this.getJson('/v1/catalog/poses');
+		const body = await this.poseCatalog();
 		return Array.isArray(body.poses) ? body.poses.map(String) : [];
+	}
+
+	async poseCatalog(): Promise<IDataObject> {
+		return this.getJson('/v1/catalog/poses');
 	}
 
 	async status(): Promise<IDataObject> {
 		return this.getJson('/v1/status');
 	}
 
-	async validate(skill: string, params: IDataObject): Promise<IDataObject> {
-		return this.postJson('/v1/skills/validate', { skill, params });
+	async validate(action: RobotAction, params: IDataObject): Promise<IDataObject> {
+		return this.postJson('/v1/actions/validate', { action, params });
 	}
 
-	async execute(taskId: string, skill: string, params: IDataObject, timeoutSec?: number) {
-		return this.postJson('/v1/skills/execute', {
+	async execute(
+		taskId: string,
+		action: RobotAction,
+		params: IDataObject,
+		timeoutSec?: number,
+		context?: IDataObject,
+	): Promise<IDataObject> {
+		return this.postJson('/v1/actions/execute', {
 			task_id: taskId,
-			skill,
+			action,
 			params,
 			...(timeoutSec === undefined ? {} : { timeout_sec: timeoutSec }),
+			...(context === undefined ? {} : { context }),
 		});
 	}
 
-	async task(taskId: string): Promise<{ body: IDataObject; terminal: boolean }> {
+	async task(taskId: string): Promise<TaskLookup> {
 		const response = await this.request('GET', `/v1/tasks/${encodeURIComponent(taskId)}`);
 		if (response.status === 404) {
-			throw bridgeError(`unknown task ${taskId}`, 404);
+			return null;
 		}
 		const body = toDataObject(response.body);
 		if (response.status !== 200 || body === null) {
