@@ -3,7 +3,7 @@
 	"version": "0.1.0",
 	"description": "Deterministic Blockly workspace generator and compiler for RoboFrame task plans",
 	"main": "dist/index.js",
-	"module": "dist/index.js",
+	"module": "src/index.ts",
 	"types": "dist/index.d.ts",
 	"files": [
 		"dist"
