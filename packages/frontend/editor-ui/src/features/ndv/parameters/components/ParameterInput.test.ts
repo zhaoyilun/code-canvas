@@ -25,14 +25,19 @@ import { mock } from 'vitest-mock-extended';
 import { ExpressionLocalResolveContextSymbol } from '@/app/constants';
 import { nextTick, reactive } from 'vue';
 
+const blocklyEditorMockState = vi.hoisted(() => ({ nextInstanceId: 0 }));
+
 vi.mock('@/features/shared/editors/components/BlocklyEditor/BlocklyEditor.vue', () => ({
 	default: {
-		props: ['modelValue', 'isReadOnly'],
+		props: ['modelValue', 'isReadOnly', 'profileId'],
 		emits: ['update:modelValue'],
+		setup: () => ({ instanceId: ++blocklyEditorMockState.nextInstanceId }),
 		template: `<button
 			data-test-id="blockly-editor"
+			:data-instance-id="instanceId"
 			:data-model-value="modelValue"
 			:data-read-only="String(isReadOnly)"
+			:data-profile-id="profileId"
 			@click="$emit('update:modelValue', 'updated blockly payload')"
 		/>`,
 	},
@@ -174,6 +179,7 @@ const workflowsListStore = mockedStore(useWorkflowsListStore);
 
 describe('ParameterInput.vue', () => {
 	beforeEach(() => {
+		blocklyEditorMockState.nextInstanceId = 0;
 		mockNdvState = {
 			hasInputData: true,
 			activeNode: {
@@ -973,30 +979,85 @@ describe('ParameterInput.vue', () => {
 	});
 
 	describe('Blockly editor', () => {
-		it('renders the Blockly editor and debounces its value updates', async () => {
-			const { getByTestId, emitted } = renderComponent({
+		it.each(['data-transform', 'capability-plan'] as const)(
+			'renders the %s Blockly profile and debounces its value updates',
+			async (editorProfile) => {
+				const { getByTestId, emitted } = renderComponent({
+					props: {
+						path: 'blocklyPayload',
+						parameter: createTestNodeProperties({
+							displayName: 'Blockly Payload',
+							name: 'blocklyPayload',
+							type: 'string',
+							typeOptions: {
+								editor: 'blocklyEditor',
+								editorProfile,
+								editorIsReadOnly: true,
+							},
+						}),
+						modelValue: 'initial blockly payload',
+					},
+				});
+
+				const editor = getByTestId('blockly-editor');
+				expect(editor).toHaveAttribute('data-model-value', 'initial blockly payload');
+				expect(editor).toHaveAttribute('data-read-only', 'true');
+				expect(editor).toHaveAttribute('data-profile-id', editorProfile);
+
+				await userEvent.click(editor);
+				await waitFor(() => {
+					expect(emitted('update')).toContainEqual([
+						expect.objectContaining({ value: 'updated blockly payload' }),
+					]);
+				});
+			},
+		);
+
+		it('recreates the editor when a node selects a different profile', async () => {
+			const createParameter = (editorProfile: string) =>
+				createTestNodeProperties({
+					displayName: 'Blockly Payload',
+					name: 'blocklyPayload',
+					type: 'string',
+					typeOptions: { editor: 'blocklyEditor', editorProfile },
+				});
+			const rendered = renderComponent({
 				props: {
 					path: 'blocklyPayload',
-					parameter: createTestNodeProperties({
-						displayName: 'Blockly Payload',
-						name: 'blocklyPayload',
-						type: 'string',
-						typeOptions: { editor: 'blocklyEditor', editorIsReadOnly: true },
-					}),
-					modelValue: 'initial blockly payload',
+					parameter: createParameter('data-transform'),
+					modelValue: 'initial payload',
 				},
 			});
+			const firstEditor = rendered.getByTestId('blockly-editor');
+			const firstInstanceId = firstEditor.getAttribute('data-instance-id');
 
-			const editor = getByTestId('blockly-editor');
-			expect(editor).toHaveAttribute('data-model-value', 'initial blockly payload');
-			expect(editor).toHaveAttribute('data-read-only', 'true');
-
-			await userEvent.click(editor);
-			await waitFor(() => {
-				expect(emitted('update')).toContainEqual([
-					expect.objectContaining({ value: 'updated blockly payload' }),
-				]);
+			await rendered.rerender({
+				path: 'blocklyPayload',
+				parameter: createParameter('capability-plan'),
+				modelValue: 'capability payload',
 			});
+
+			const nextEditor = rendered.getByTestId('blockly-editor');
+			expect(nextEditor).toHaveAttribute('data-profile-id', 'capability-plan');
+			expect(nextEditor).toHaveAttribute('data-model-value', 'capability payload');
+			expect(nextEditor.getAttribute('data-instance-id')).not.toBe(firstInstanceId);
+		});
+
+		it('requires an explicit profile for the Blockly editor', () => {
+			expect(() =>
+				renderComponent({
+					props: {
+						path: 'blocklyPayload',
+						parameter: createTestNodeProperties({
+							displayName: 'Blockly Payload',
+							name: 'blocklyPayload',
+							type: 'string',
+							typeOptions: { editor: 'blocklyEditor' },
+						}),
+						modelValue: '{}',
+					},
+				}),
+			).toThrow('blocklyEditor requires typeOptions.editorProfile');
 		});
 	});
 

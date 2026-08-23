@@ -5,7 +5,7 @@ would otherwise require local JavaScript in a Code node. Blockly is embedded in
 the node parameter panel: n8n still owns workflow orchestration, while the
 workspace expresses the node's data details visually.
 
-The technical node type remains `CUSTOM.blocklyCode`, type version `1`, and its
+The installed node type is `n8n-nodes-blockly-code.blocklyCode`, type version `1`, and its
 single parameter is `blocklyPayload`.
 
 ## Runtime contract

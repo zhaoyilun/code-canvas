@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 const root = new URL('../..', import.meta.url);
 const verifier = new URL('./verify-execution.mjs', import.meta.url);
@@ -55,10 +56,10 @@ test('rejects an execution snapshot cross-paired with a different Blockly payloa
 		const execution = createExecutionRecord(structuredClone(workflow));
 		const canonicalWorkflow = JSON.parse(readFileSync(workflowFixture, 'utf8'));
 		const canonicalBlocklyNode = canonicalWorkflow.nodes.find(
-			(node) => node.type === 'CUSTOM.blocklyCode',
+			(node) => node.type === 'n8n-nodes-blockly-code.blocklyCode',
 		);
 		const executedBlocklyNode = execution.workflowData.nodes.find(
-			(node) => node.type === 'CUSTOM.blocklyCode',
+			(node) => node.type === 'n8n-nodes-blockly-code.blocklyCode',
 		);
 		executedBlocklyNode.parameters.blocklyPayload = canonicalBlocklyNode.parameters.blocklyPayload;
 		writeFileSync(workflowPath, JSON.stringify(workflow));
@@ -76,7 +77,9 @@ test('rejects an execution snapshot cross-paired with a different Blockly payloa
 function createTamperedWorkflow() {
 	const workflow = JSON.parse(readFileSync(workflowFixture, 'utf8'));
 	workflow.id = 'tampered-preview-workflow';
-	const blocklyNode = workflow.nodes.find((node) => node.type === 'CUSTOM.blocklyCode');
+	const blocklyNode = workflow.nodes.find(
+		(node) => node.type === 'n8n-nodes-blockly-code.blocklyCode',
+	);
 	const payload = JSON.parse(blocklyNode.parameters.blocklyPayload);
 	payload.javascript = 'return { json: { tampered: true } };';
 	blocklyNode.parameters.blocklyPayload = JSON.stringify(payload);
@@ -105,7 +108,12 @@ function createExecutionRecord(workflow) {
 function runVerifier(executionPath, workflowPath) {
 	return execFileSync(
 		process.execPath,
-		[verifier.pathname, executionPath, `--workflow=${workflowPath}`, '--expect-tampered-preview'],
-		{ cwd: root.pathname, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
+		[
+			fileURLToPath(verifier),
+			executionPath,
+			`--workflow=${workflowPath}`,
+			'--expect-tampered-preview',
+		],
+		{ cwd: fileURLToPath(root), encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] },
 	);
 }

@@ -1,19 +1,19 @@
 #!/usr/bin/env node
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const root = resolve(new URL('../..', import.meta.url).pathname);
+const root = resolve(fileURLToPath(new URL('../..', import.meta.url)));
 const fixturePath = resolve(
 	process.argv.slice(2).find((arg) => !arg.startsWith('--')) ??
-		new URL('./fixtures/blockly-data-transform-v1.workflow.json', import.meta.url).pathname,
+		fileURLToPath(new URL('./fixtures/blockly-data-transform-v1.workflow.json', import.meta.url)),
 );
 const requireCompiler = process.argv.includes('--require-compiler');
 const refreshPreview = process.argv.includes('--refresh-preview');
 if (
 	refreshPreview &&
 	fixturePath !==
-		resolve(new URL('./fixtures/blockly-data-transform-v1.workflow.json', import.meta.url).pathname)
+		resolve(fileURLToPath(new URL('./fixtures/blockly-data-transform-v1.workflow.json', import.meta.url)))
 ) {
 	fail('--refresh-preview only permits the repository fixture');
 }
@@ -114,7 +114,10 @@ function validateWorkflow(workflow) {
 		'split node must split orders',
 	);
 	const node = byName.get('Blockly Data Transform');
-	assert(node.type === 'CUSTOM.blocklyCode', 'missing Blockly Data Transform node');
+	assert(
+		node.type === 'n8n-nodes-blockly-code.blocklyCode',
+		'missing Blockly Data Transform node',
+	);
 	assert(typeof node.parameters?.blocklyPayload === 'string', 'blocklyPayload must be a string');
 	const payload = JSON.parse(node.parameters.blocklyPayload);
 	assertRecord(payload, 'payload must be an object');

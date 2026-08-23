@@ -965,33 +965,6 @@ importers:
         specifier: ^4.1.9
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@20.19.41)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(jsdom@26.1.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(vite@8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3))
 
-  custom-nodes/n8n-nodes-roboframe:
-    devDependencies:
-      '@n8n/blockly-data-transform':
-        specifier: workspace:*
-        version: link:../../packages/@n8n/blockly-data-transform
-      '@n8n/blockly-robot-skills':
-        specifier: workspace:*
-        version: link:../../packages/@n8n/blockly-robot-skills
-      '@n8n/competition-designer':
-        specifier: workspace:*
-        version: link:../../packages/@n8n/competition-designer
-      '@n8n/node-cli':
-        specifier: ^0.44.3
-        version: link:../../packages/@n8n/node-cli
-      esbuild:
-        specifier: ^0.28.1
-        version: 0.28.1
-      n8n-workflow:
-        specifier: workspace:*
-        version: link:../../packages/workflow
-      typescript:
-        specifier: ^5.9.2
-        version: 5.9.3
-      vitest:
-        specifier: ^4.1.9
-        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@20.19.41)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(jsdom@26.1.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(vite@8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3))
-
   packages/@n8n/agents:
     dependencies:
       '@ai-sdk/amazon-bedrock':
@@ -1755,7 +1728,11 @@ importers:
         specifier: 'catalog:'
         version: 3.1.0(typescript@7.0.2)(vitest@4.1.9)
 
-  packages/@n8n/blockly-data-transform:
+  packages/@n8n/blockly-capability-plan:
+    dependencies:
+      '@n8n/dual-canvas-core':
+        specifier: workspace:*
+        version: link:../dual-canvas-core
     devDependencies:
       '@n8n/eslint-config':
         specifier: workspace:*
@@ -1776,7 +1753,7 @@ importers:
         specifier: 'catalog:'
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@20.19.41)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(jsdom@26.1.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(vite@8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3))
 
-  packages/@n8n/blockly-robot-skills:
+  packages/@n8n/blockly-data-transform:
     devDependencies:
       '@n8n/eslint-config':
         specifier: workspace:*
@@ -2006,46 +1983,6 @@ importers:
       typescript:
         specifier: catalog:typescript
         version: 7.0.2
-      vitest:
-        specifier: 'catalog:'
-        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@20.19.41)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(jsdom@26.1.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(vite@8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3))
-
-  packages/@n8n/competition-designer:
-    dependencies:
-      '@n8n/blockly-data-transform':
-        specifier: workspace:*
-        version: link:../blockly-data-transform
-      '@n8n/blockly-robot-skills':
-        specifier: workspace:*
-        version: link:../blockly-robot-skills
-      '@n8n/workflow-sdk':
-        specifier: workspace:*
-        version: link:../workflow-sdk
-      n8n-workflow:
-        specifier: workspace:*
-        version: link:../../workflow
-      uuid:
-        specifier: 'catalog:'
-        version: 11.1.1
-      zod:
-        specifier: 3.25.76
-        version: 3.25.76
-    devDependencies:
-      '@n8n/eslint-config':
-        specifier: workspace:*
-        version: link:../eslint-config
-      '@n8n/typescript-config':
-        specifier: workspace:*
-        version: link:../typescript-config
-      '@n8n/vitest-config':
-        specifier: workspace:*
-        version: link:../vitest-config
-      typescript:
-        specifier: catalog:typescript
-        version: 7.0.2
-      vite:
-        specifier: 'catalog:'
-        version: 8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3)
       vitest:
         specifier: 'catalog:'
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@20.19.41)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(jsdom@26.1.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(vite@8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3))
@@ -2377,6 +2314,68 @@ importers:
       vitest-mock-extended:
         specifier: 'catalog:'
         version: 3.1.0(typescript@7.0.2)(vitest@4.1.9)
+
+  packages/@n8n/dual-canvas-core:
+    dependencies:
+      '@n8n/blockly-data-transform':
+        specifier: workspace:*
+        version: link:../blockly-data-transform
+      uuid:
+        specifier: 'catalog:'
+        version: 11.1.1
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@n8n/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@n8n/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@n8n/vitest-config':
+        specifier: workspace:*
+        version: link:../vitest-config
+      typescript:
+        specifier: catalog:typescript
+        version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: 8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@20.19.41)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(jsdom@26.1.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(vite@8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3))
+
+  packages/@n8n/dual-canvas-typescript-importer:
+    dependencies:
+      '@n8n/dual-canvas-core':
+        specifier: workspace:*
+        version: link:../dual-canvas-core
+      typescript:
+        specifier: catalog:typescript-tooling
+        version: '@typescript/typescript6@6.0.2'
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@n8n/blockly-data-transform':
+        specifier: workspace:*
+        version: link:../blockly-data-transform
+      '@n8n/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@n8n/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@n8n/vitest-config':
+        specifier: workspace:*
+        version: link:../vitest-config
+      vite:
+        specifier: 'catalog:'
+        version: 8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@20.19.41)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(jsdom@26.1.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(vite@8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3))
 
   packages/@n8n/engine:
     dependencies:
@@ -5969,12 +5968,12 @@ importers:
       '@n8n/api-types':
         specifier: workspace:*
         version: link:../../@n8n/api-types
+      '@n8n/blockly-capability-plan':
+        specifier: workspace:*
+        version: link:../../@n8n/blockly-capability-plan
       '@n8n/blockly-data-transform':
         specifier: workspace:*
         version: link:../../@n8n/blockly-data-transform
-      '@n8n/blockly-robot-skills':
-        specifier: workspace:*
-        version: link:../../@n8n/blockly-robot-skills
       '@n8n/chat':
         specifier: workspace:*
         version: link:../@n8n/chat
@@ -5999,6 +5998,9 @@ importers:
       '@n8n/design-system':
         specifier: workspace:*
         version: link:../@n8n/design-system
+      '@n8n/dual-canvas-core':
+        specifier: workspace:*
+        version: link:../../@n8n/dual-canvas-core
       '@n8n/frontend-constants':
         specifier: workspace:*
         version: link:../@n8n/frontend-constants

@@ -2,15 +2,52 @@ import { flushPromises, mount } from '@vue/test-utils';
 
 import BlocklyEditor from './BlocklyEditor.vue';
 import { createToolbox, registerN8nBlocks } from './blockly';
-import { createDefaultWorkspace, serializeBlocklyDataPayload } from './payload';
 import {
-	ROBOT_EXECUTE_SKILL_BLOCK,
-	ROBOT_TASK_PLAN_BLOCK,
-	parseRobotPlanPayload,
-	serializeRobotPlanPayload,
-} from './robotSkills';
+	CAPABILITY_PLAN_ROOT_BLOCK_TYPE,
+	CAPABILITY_PLAN_STEP_BLOCK_TYPE,
+	generateCapabilityPlanWorkspace,
+	parseCapabilityPlanPayload,
+	serializeCapabilityPlanPayload,
+} from './capabilityPlan';
+import { createDefaultWorkspace, serializeBlocklyDataPayload } from './payload';
 
 type ChangeListener = (event: { isUiEvent: boolean }) => void;
+
+const capabilityCatalog = {
+	apiVersion: 1,
+	catalogRef: 'education.content',
+	revisionRef: 'revision.synthetic.1',
+	capabilities: [
+		{
+			capabilityRef: 'content.prepare',
+			displayName: '准备内容',
+			inputs: [
+				{
+					parameterRef: 'title',
+					displayName: '标题',
+					valueType: 'string',
+					required: true,
+				},
+			],
+			outputs: [{ outputRef: 'draftId', displayName: '草稿标识', valueType: 'string' }],
+		},
+	],
+} as const;
+
+const capabilityExecutionPlan = {
+	apiVersion: 1,
+	planRef: 'lesson.content.prepare',
+	catalogRef: capabilityCatalog.catalogRef,
+	catalogRevisionRef: capabilityCatalog.revisionRef,
+	steps: [
+		{
+			stepRef: 'prepare',
+			capabilityRef: 'content.prepare',
+			arguments: { title: '通用教学内容' },
+			dependsOn: [],
+		},
+	],
+} as const;
 
 const events = {
 	disabled: false,
@@ -59,6 +96,9 @@ const blockly = {
 	},
 	FieldTextInput: class {
 		constructor(_value: string) {}
+		saveState(): unknown {
+			return undefined;
+		}
 	},
 	getSelected: vi.fn(() => (selectedBlockData === undefined ? null : { data: selectedBlockData })),
 	inject: vi.fn(() => workspace),
@@ -123,87 +163,84 @@ describe('BlocklyEditor.vue', () => {
 		);
 	});
 
-	it('uses the payload catalog to compile and save an imported robot workspace', async () => {
-		const catalog = {
-			robotName: 'rk3588_lab_arm',
-			configDigest: 'rk3588-live-digest',
-			skills: [{ name: 'teach_ai_code', summary: 'Explain an AI-generated robot step.' }],
-			primitives: [],
-			namedPoses: [],
-		};
-		const robotWorkspace = {
-			blocks: {
-				blocks: [
-					{
-						type: ROBOT_TASK_PLAN_BLOCK,
-						inputs: {
-							DO: {
-								block: {
-									id: 'teaching-step',
-									type: ROBOT_EXECUTE_SKILL_BLOCK,
-									fields: { SKILL: 'teach_ai_code' },
-								},
-							},
-						},
-					},
-				],
-			},
-		};
+	it('uses the payload catalog to preview and save an imported capability plan', async () => {
+		const modelValue = createCapabilityPayload({ courseRef: 'course.synthetic' });
 		const wrapper = mount(BlocklyEditor, {
-			props: {
-				modelValue: serializeRobotPlanPayload({ catalog, workspace: robotWorkspace }),
-				editorMode: 'robot-skills',
-			},
+			props: { modelValue, profileId: 'capability-plan' },
 		});
 
 		await flushPromises();
 
-		expect(wrapper.get('[data-test-id="blockly-javascript-preview"]').text()).toContain(
-			'rk3588_lab_arm',
-		);
+		const preview = wrapper.get('[data-test-id="blockly-javascript-preview"]').text();
+		expect(JSON.parse(preview)).toEqual({
+			...capabilityExecutionPlan,
+			metadata: { courseRef: 'course.synthetic' },
+		});
 		expect(wrapper.emitted('update:modelValue')).toBeUndefined();
 
-		savedWorkspace = JSON.parse(
-			JSON.stringify(robotWorkspace).replace('teaching-step', 'teaching-step-edited'),
-		) as Record<string, unknown>;
+		savedWorkspace = structuredClone(savedWorkspace);
+		const fields = getFirstStepFields(savedWorkspace);
+		fields.ARGUMENTS_JSON = '{"title":"调整后的标题"}';
 		changeListener?.({ isUiEvent: false });
 		const emitted = wrapper.emitted('update:modelValue')?.at(-1)?.[0];
 		expect(typeof emitted).toBe('string');
-		const parsed = parseRobotPlanPayload(String(emitted));
-		expect(parsed.ok && parsed.payload.catalog.configDigest).toBe('rk3588-live-digest');
+		const parsed = parseCapabilityPlanPayload(String(emitted));
+		expect(parsed.ok).toBe(true);
+		if (parsed.ok) {
+			expect(parsed.payload.catalog).toEqual(capabilityCatalog);
+			expect(parsed.payload.planRef).toBe(capabilityExecutionPlan.planRef);
+			expect(parsed.payload.metadata).toEqual({ courseRef: 'course.synthetic' });
+			expect(parsed.payload.workspace).toEqual(savedWorkspace);
+		}
+		wrapper.unmount();
+	});
+
+	it('emits a capability payload while the workspace is temporarily semantically invalid', async () => {
+		const wrapper = mount(BlocklyEditor, {
+			props: { modelValue: createCapabilityPayload(), profileId: 'capability-plan' },
+		});
+		await flushPromises();
+
+		savedWorkspace = structuredClone(savedWorkspace);
+		getFirstStepFields(savedWorkspace).ARGUMENTS_JSON = '[]';
+		changeListener?.({ isUiEvent: false });
+		await flushPromises();
+
+		expect(wrapper.get('[data-test-id="blockly-compile-error"]').text()).toContain(
+			'ARGUMENTS_INVALID',
+		);
+		expect(wrapper.get('[data-test-id="blockly-javascript-preview"]').text()).toBe('');
+		const emitted = wrapper.emitted('update:modelValue')?.at(-1)?.[0];
+		expect(typeof emitted).toBe('string');
+		const parsed = parseCapabilityPlanPayload(String(emitted));
+		expect(parsed.ok).toBe(true);
+		if (parsed.ok) {
+			expect(getFirstStepFields(parsed.payload.workspace).ARGUMENTS_JSON).toBe('[]');
+		}
 		wrapper.unmount();
 	});
 
 	it.each([
 		{
 			name: 'logic',
-			props: { modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()) },
+			props: {
+				modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()),
+				profileId: 'data-transform' as const,
+			},
 			title: '逻辑积木工作台',
 		},
 		{
-			name: 'robot plan',
+			name: 'capability plan',
 			props: {
-				modelValue: serializeRobotPlanPayload({
-					catalog: {
-						robotName: 'rk3588_lab_arm',
-						configDigest: 'rk3588-live-digest',
-						skills: [],
-						primitives: [],
-						namedPoses: [],
-					},
-					workspace: { blocks: { blocks: [] } },
-				}),
-				editorMode: 'robot-skills' as const,
+				modelValue: createCapabilityPayload(),
+				profileId: 'capability-plan' as const,
 			},
-			title: '机器人任务工作台',
+			title: '能力计划工作台',
 		},
 	])(
 		'identifies the $name Blockly editor as a Chinese n8n teaching workspace',
 		async ({ props, title }) => {
-			const editorProps: {
-				modelValue: string;
-				editorMode?: 'data-transform' | 'robot-skills';
-			} = props;
+			const editorProps: { modelValue: string; profileId: string } = props;
 			const wrapper = mount(BlocklyEditor, { props: editorProps });
 
 			await flushPromises();
@@ -211,13 +248,17 @@ describe('BlocklyEditor.vue', () => {
 			expect(wrapper.text()).toContain(title);
 			expect(wrapper.text()).toContain('当前节点');
 			expect(wrapper.text()).toContain('n8n 流程节点');
+			expect(wrapper.attributes('data-editor-profile')).toBe(props.profileId);
 			wrapper.unmount();
 		},
 	);
 
 	it('uses Chinese Blockly messages, toolbox categories, and custom block labels', async () => {
 		const wrapper = mount(BlocklyEditor, {
-			props: { modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()) },
+			props: {
+				modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()),
+				profileId: 'data-transform',
+			},
 		});
 
 		await flushPromises();
@@ -245,21 +286,9 @@ describe('BlocklyEditor.vue', () => {
 		wrapper.unmount();
 	});
 
-	it('uses Chinese labels for the robot action toolbox', async () => {
+	it('exposes only the generic capability-plan grammar in its toolbox', async () => {
 		const wrapper = mount(BlocklyEditor, {
-			props: {
-				editorMode: 'robot-skills',
-				modelValue: serializeRobotPlanPayload({
-					catalog: {
-						robotName: 'rk3588_lab_arm',
-						configDigest: 'rk3588-live-digest',
-						skills: [],
-						primitives: [],
-						namedPoses: [],
-					},
-					workspace: { blocks: { blocks: [] } },
-				}),
-			},
+			props: { profileId: 'capability-plan', modelValue: createCapabilityPayload() },
 		});
 
 		await flushPromises();
@@ -267,14 +296,20 @@ describe('BlocklyEditor.vue', () => {
 		expect(blockly.inject).toHaveBeenLastCalledWith(
 			expect.any(HTMLDivElement),
 			expect.objectContaining({
-				toolbox: expect.objectContaining({
-					contents: expect.arrayContaining([
-						expect.objectContaining({ name: '动作编排' }),
-						expect.objectContaining({ name: '基础动作' }),
-						expect.objectContaining({ name: '数值' }),
-						expect.objectContaining({ name: '文本' }),
-					]),
-				}),
+				toolbox: {
+					kind: 'categoryToolbox',
+					contents: [
+						{
+							kind: 'category',
+							name: '能力计划',
+							colour: '160',
+							contents: [
+								{ kind: 'block', type: CAPABILITY_PLAN_ROOT_BLOCK_TYPE },
+								{ kind: 'block', type: CAPABILITY_PLAN_STEP_BLOCK_TYPE },
+							],
+						},
+					],
+				},
 			}),
 		);
 		wrapper.unmount();
@@ -282,28 +317,19 @@ describe('BlocklyEditor.vue', () => {
 
 	it.each([
 		{
-			editorMode: 'data-transform' as const,
+			profileId: 'data-transform' as const,
 			modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()),
-			themeName: 'n8n-competition-data-transform',
+			themeName: 'n8n-teaching-logic',
 		},
 		{
-			editorMode: 'robot-skills' as const,
-			modelValue: serializeRobotPlanPayload({
-				catalog: {
-					robotName: 'rk3588_lab_arm',
-					configDigest: 'rk3588-live-digest',
-					skills: [],
-					primitives: [],
-					namedPoses: [],
-				},
-				workspace: { blocks: { blocks: [] } },
-			}),
-			themeName: 'n8n-competition-robot-skills',
+			profileId: 'capability-plan' as const,
+			modelValue: createCapabilityPayload(),
+			themeName: 'n8n-teaching-capability',
 		},
 	])(
-		'injects a native Blockly competition theme for $editorMode',
-		async ({ editorMode, modelValue, themeName }) => {
-			const wrapper = mount(BlocklyEditor, { props: { editorMode, modelValue } });
+		'injects a native teaching theme for $profileId',
+		async ({ profileId, modelValue, themeName }) => {
+			const wrapper = mount(BlocklyEditor, { props: { profileId, modelValue } });
 
 			await flushPromises();
 
@@ -319,13 +345,45 @@ describe('BlocklyEditor.vue', () => {
 		},
 	);
 
+	it('disposes and rebuilds its workspace when profileId changes directly', async () => {
+		const wrapper = mount(BlocklyEditor, {
+			props: {
+				profileId: 'data-transform',
+				modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()),
+			},
+		});
+		await flushPromises();
+
+		expect(blockly.inject).toHaveBeenCalledTimes(1);
+		expect(workspace.dispose).not.toHaveBeenCalled();
+
+		await wrapper.setProps({
+			profileId: 'capability-plan',
+			modelValue: createCapabilityPayload(),
+		});
+		await flushPromises();
+
+		expect(workspace.removeChangeListener).toHaveBeenCalledTimes(1);
+		expect(workspace.dispose).toHaveBeenCalledTimes(1);
+		expect(blockly.inject).toHaveBeenCalledTimes(2);
+		expect(wrapper.attributes('data-editor-profile')).toBe('capability-plan');
+		expect(wrapper.text()).toContain('能力计划工作台');
+		expect(JSON.parse(wrapper.get('[data-test-id="blockly-javascript-preview"]').text())).toEqual(
+			capabilityExecutionPlan,
+		);
+		wrapper.unmount();
+	});
+
 	it('shows the AI teaching annotation for the selected generated block', async () => {
 		const wrapper = mount(BlocklyEditor, {
-			props: { modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()) },
+			props: {
+				modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()),
+				profileId: 'data-transform',
+			},
 		});
 		await flushPromises();
 		selectedBlockData = JSON.stringify({
-			intentStepId: 'logic.normalize.amount',
+			stepRef: 'logic.normalize.amount',
 			teaching: {
 				what: 'Normalize the amount',
 				why: 'The next node expects a number',
@@ -345,6 +403,14 @@ describe('BlocklyEditor.vue', () => {
 		wrapper.unmount();
 	});
 
+	it('throws for an unknown profile instead of loading another grammar', () => {
+		expect(() =>
+			mount(BlocklyEditor, {
+				props: { profileId: 'unknown-profile', modelValue: '{}' },
+			}),
+		).toThrow('Unknown Blockly editor profile: unknown-profile');
+	});
+
 	afterEach(() => {
 		vi.unstubAllGlobals();
 	});
@@ -359,7 +425,9 @@ describe('BlocklyEditor.vue', () => {
 			serializeBlocklyDataPayload(createDefaultWorkspace()),
 		],
 	])('does not emit while loading %s', async (_name, modelValue) => {
-		const wrapper = mount(BlocklyEditor, { props: { modelValue } });
+		const wrapper = mount(BlocklyEditor, {
+			props: { modelValue, profileId: 'data-transform' },
+		});
 
 		await flushPromises();
 
@@ -369,3 +437,25 @@ describe('BlocklyEditor.vue', () => {
 		wrapper.unmount();
 	});
 });
+
+function createCapabilityPayload(metadata?: Record<string, string>): string {
+	const generated = generateCapabilityPlanWorkspace(capabilityExecutionPlan, capabilityCatalog);
+	if (!generated.ok) throw new Error(generated.error.message);
+	return serializeCapabilityPlanPayload({
+		schemaVersion: 1,
+		catalog: capabilityCatalog,
+		planRef: capabilityExecutionPlan.planRef,
+		workspace: generated.value.workspace,
+		...(metadata === undefined ? {} : { metadata }),
+	});
+}
+
+function getFirstStepFields(workspaceState: Record<string, unknown>): Record<string, unknown> {
+	const blocksState = workspaceState.blocks as {
+		blocks: Array<{ inputs?: Record<string, unknown> }>;
+	};
+	const root = blocksState.blocks[0];
+	const steps = root?.inputs?.STEPS as { block?: { fields?: Record<string, unknown> } };
+	if (!steps.block?.fields) throw new Error('Synthetic capability plan is missing its first step');
+	return steps.block.fields;
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { pathToFileURL } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const rawPath = process.argv.slice(2).find((argument) => !argument.startsWith('--'));
 const workflowArgument = process.argv.find((argument) => argument.startsWith('--workflow='));
@@ -45,8 +45,8 @@ if (workflowArgument) {
 	const payload = JSON.parse(blocklyNode.parameters.blocklyPayload);
 	assert(isRecord(payload) && isRecord(payload.workspace), 'Blockly payload is malformed');
 	assert(typeof payload.javascript === 'string', 'Blockly preview is missing');
-	const compilerPath = resolve(
-		new URL('../../packages/@n8n/blockly-data-transform/dist/index.js', import.meta.url).pathname,
+	const compilerPath = fileURLToPath(
+		new URL('../../packages/@n8n/blockly-data-transform/dist/index.js', import.meta.url),
 	);
 	const compiler = await import(pathToFileURL(compilerPath).href);
 	const compiled = compiler.compileBlocklyWorkspace(payload.workspace);
@@ -99,7 +99,9 @@ function isRecord(value) {
 
 function findBlocklyNode(nodes, source) {
 	assert(Array.isArray(nodes), `${source} nodes are missing`);
-	const blocklyNodes = nodes.filter((node) => isRecord(node) && node.type === 'CUSTOM.blocklyCode');
+	const blocklyNodes = nodes.filter(
+		(node) => isRecord(node) && node.type === 'n8n-nodes-blockly-code.blocklyCode',
+	);
 	assert(blocklyNodes.length === 1, `${source} must contain exactly one Blockly node`);
 	const [blocklyNode] = blocklyNodes;
 	assert(isRecord(blocklyNode.parameters), `${source} Blockly node parameters are missing`);

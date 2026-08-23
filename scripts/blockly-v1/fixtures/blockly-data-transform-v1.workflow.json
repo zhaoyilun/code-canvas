@@ -48,7 +48,7 @@
 		{
 			"id": "blockly-data-transform",
 			"name": "Blockly Data Transform",
-			"type": "CUSTOM.blocklyCode",
+			"type": "n8n-nodes-blockly-code.blocklyCode",
 			"typeVersion": 1,
 			"position": [940, 300],
 			"parameters": {

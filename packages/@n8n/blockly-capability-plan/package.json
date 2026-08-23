@@ -1,0 +1,44 @@
+{
+	"name": "@n8n/blockly-capability-plan",
+	"version": "0.1.0",
+	"description": "Domain-independent Blockly capability-plan compiler and generator",
+	"main": "dist/index.js",
+	"module": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist/**/*.d.ts",
+		"dist/**/*.js",
+		"dist/**/*.js.map",
+		"README.md"
+	],
+	"sideEffects": false,
+	"scripts": {
+		"clean": "rimraf dist .turbo",
+		"typecheck": "tsc --noEmit",
+		"build": "tsc -p tsconfig.build.json",
+		"format": "biome format --write src README.md eslint.config.mjs tsconfig.json tsconfig.build.json",
+		"format:check": "biome ci src README.md eslint.config.mjs tsconfig.json tsconfig.build.json",
+		"lint": "eslint . --quiet",
+		"test": "vitest run",
+		"test:unit": "vitest run"
+	},
+	"dependencies": {
+		"@n8n/dual-canvas-core": "workspace:*"
+	},
+	"devDependencies": {
+		"@n8n/eslint-config": "workspace:*",
+		"@n8n/typescript-config": "workspace:*",
+		"@n8n/vitest-config": "workspace:*",
+		"typescript": "catalog:typescript",
+		"vite": "catalog:",
+		"vitest": "catalog:"
+	},
+	"license": "MIT"
+}

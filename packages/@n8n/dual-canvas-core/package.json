@@ -1,0 +1,45 @@
+{
+	"name": "@n8n/dual-canvas-core",
+	"version": "0.1.0",
+	"description": "Domain-independent contracts and deterministic generation for linked workflow and Blockly canvases",
+	"main": "dist/index.js",
+	"module": "dist/index.js",
+	"types": "dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"default": "./dist/index.js"
+		},
+		"./package.json": "./package.json"
+	},
+	"files": [
+		"dist/**/*.d.ts",
+		"dist/**/*.js",
+		"dist/**/*.js.map"
+	],
+	"sideEffects": false,
+	"scripts": {
+		"clean": "rimraf dist .turbo",
+		"typecheck": "tsc --noEmit",
+		"build": "tsc -p tsconfig.build.json",
+		"format": "biome format --write .",
+		"format:check": "biome ci .",
+		"lint": "eslint . --quiet",
+		"test": "vitest run",
+		"test:unit": "vitest run"
+	},
+	"dependencies": {
+		"@n8n/blockly-data-transform": "workspace:*",
+		"uuid": "catalog:",
+		"zod": "catalog:"
+	},
+	"devDependencies": {
+		"@n8n/eslint-config": "workspace:*",
+		"@n8n/typescript-config": "workspace:*",
+		"@n8n/vitest-config": "workspace:*",
+		"typescript": "catalog:typescript",
+		"vite": "catalog:",
+		"vitest": "catalog:"
+	},
+	"license": "MIT"
+}

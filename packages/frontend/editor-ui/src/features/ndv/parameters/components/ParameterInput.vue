@@ -43,6 +43,7 @@ import TextEdit from './TextEdit.vue';
 import WorkflowSelectorParameterInput from './WorkflowSelectorParameterInput/WorkflowSelectorParameterInput.vue';
 import AgentSelectorParameterInput from './AgentSelectorParameterInput/AgentSelectorParameterInput.vue';
 import BlocklyEditor from '@/features/shared/editors/components/BlocklyEditor/BlocklyEditor.vue';
+import type { BlocklyEditorProfileId } from '@/features/shared/editors/components/BlocklyEditor/profiles';
 
 import {
 	formatAsExpression,
@@ -403,6 +404,11 @@ const editorType = computed<EditorType | 'json' | 'code' | 'cssEditor' | undefin
 });
 const editorIsReadOnly = computed<boolean>(() => {
 	return getTypeOption('editorIsReadOnly') ?? false;
+});
+const blocklyEditorProfile = computed<BlocklyEditorProfileId>(() => {
+	const profile = getTypeOption('editorProfile');
+	if (!profile) throw new Error('blocklyEditor requires typeOptions.editorProfile');
+	return profile;
 });
 
 /**
@@ -1672,16 +1678,10 @@ onUpdated(async () => {
 						/>
 						<BlocklyEditor
 							v-else-if="editorType === 'blocklyEditor' && codeEditDialogVisible"
+							:key="`blockly:${blocklyEditorProfile}`"
 							:model-value="modelValueString"
 							:is-read-only="isReadOnly || editorIsReadOnly"
-							@update:model-value="valueChangedDebounced"
-						/>
-
-						<BlocklyEditor
-							v-else-if="editorType === 'robotSkillEditor' && codeEditDialogVisible"
-							:model-value="modelValueString"
-							:is-read-only="isReadOnly || editorIsReadOnly"
-							editor-mode="robot-skills"
+							:profile-id="blocklyEditorProfile"
 							@update:model-value="valueChangedDebounced"
 						/>
 
@@ -1831,16 +1831,10 @@ onUpdated(async () => {
 
 				<BlocklyEditor
 					v-else-if="editorType === 'blocklyEditor' && !codeEditDialogVisible"
+					:key="`blockly:${blocklyEditorProfile}`"
 					:model-value="modelValueString"
 					:is-read-only="isReadOnly || editorIsReadOnly"
-					@update:model-value="valueChangedDebounced"
-				/>
-
-				<BlocklyEditor
-					v-else-if="editorType === 'robotSkillEditor' && !codeEditDialogVisible"
-					:model-value="modelValueString"
-					:is-read-only="isReadOnly || editorIsReadOnly"
-					editor-mode="robot-skills"
+					:profile-id="blocklyEditorProfile"
 					@update:model-value="valueChangedDebounced"
 				/>
 

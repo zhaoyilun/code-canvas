@@ -1811,8 +1811,8 @@ export type EditorType =
 	| 'htmlEditor'
 	| 'sqlEditor'
 	| 'cssEditor'
-	| 'blocklyEditor'
-	| 'robotSkillEditor';
+	| 'blocklyEditor';
+export type BlocklyEditorProfileId = string;
 export type CodeNodeEditorLanguage = (typeof CODE_LANGUAGES)[number];
 export type CodeExecutionMode = (typeof CODE_EXECUTION_MODES)[number];
 export type SQLDialect =
@@ -1866,6 +1866,7 @@ export interface INodePropertyTypeOptions {
 	alwaysOpenEditWindow?: boolean; // Supported by: json
 	codeAutocomplete?: CodeAutocompleteTypes; // Supported by: string
 	editor?: EditorType; // Supported by: string
+	editorProfile?: BlocklyEditorProfileId; // Supported by: blocklyEditor
 	editorIsReadOnly?: boolean; // Supported by: string
 	sqlDialect?: SQLDialect; // Supported by: sqlEditor
 	loadOptionsDependsOn?: string[]; // Supported by: options
@@ -3797,6 +3798,28 @@ export interface WorkflowFEMeta {
 	templateId?: string;
 	instanceId?: string;
 	templateCredsSetupCompleted?: boolean;
+	visualProgramming?: WorkflowVisualProgrammingProfileV1;
+}
+
+export interface WorkflowVisualProgrammingProfileV1 {
+	schemaVersion: 1;
+	profileId: string;
+	displayName: string;
+	brand?: string;
+	stages: WorkflowVisualProgrammingStageV1[];
+	capabilities?: WorkflowVisualProgrammingCapabilityV1[];
+}
+
+export interface WorkflowVisualProgrammingStageV1 {
+	id: string;
+	label: string;
+	nodeTypes: string[];
+}
+
+export interface WorkflowVisualProgrammingCapabilityV1 {
+	id: string;
+	label: string;
+	nodeTypes: string[];
 }
 
 export interface WorkflowTestData {

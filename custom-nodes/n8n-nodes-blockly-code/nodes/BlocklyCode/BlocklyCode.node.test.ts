@@ -77,6 +77,7 @@ describe('BlocklyCode', () => {
 		expect(parameter?.description).toBe('在此节点中打开 Blockly，以可视化方式转换每个输入项');
 		expect(parameter?.noDataExpression).toBe(true);
 		expect(parameter?.typeOptions?.editor).toBe('blocklyEditor');
+		expect(parameter?.typeOptions?.editorProfile).toBe('data-transform');
 	});
 
 	it('ignores tampered payload JavaScript and runs the compiled workspace for three items', async () => {

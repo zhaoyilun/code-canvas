@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import TabBar from '@/app/components/MainHeader/TabBar.vue';
 import WorkflowDetails from '@/app/components/MainHeader/WorkflowDetails.vue';
-import CompetitionWorkbenchHeader from '@/app/components/competition/CompetitionWorkbenchHeader.vue';
-import { isCompetitionWorkbenchWorkflow } from '@/app/components/competition/competitionWorkbench';
+import WorkflowWorkbenchHeader from '@/app/components/workbench/WorkflowWorkbenchHeader.vue';
+import { resolveWorkflowWorkbenchProfile } from '@/app/components/workbench/workflowWorkbench';
 import { useI18n } from '@n8n/i18n';
 import { usePushConnection } from '@/app/composables/usePushConnection';
 import { MAIN_HEADER_TABS, STICKY_NODE_TYPE, VIEWS } from '@/app/constants';
@@ -71,13 +71,16 @@ const workflowIsArchived = computed(() => workflowDocumentStore?.value?.isArchiv
 const workflowDescription = computed(() => workflowDocumentStore?.value?.description ?? '');
 const onWorkflowPage = computed(() => !!(route.meta.nodeView || route.meta.keepWorkflowAlive));
 const workflowNodes = computed(() => workflowDocumentStore?.value?.allNodes ?? []);
-const isCompetitionWorkflow = computed(() => isCompetitionWorkbenchWorkflow(workflowNodes.value));
-const competitionExecutionStatus = computed(() => {
+const workflowMeta = computed(() => workflowDocumentStore?.value?.meta);
+const workbenchProfile = computed(() =>
+	resolveWorkflowWorkbenchProfile(workflowMeta.value, workflowNodes.value),
+);
+const workbenchExecutionStatus = computed(() => {
 	const activeExecution = executionsStore.activeExecution;
 	if (activeExecution?.workflowId !== workflowId.value) return null;
 	return activeExecution.status;
 });
-const isCompetitionExecutionView = computed(
+const isWorkbenchExecutionView = computed(
 	() => activeHeaderTab.value === MAIN_HEADER_TABS.EXECUTIONS,
 );
 
@@ -283,13 +286,14 @@ async function onWorkflowDeactivated() {
 					@workflow:deactivated="onWorkflowDeactivated"
 				/>
 			</div>
-			<CompetitionWorkbenchHeader
-				v-if="isCompetitionWorkflow && onWorkflowPage && !settingsStore.isCanvasOnly"
+			<WorkflowWorkbenchHeader
+				v-if="workbenchProfile && onWorkflowPage && !settingsStore.isCanvasOnly"
+				:profile="workbenchProfile"
 				:workflow-name="workflowName"
 				:nodes="workflowNodes"
 				:active-node-type="activeNode?.type"
-				:execution-status="competitionExecutionStatus"
-				:is-execution-view="isCompetitionExecutionView"
+				:execution-status="workbenchExecutionStatus"
+				:is-execution-view="isWorkbenchExecutionView"
 			/>
 			<TabBar
 				v-if="onWorkflowPage"

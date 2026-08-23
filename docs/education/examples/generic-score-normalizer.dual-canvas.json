@@ -1,0 +1,2286 @@
+{
+  "apiVersion": 1,
+  "exampleRef": "education.generic-score-normalizer",
+  "generatedBy": "@n8n/dual-canvas-typescript-importer@0.1.0",
+  "sourceFile": "docs/education/examples/generic-score-normalizer.ts",
+  "request": {
+    "apiVersion": 1,
+    "documentRef": "education.generic-score-normalizer",
+    "revisionRef": "revision.1",
+    "title": "Generic score normalizer",
+    "profileRef": "education.generic-data-transform",
+    "entryFunction": "transform",
+    "source": {
+      "apiVersion": 1,
+      "sourceRef": "source.generic-score-normalizer",
+      "language": "typescript",
+      "content": "interface ScoreInput {\n\tname: string;\n\tscore: number | string;\n\tenabled: boolean;\n\toverride: boolean;\n\tcategory: string;\n}\n\nexport function transform(input: ScoreInput) {\n\tconst output: Record<string, unknown> = { ...input };\n\tif (!(((input?.score ?? null) as number) >= 0 && ((input?.score ?? null) as number) <= 100)) {\n\t\tthrow new Error('score must be in range');\n\t}\n\toutput.adjustedScore = ((input?.score ?? null) as number) * 1.1 + 2;\n\toutput.displayName = input?.name ?? null;\n\toutput.active = Boolean(input?.enabled ?? null);\n\toutput.status = ((input?.score ?? null) as number) >= 60 ? 'ready' : 'review';\n\toutput.summary = {\n\t\tpassed: ((input?.score ?? null) as number) >= 60,\n\t\ttags: ['imported', input?.category ?? null],\n\t};\n\tif (\n\t\t(((input?.score ?? null) as number) >= 60 && Boolean(input?.enabled ?? null)) ||\n\t\t(input?.override ?? null)\n\t) {\n\t\toutput.accepted = true;\n\t} else {\n\t\tdelete output.accepted;\n\t}\n\treturn output;\n}\n",
+      "uri": "docs/education/examples/generic-score-normalizer.ts"
+    },
+    "bindings": {
+      "apiVersion": 1,
+      "packageName": "n8n-nodes-blockly-code",
+      "nodeTypes": {
+        "manualTrigger": "n8n-nodes-base.manualTrigger",
+        "blocklyCode": "n8n-nodes-blockly-code.blocklyCode"
+      }
+    },
+    "workflow": {
+      "manualTrigger": {
+        "bindingRef": "manualTrigger",
+        "typeVersion": 1,
+        "label": "Start"
+      },
+      "blocklyCode": {
+        "bindingRef": "blocklyCode",
+        "typeVersion": 1,
+        "label": "Normalize score"
+      }
+    },
+    "canvasAdapterRef": "blockly.data-transform.v1"
+  },
+  "visualProgramIR": {
+    "apiVersion": 1,
+    "documentRef": "education.generic-score-normalizer",
+    "revisionRef": "revision.1",
+    "title": "Generic score normalizer",
+    "profileRef": "education.generic-data-transform",
+    "sources": [
+      {
+        "apiVersion": 1,
+        "sourceRef": "source.generic-score-normalizer",
+        "language": "typescript",
+        "content": "interface ScoreInput {\n\tname: string;\n\tscore: number | string;\n\tenabled: boolean;\n\toverride: boolean;\n\tcategory: string;\n}\n\nexport function transform(input: ScoreInput) {\n\tconst output: Record<string, unknown> = { ...input };\n\tif (!(((input?.score ?? null) as number) >= 0 && ((input?.score ?? null) as number) <= 100)) {\n\t\tthrow new Error('score must be in range');\n\t}\n\toutput.adjustedScore = ((input?.score ?? null) as number) * 1.1 + 2;\n\toutput.displayName = input?.name ?? null;\n\toutput.active = Boolean(input?.enabled ?? null);\n\toutput.status = ((input?.score ?? null) as number) >= 60 ? 'ready' : 'review';\n\toutput.summary = {\n\t\tpassed: ((input?.score ?? null) as number) >= 60,\n\t\ttags: ['imported', input?.category ?? null],\n\t};\n\tif (\n\t\t(((input?.score ?? null) as number) >= 60 && Boolean(input?.enabled ?? null)) ||\n\t\t(input?.override ?? null)\n\t) {\n\t\toutput.accepted = true;\n\t} else {\n\t\tdelete output.accepted;\n\t}\n\treturn output;\n}\n",
+        "uri": "docs/education/examples/generic-score-normalizer.ts"
+      }
+    ],
+    "nodes": [
+      {
+        "nodeRef": "node-c8fec746-c3c4-5a51-a4f5-18d6413032de",
+        "operationRef": "manualTrigger",
+        "label": "Start",
+        "position": {
+          "x": 0,
+          "y": 0
+        },
+        "parameters": {}
+      },
+      {
+        "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+        "operationRef": "blocklyCode",
+        "label": "Normalize score",
+        "position": {
+          "x": 280,
+          "y": 0
+        },
+        "parameters": {
+          "blocklyPayload": "{\"schemaVersion\":2,\"workspace\":{\"blocks\":{\"languageVersion\":0,\"blocks\":[{\"type\":\"n8n_transform_item\",\"id\":\"logic-0d661a97-76db-5255-9fd7-5de299f0ee03\",\"x\":24,\"y\":24,\"fields\":{\"MODE\":\"COPY\"},\"inputs\":{\"STATEMENTS\":{\"block\":{\"type\":\"n8n_assert\",\"id\":\"logic-3c0c6861-8ba2-52de-9826-a79ea0dafa62\",\"data\":\"{\\\"stepRef\\\":\\\"step.11.1.assert\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":11,\\\"column\\\":1,\\\"offset\\\":227},\\\"end\\\":{\\\"line\\\":13,\\\"column\\\":2,\\\"offset\\\":369}}}\",\"inputs\":{\"CONDITION\":{\"block\":{\"type\":\"logic_operation\",\"id\":\"logic-d9a60df4-346e-5233-8640-adb662b73467\",\"fields\":{\"OP\":\"AND\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-45a98c5c-1462-5573-8537-1cca5112ebdb\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-4911bf77-868f-5677-bf69-28eb6712018a\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-df189116-78d8-533f-9e51-fb472af8b441\",\"fields\":{\"NUM\":0}}}}}},\"B\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-1338d240-c992-566c-a0c2-fe67087062a4\",\"fields\":{\"OP\":\"LTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-0a994351-1bb1-5540-b670-213be25093da\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-9a9c7d84-4b10-52ab-b7bb-4b2c2d66d5d0\",\"fields\":{\"NUM\":100}}}}}}}}},\"MESSAGE\":{\"block\":{\"type\":\"text\",\"id\":\"logic-dbc5ba62-9af0-5407-bfae-8653f67ee031\",\"fields\":{\"TEXT\":\"score must be in range\"}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-905c3323-d28f-5ff4-9c16-415408d2c3e4\",\"data\":\"{\\\"stepRef\\\":\\\"step.14.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":14,\\\"column\\\":1,\\\"offset\\\":371},\\\"end\\\":{\\\"line\\\":14,\\\"column\\\":69,\\\"offset\\\":439}}}\",\"fields\":{\"KEY\":\"adjustedScore\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"math_arithmetic\",\"id\":\"logic-889fd10a-3329-56f7-bf5a-adbc378d4a26\",\"fields\":{\"OP\":\"ADD\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"math_arithmetic\",\"id\":\"logic-cf369005-ebcc-504f-9f16-6f11450a8590\",\"fields\":{\"OP\":\"MULTIPLY\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-8f578ebc-677f-50c0-99be-3191e517da7b\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-a89a1b43-9fd9-5d2f-afe0-6a32af4fa0d2\",\"fields\":{\"NUM\":1.1}}}}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-2ead9f9f-a7e9-545d-9bb4-cea631213489\",\"fields\":{\"NUM\":2}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-78fdb96b-43d6-57b5-a598-4b3206a34fb8\",\"data\":\"{\\\"stepRef\\\":\\\"step.15.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":15,\\\"column\\\":1,\\\"offset\\\":441},\\\"end\\\":{\\\"line\\\":15,\\\"column\\\":42,\\\"offset\\\":482}}}\",\"fields\":{\"KEY\":\"displayName\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-faa731a2-6363-5bf4-a539-0be98d083dd5\",\"fields\":{\"PATH\":\"name\"}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-6ed88062-43ef-5cbc-9d22-5dfe58b8d505\",\"data\":\"{\\\"stepRef\\\":\\\"step.16.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":16,\\\"column\\\":1,\\\"offset\\\":484},\\\"end\\\":{\\\"line\\\":16,\\\"column\\\":49,\\\"offset\\\":532}}}\",\"fields\":{\"KEY\":\"active\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_convert\",\"id\":\"logic-75caef84-5d7c-50fb-b93e-782ff0374168\",\"fields\":{\"TYPE\":\"BOOLEAN\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-a597de46-207e-55ba-b07c-cc0a4f771cdb\",\"fields\":{\"PATH\":\"enabled\"}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-43621dcc-6710-51c8-818f-3d325ff545cd\",\"data\":\"{\\\"stepRef\\\":\\\"step.17.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":17,\\\"column\\\":1,\\\"offset\\\":534},\\\"end\\\":{\\\"line\\\":17,\\\"column\\\":79,\\\"offset\\\":612}}}\",\"fields\":{\"KEY\":\"status\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"logic_ternary\",\"id\":\"logic-0802826a-f729-57c2-82c5-8182db4cf810\",\"inputs\":{\"IF\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-a4c09a01-46c1-5a45-9bd8-95ae6522eab2\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-75e97da0-decd-5650-b2c5-ad98479f405f\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-2ecd9988-561f-57eb-a564-ea84a1cdc11d\",\"fields\":{\"NUM\":60}}}}}},\"THEN\":{\"block\":{\"type\":\"text\",\"id\":\"logic-2e36936f-8135-5ade-808b-9ea74dd69441\",\"fields\":{\"TEXT\":\"ready\"}}},\"ELSE\":{\"block\":{\"type\":\"text\",\"id\":\"logic-18e6dd4a-06a8-5b8c-beb2-1220c8dd664d\",\"fields\":{\"TEXT\":\"review\"}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-f75136e0-39e5-5d80-b05e-e794f8d346c0\",\"data\":\"{\\\"stepRef\\\":\\\"step.18.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":18,\\\"column\\\":1,\\\"offset\\\":614},\\\"end\\\":{\\\"line\\\":21,\\\"column\\\":3,\\\"offset\\\":735}}}\",\"fields\":{\"KEY\":\"summary\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_object_create\",\"id\":\"logic-73cbada1-db99-5db4-9533-5e869847de76\",\"inputs\":{\"PROPERTIES\":{\"block\":{\"type\":\"n8n_object_property\",\"id\":\"logic-74ecc838-2e0b-5d21-925c-b3e3df0eecbf\",\"fields\":{\"KEY\":\"passed\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-44c660d6-8e77-550c-9d0e-9ae02e7e252a\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-ffd66b46-566f-56e8-ac62-17f4ea9462ce\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-fe9b9bd9-ac2c-57cf-aa03-f60851cf424e\",\"fields\":{\"NUM\":60}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_object_property\",\"id\":\"logic-76ea2533-2c80-5208-a072-bc7b6be8d4c8\",\"fields\":{\"KEY\":\"tags\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"lists_create_with\",\"id\":\"logic-c79944f0-85af-55aa-893b-033b6cc50cc6\",\"extraState\":{\"itemCount\":2},\"inputs\":{\"ADD0\":{\"block\":{\"type\":\"text\",\"id\":\"logic-e1b0d0b4-c777-59dc-86e5-61c2b84f5b88\",\"fields\":{\"TEXT\":\"imported\"}}},\"ADD1\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-c5b27c12-82d4-5687-a759-dfa8668b810e\",\"fields\":{\"PATH\":\"category\"}}}}}}}}}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_if\",\"id\":\"logic-b7f3b6c0-2a4d-5310-8de3-6e7f789bb928\",\"data\":\"{\\\"stepRef\\\":\\\"step.22.1.if\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":22,\\\"column\\\":1,\\\"offset\\\":737},\\\"end\\\":{\\\"line\\\":29,\\\"column\\\":2,\\\"offset\\\":922}}}\",\"inputs\":{\"CONDITION\":{\"block\":{\"type\":\"logic_operation\",\"id\":\"logic-c489508c-482c-5d89-864b-9d881239d30c\",\"fields\":{\"OP\":\"OR\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"logic_operation\",\"id\":\"logic-18979805-f893-5184-8105-85027d5da73e\",\"fields\":{\"OP\":\"AND\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-d2906c6d-2fac-5380-859e-c5354338cff3\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-a62d6d0f-590c-5df7-b332-8d8583f8649b\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-e17bcc55-1b56-5a47-931e-7381ec937847\",\"fields\":{\"NUM\":60}}}}}},\"B\":{\"block\":{\"type\":\"n8n_convert\",\"id\":\"logic-164a66fb-f9ca-5ad2-a7b8-44aef43a1330\",\"fields\":{\"TYPE\":\"BOOLEAN\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-5b934b75-a85e-57a3-93c6-525b262c7dcf\",\"fields\":{\"PATH\":\"enabled\"}}}}}}}}},\"B\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-2c48e6cb-e187-5599-8aef-d7de5091f4ed\",\"fields\":{\"PATH\":\"override\"}}}}}},\"THEN\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-1b7fb0fc-da09-5170-be73-a12bae2e33fc\",\"data\":\"{\\\"stepRef\\\":\\\"step.26.2.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":26,\\\"column\\\":2,\\\"offset\\\":860},\\\"end\\\":{\\\"line\\\":26,\\\"column\\\":25,\\\"offset\\\":883}}}\",\"fields\":{\"KEY\":\"accepted\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"logic_boolean\",\"id\":\"logic-16de0b8c-f373-5c67-a561-d8ddade85c8d\",\"fields\":{\"BOOL\":\"TRUE\"}}}}}},\"ELSE\":{\"block\":{\"type\":\"n8n_delete_field\",\"id\":\"logic-5ec1c3fc-aa41-505d-84aa-69041b240926\",\"data\":\"{\\\"stepRef\\\":\\\"step.28.2.delete\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":28,\\\"column\\\":2,\\\"offset\\\":896},\\\"end\\\":{\\\"line\\\":28,\\\"column\\\":25,\\\"offset\\\":919}}}\",\"fields\":{\"KEY\":\"accepted\"}}}}}}}}}}}}}}}}}}}}]}},\"javascript\":\"const output = { ...$json };\\nif (!(((($json?.[\\\"score\\\"] ?? null) >= 0) && (($json?.[\\\"score\\\"] ?? null) <= 100)))) {\\n\\tthrow new Error(String(\\\"score must be in range\\\"));\\n}\\noutput[\\\"adjustedScore\\\"] = ((($json?.[\\\"score\\\"] ?? null) * 1.1) + 2);\\noutput[\\\"displayName\\\"] = ($json?.[\\\"name\\\"] ?? null);\\noutput[\\\"active\\\"] = Boolean(($json?.[\\\"enabled\\\"] ?? null));\\noutput[\\\"status\\\"] = ((($json?.[\\\"score\\\"] ?? null) >= 60) ? \\\"ready\\\" : \\\"review\\\");\\noutput[\\\"summary\\\"] = { [\\\"passed\\\"]: (($json?.[\\\"score\\\"] ?? null) >= 60), [\\\"tags\\\"]: [\\\"imported\\\", ($json?.[\\\"category\\\"] ?? null)] };\\nif ((((($json?.[\\\"score\\\"] ?? null) >= 60) && Boolean(($json?.[\\\"enabled\\\"] ?? null))) || ($json?.[\\\"override\\\"] ?? null))) {\\n\\toutput[\\\"accepted\\\"] = true;\\n} else {\\n\\tdelete output[\\\"accepted\\\"];\\n}\\nreturn { json: output };\\n\"}"
+        },
+        "logic": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "label": "Normalize score",
+          "outputMode": "copyInput",
+          "statements": [
+            {
+              "kind": "assert",
+              "stepRef": "step.11.1.assert",
+              "source": {
+                "sourceRef": "source.generic-score-normalizer",
+                "start": {
+                  "line": 11,
+                  "column": 1,
+                  "offset": 227
+                },
+                "end": {
+                  "line": 13,
+                  "column": 2,
+                  "offset": 369
+                }
+              },
+              "condition": {
+                "kind": "booleanOperation",
+                "op": "and",
+                "left": {
+                  "kind": "compare",
+                  "op": "gte",
+                  "left": {
+                    "kind": "input",
+                    "path": "score"
+                  },
+                  "right": {
+                    "kind": "number",
+                    "value": 0
+                  }
+                },
+                "right": {
+                  "kind": "compare",
+                  "op": "lte",
+                  "left": {
+                    "kind": "input",
+                    "path": "score"
+                  },
+                  "right": {
+                    "kind": "number",
+                    "value": 100
+                  }
+                }
+              },
+              "message": {
+                "kind": "text",
+                "value": "score must be in range"
+              }
+            },
+            {
+              "kind": "set",
+              "stepRef": "step.14.1.set",
+              "source": {
+                "sourceRef": "source.generic-score-normalizer",
+                "start": {
+                  "line": 14,
+                  "column": 1,
+                  "offset": 371
+                },
+                "end": {
+                  "line": 14,
+                  "column": 69,
+                  "offset": 439
+                }
+              },
+              "targetField": "adjustedScore",
+              "value": {
+                "kind": "arithmetic",
+                "op": "add",
+                "left": {
+                  "kind": "arithmetic",
+                  "op": "multiply",
+                  "left": {
+                    "kind": "input",
+                    "path": "score"
+                  },
+                  "right": {
+                    "kind": "number",
+                    "value": 1.1
+                  }
+                },
+                "right": {
+                  "kind": "number",
+                  "value": 2
+                }
+              }
+            },
+            {
+              "kind": "set",
+              "stepRef": "step.15.1.set",
+              "source": {
+                "sourceRef": "source.generic-score-normalizer",
+                "start": {
+                  "line": 15,
+                  "column": 1,
+                  "offset": 441
+                },
+                "end": {
+                  "line": 15,
+                  "column": 42,
+                  "offset": 482
+                }
+              },
+              "targetField": "displayName",
+              "value": {
+                "kind": "input",
+                "path": "name"
+              }
+            },
+            {
+              "kind": "set",
+              "stepRef": "step.16.1.set",
+              "source": {
+                "sourceRef": "source.generic-score-normalizer",
+                "start": {
+                  "line": 16,
+                  "column": 1,
+                  "offset": 484
+                },
+                "end": {
+                  "line": 16,
+                  "column": 49,
+                  "offset": 532
+                }
+              },
+              "targetField": "active",
+              "value": {
+                "kind": "convert",
+                "to": "boolean",
+                "value": {
+                  "kind": "input",
+                  "path": "enabled"
+                }
+              }
+            },
+            {
+              "kind": "set",
+              "stepRef": "step.17.1.set",
+              "source": {
+                "sourceRef": "source.generic-score-normalizer",
+                "start": {
+                  "line": 17,
+                  "column": 1,
+                  "offset": 534
+                },
+                "end": {
+                  "line": 17,
+                  "column": 79,
+                  "offset": 612
+                }
+              },
+              "targetField": "status",
+              "value": {
+                "kind": "conditional",
+                "condition": {
+                  "kind": "compare",
+                  "op": "gte",
+                  "left": {
+                    "kind": "input",
+                    "path": "score"
+                  },
+                  "right": {
+                    "kind": "number",
+                    "value": 60
+                  }
+                },
+                "whenTrue": {
+                  "kind": "text",
+                  "value": "ready"
+                },
+                "whenFalse": {
+                  "kind": "text",
+                  "value": "review"
+                }
+              }
+            },
+            {
+              "kind": "set",
+              "stepRef": "step.18.1.set",
+              "source": {
+                "sourceRef": "source.generic-score-normalizer",
+                "start": {
+                  "line": 18,
+                  "column": 1,
+                  "offset": 614
+                },
+                "end": {
+                  "line": 21,
+                  "column": 3,
+                  "offset": 735
+                }
+              },
+              "targetField": "summary",
+              "value": {
+                "kind": "object",
+                "properties": [
+                  {
+                    "key": "passed",
+                    "value": {
+                      "kind": "compare",
+                      "op": "gte",
+                      "left": {
+                        "kind": "input",
+                        "path": "score"
+                      },
+                      "right": {
+                        "kind": "number",
+                        "value": 60
+                      }
+                    }
+                  },
+                  {
+                    "key": "tags",
+                    "value": {
+                      "kind": "array",
+                      "values": [
+                        {
+                          "kind": "text",
+                          "value": "imported"
+                        },
+                        {
+                          "kind": "input",
+                          "path": "category"
+                        }
+                      ]
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "kind": "if",
+              "stepRef": "step.22.1.if",
+              "source": {
+                "sourceRef": "source.generic-score-normalizer",
+                "start": {
+                  "line": 22,
+                  "column": 1,
+                  "offset": 737
+                },
+                "end": {
+                  "line": 29,
+                  "column": 2,
+                  "offset": 922
+                }
+              },
+              "condition": {
+                "kind": "booleanOperation",
+                "op": "or",
+                "left": {
+                  "kind": "booleanOperation",
+                  "op": "and",
+                  "left": {
+                    "kind": "compare",
+                    "op": "gte",
+                    "left": {
+                      "kind": "input",
+                      "path": "score"
+                    },
+                    "right": {
+                      "kind": "number",
+                      "value": 60
+                    }
+                  },
+                  "right": {
+                    "kind": "convert",
+                    "to": "boolean",
+                    "value": {
+                      "kind": "input",
+                      "path": "enabled"
+                    }
+                  }
+                },
+                "right": {
+                  "kind": "input",
+                  "path": "override"
+                }
+              },
+              "then": [
+                {
+                  "kind": "set",
+                  "stepRef": "step.26.2.set",
+                  "source": {
+                    "sourceRef": "source.generic-score-normalizer",
+                    "start": {
+                      "line": 26,
+                      "column": 2,
+                      "offset": 860
+                    },
+                    "end": {
+                      "line": 26,
+                      "column": 25,
+                      "offset": 883
+                    }
+                  },
+                  "targetField": "accepted",
+                  "value": {
+                    "kind": "boolean",
+                    "value": true
+                  }
+                }
+              ],
+              "else": [
+                {
+                  "kind": "delete",
+                  "stepRef": "step.28.2.delete",
+                  "source": {
+                    "sourceRef": "source.generic-score-normalizer",
+                    "start": {
+                      "line": 28,
+                      "column": 2,
+                      "offset": 896
+                    },
+                    "end": {
+                      "line": 28,
+                      "column": 25,
+                      "offset": 919
+                    }
+                  },
+                  "targetField": "accepted"
+                }
+              ]
+            }
+          ]
+        },
+        "metadata": {
+          "canvasRef": "canvas-6786a3f6-676b-529f-ae7f-6a1ab0bf3590"
+        }
+      }
+    ],
+    "edges": [
+      {
+        "edgeRef": "edge-2548dd5a-fa7b-5257-9945-fb85e717daea",
+        "from": {
+          "nodeRef": "node-c8fec746-c3c4-5a51-a4f5-18d6413032de",
+          "portRef": "main"
+        },
+        "to": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "portRef": "main"
+        }
+      }
+    ],
+    "sourceMap": [
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-83255232-cdae-5719-b3e4-85548fa87c19",
+        "semanticRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+        "artifact": {
+          "kind": "workflowNode",
+          "ref": "node-8470535e-6039-52d7-8763-370c91f64d7c"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 9,
+            "column": 0,
+            "offset": 124
+          },
+          "end": {
+            "line": 31,
+            "column": 1,
+            "offset": 940
+          }
+        },
+        "context": {
+          "importerRef": "source-import.typescript.v1"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-3c21a0bd-2f86-51b5-8e01-ca511c92f73d",
+        "semanticRef": "step-c2e96536-8307-5479-b493-db9e4c4b3635",
+        "artifact": {
+          "kind": "canvas",
+          "ref": "canvas-6786a3f6-676b-529f-ae7f-6a1ab0bf3590"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 10,
+            "column": 1,
+            "offset": 172
+          },
+          "end": {
+            "line": 10,
+            "column": 54,
+            "offset": 225
+          }
+        },
+        "context": {
+          "importerRef": "source-import.typescript.v1"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-e2064c6c-eb87-5a93-a439-08c383700616",
+        "semanticRef": "step-3583bd1e-844d-5278-a1c5-cdaa77ff36eb",
+        "artifact": {
+          "kind": "workflowNode",
+          "ref": "node-8470535e-6039-52d7-8763-370c91f64d7c"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 30,
+            "column": 1,
+            "offset": 924
+          },
+          "end": {
+            "line": 30,
+            "column": 15,
+            "offset": 938
+          }
+        },
+        "context": {
+          "importerRef": "source-import.typescript.v1"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-2b425527-856c-53fb-8d84-670fa801ad16",
+        "semanticRef": "step.11.1.assert",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-3c0c6861-8ba2-52de-9826-a79ea0dafa62"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 11,
+            "column": 1,
+            "offset": 227
+          },
+          "end": {
+            "line": 13,
+            "column": 2,
+            "offset": 369
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "assert"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-782c7c67-ed3c-5c79-bfe9-0e0a679deb8c",
+        "semanticRef": "step.14.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-905c3323-d28f-5ff4-9c16-415408d2c3e4"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 14,
+            "column": 1,
+            "offset": 371
+          },
+          "end": {
+            "line": 14,
+            "column": 69,
+            "offset": 439
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "adjustedScore"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-dd506e85-b2a3-5275-8904-40f2c7a0e423",
+        "semanticRef": "step.15.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-78fdb96b-43d6-57b5-a598-4b3206a34fb8"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 15,
+            "column": 1,
+            "offset": 441
+          },
+          "end": {
+            "line": 15,
+            "column": 42,
+            "offset": 482
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "displayName"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-e2ca55c0-09c5-54d0-be44-124a52ac5408",
+        "semanticRef": "step.16.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-6ed88062-43ef-5cbc-9d22-5dfe58b8d505"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 16,
+            "column": 1,
+            "offset": 484
+          },
+          "end": {
+            "line": 16,
+            "column": 49,
+            "offset": 532
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "active"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-01312a6f-9da0-5ceb-b4f4-735419cf861d",
+        "semanticRef": "step.17.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-43621dcc-6710-51c8-818f-3d325ff545cd"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 17,
+            "column": 1,
+            "offset": 534
+          },
+          "end": {
+            "line": 17,
+            "column": 79,
+            "offset": 612
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "status"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-e4ea60eb-b324-5e1d-a74f-30328125d46e",
+        "semanticRef": "step.18.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-f75136e0-39e5-5d80-b05e-e794f8d346c0"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 18,
+            "column": 1,
+            "offset": 614
+          },
+          "end": {
+            "line": 21,
+            "column": 3,
+            "offset": 735
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "summary"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-b2fcf18a-685f-5749-8115-0fb3ec1a5012",
+        "semanticRef": "step.22.1.if",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-b7f3b6c0-2a4d-5310-8de3-6e7f789bb928"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 22,
+            "column": 1,
+            "offset": 737
+          },
+          "end": {
+            "line": 29,
+            "column": 2,
+            "offset": 922
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "if"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-06c5e574-7df8-53be-b393-dc77c990d31a",
+        "semanticRef": "step.26.2.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-1b7fb0fc-da09-5170-be73-a12bae2e33fc"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 26,
+            "column": 2,
+            "offset": 860
+          },
+          "end": {
+            "line": 26,
+            "column": 25,
+            "offset": 883
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "accepted"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-d05e9ade-1a1d-59fb-a16f-ea5c696d082f",
+        "semanticRef": "step.28.2.delete",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-5ec1c3fc-aa41-505d-84aa-69041b240926"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 28,
+            "column": 2,
+            "offset": 896
+          },
+          "end": {
+            "line": 28,
+            "column": 25,
+            "offset": 919
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "delete",
+          "targetField": "accepted"
+        }
+      }
+    ],
+    "metadata": {
+      "importerRef": "source-import.typescript.v1",
+      "sourceSemanticsRef": "source-semantics.blockly-data-transform-equivalent.v1",
+      "canvasRef": "canvas-6786a3f6-676b-529f-ae7f-6a1ab0bf3590"
+    }
+  },
+  "generatedLogicCanvas": {
+    "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+    "label": "Normalize score",
+    "workspace": {
+      "blocks": {
+        "languageVersion": 0,
+        "blocks": [
+          {
+            "type": "n8n_transform_item",
+            "id": "logic-0d661a97-76db-5255-9fd7-5de299f0ee03",
+            "x": 24,
+            "y": 24,
+            "fields": {
+              "MODE": "COPY"
+            },
+            "inputs": {
+              "STATEMENTS": {
+                "block": {
+                  "type": "n8n_assert",
+                  "id": "logic-3c0c6861-8ba2-52de-9826-a79ea0dafa62",
+                  "data": "{\"stepRef\":\"step.11.1.assert\",\"source\":{\"sourceRef\":\"source.generic-score-normalizer\",\"start\":{\"line\":11,\"column\":1,\"offset\":227},\"end\":{\"line\":13,\"column\":2,\"offset\":369}}}",
+                  "inputs": {
+                    "CONDITION": {
+                      "block": {
+                        "type": "logic_operation",
+                        "id": "logic-d9a60df4-346e-5233-8640-adb662b73467",
+                        "fields": {
+                          "OP": "AND"
+                        },
+                        "inputs": {
+                          "A": {
+                            "block": {
+                              "type": "logic_compare",
+                              "id": "logic-45a98c5c-1462-5573-8537-1cca5112ebdb",
+                              "fields": {
+                                "OP": "GTE"
+                              },
+                              "inputs": {
+                                "A": {
+                                  "block": {
+                                    "type": "n8n_get_field",
+                                    "id": "logic-4911bf77-868f-5677-bf69-28eb6712018a",
+                                    "fields": {
+                                      "PATH": "score"
+                                    }
+                                  }
+                                },
+                                "B": {
+                                  "block": {
+                                    "type": "math_number",
+                                    "id": "logic-df189116-78d8-533f-9e51-fb472af8b441",
+                                    "fields": {
+                                      "NUM": 0
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          },
+                          "B": {
+                            "block": {
+                              "type": "logic_compare",
+                              "id": "logic-1338d240-c992-566c-a0c2-fe67087062a4",
+                              "fields": {
+                                "OP": "LTE"
+                              },
+                              "inputs": {
+                                "A": {
+                                  "block": {
+                                    "type": "n8n_get_field",
+                                    "id": "logic-0a994351-1bb1-5540-b670-213be25093da",
+                                    "fields": {
+                                      "PATH": "score"
+                                    }
+                                  }
+                                },
+                                "B": {
+                                  "block": {
+                                    "type": "math_number",
+                                    "id": "logic-9a9c7d84-4b10-52ab-b7bb-4b2c2d66d5d0",
+                                    "fields": {
+                                      "NUM": 100
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "MESSAGE": {
+                      "block": {
+                        "type": "text",
+                        "id": "logic-dbc5ba62-9af0-5407-bfae-8653f67ee031",
+                        "fields": {
+                          "TEXT": "score must be in range"
+                        }
+                      }
+                    }
+                  },
+                  "next": {
+                    "block": {
+                      "type": "n8n_set_field",
+                      "id": "logic-905c3323-d28f-5ff4-9c16-415408d2c3e4",
+                      "data": "{\"stepRef\":\"step.14.1.set\",\"source\":{\"sourceRef\":\"source.generic-score-normalizer\",\"start\":{\"line\":14,\"column\":1,\"offset\":371},\"end\":{\"line\":14,\"column\":69,\"offset\":439}}}",
+                      "fields": {
+                        "KEY": "adjustedScore"
+                      },
+                      "inputs": {
+                        "VALUE": {
+                          "block": {
+                            "type": "math_arithmetic",
+                            "id": "logic-889fd10a-3329-56f7-bf5a-adbc378d4a26",
+                            "fields": {
+                              "OP": "ADD"
+                            },
+                            "inputs": {
+                              "A": {
+                                "block": {
+                                  "type": "math_arithmetic",
+                                  "id": "logic-cf369005-ebcc-504f-9f16-6f11450a8590",
+                                  "fields": {
+                                    "OP": "MULTIPLY"
+                                  },
+                                  "inputs": {
+                                    "A": {
+                                      "block": {
+                                        "type": "n8n_get_field",
+                                        "id": "logic-8f578ebc-677f-50c0-99be-3191e517da7b",
+                                        "fields": {
+                                          "PATH": "score"
+                                        }
+                                      }
+                                    },
+                                    "B": {
+                                      "block": {
+                                        "type": "math_number",
+                                        "id": "logic-a89a1b43-9fd9-5d2f-afe0-6a32af4fa0d2",
+                                        "fields": {
+                                          "NUM": 1.1
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              "B": {
+                                "block": {
+                                  "type": "math_number",
+                                  "id": "logic-2ead9f9f-a7e9-545d-9bb4-cea631213489",
+                                  "fields": {
+                                    "NUM": 2
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "next": {
+                        "block": {
+                          "type": "n8n_set_field",
+                          "id": "logic-78fdb96b-43d6-57b5-a598-4b3206a34fb8",
+                          "data": "{\"stepRef\":\"step.15.1.set\",\"source\":{\"sourceRef\":\"source.generic-score-normalizer\",\"start\":{\"line\":15,\"column\":1,\"offset\":441},\"end\":{\"line\":15,\"column\":42,\"offset\":482}}}",
+                          "fields": {
+                            "KEY": "displayName"
+                          },
+                          "inputs": {
+                            "VALUE": {
+                              "block": {
+                                "type": "n8n_get_field",
+                                "id": "logic-faa731a2-6363-5bf4-a539-0be98d083dd5",
+                                "fields": {
+                                  "PATH": "name"
+                                }
+                              }
+                            }
+                          },
+                          "next": {
+                            "block": {
+                              "type": "n8n_set_field",
+                              "id": "logic-6ed88062-43ef-5cbc-9d22-5dfe58b8d505",
+                              "data": "{\"stepRef\":\"step.16.1.set\",\"source\":{\"sourceRef\":\"source.generic-score-normalizer\",\"start\":{\"line\":16,\"column\":1,\"offset\":484},\"end\":{\"line\":16,\"column\":49,\"offset\":532}}}",
+                              "fields": {
+                                "KEY": "active"
+                              },
+                              "inputs": {
+                                "VALUE": {
+                                  "block": {
+                                    "type": "n8n_convert",
+                                    "id": "logic-75caef84-5d7c-50fb-b93e-782ff0374168",
+                                    "fields": {
+                                      "TYPE": "BOOLEAN"
+                                    },
+                                    "inputs": {
+                                      "VALUE": {
+                                        "block": {
+                                          "type": "n8n_get_field",
+                                          "id": "logic-a597de46-207e-55ba-b07c-cc0a4f771cdb",
+                                          "fields": {
+                                            "PATH": "enabled"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              },
+                              "next": {
+                                "block": {
+                                  "type": "n8n_set_field",
+                                  "id": "logic-43621dcc-6710-51c8-818f-3d325ff545cd",
+                                  "data": "{\"stepRef\":\"step.17.1.set\",\"source\":{\"sourceRef\":\"source.generic-score-normalizer\",\"start\":{\"line\":17,\"column\":1,\"offset\":534},\"end\":{\"line\":17,\"column\":79,\"offset\":612}}}",
+                                  "fields": {
+                                    "KEY": "status"
+                                  },
+                                  "inputs": {
+                                    "VALUE": {
+                                      "block": {
+                                        "type": "logic_ternary",
+                                        "id": "logic-0802826a-f729-57c2-82c5-8182db4cf810",
+                                        "inputs": {
+                                          "IF": {
+                                            "block": {
+                                              "type": "logic_compare",
+                                              "id": "logic-a4c09a01-46c1-5a45-9bd8-95ae6522eab2",
+                                              "fields": {
+                                                "OP": "GTE"
+                                              },
+                                              "inputs": {
+                                                "A": {
+                                                  "block": {
+                                                    "type": "n8n_get_field",
+                                                    "id": "logic-75e97da0-decd-5650-b2c5-ad98479f405f",
+                                                    "fields": {
+                                                      "PATH": "score"
+                                                    }
+                                                  }
+                                                },
+                                                "B": {
+                                                  "block": {
+                                                    "type": "math_number",
+                                                    "id": "logic-2ecd9988-561f-57eb-a564-ea84a1cdc11d",
+                                                    "fields": {
+                                                      "NUM": 60
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          },
+                                          "THEN": {
+                                            "block": {
+                                              "type": "text",
+                                              "id": "logic-2e36936f-8135-5ade-808b-9ea74dd69441",
+                                              "fields": {
+                                                "TEXT": "ready"
+                                              }
+                                            }
+                                          },
+                                          "ELSE": {
+                                            "block": {
+                                              "type": "text",
+                                              "id": "logic-18e6dd4a-06a8-5b8c-beb2-1220c8dd664d",
+                                              "fields": {
+                                                "TEXT": "review"
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  },
+                                  "next": {
+                                    "block": {
+                                      "type": "n8n_set_field",
+                                      "id": "logic-f75136e0-39e5-5d80-b05e-e794f8d346c0",
+                                      "data": "{\"stepRef\":\"step.18.1.set\",\"source\":{\"sourceRef\":\"source.generic-score-normalizer\",\"start\":{\"line\":18,\"column\":1,\"offset\":614},\"end\":{\"line\":21,\"column\":3,\"offset\":735}}}",
+                                      "fields": {
+                                        "KEY": "summary"
+                                      },
+                                      "inputs": {
+                                        "VALUE": {
+                                          "block": {
+                                            "type": "n8n_object_create",
+                                            "id": "logic-73cbada1-db99-5db4-9533-5e869847de76",
+                                            "inputs": {
+                                              "PROPERTIES": {
+                                                "block": {
+                                                  "type": "n8n_object_property",
+                                                  "id": "logic-74ecc838-2e0b-5d21-925c-b3e3df0eecbf",
+                                                  "fields": {
+                                                    "KEY": "passed"
+                                                  },
+                                                  "inputs": {
+                                                    "VALUE": {
+                                                      "block": {
+                                                        "type": "logic_compare",
+                                                        "id": "logic-44c660d6-8e77-550c-9d0e-9ae02e7e252a",
+                                                        "fields": {
+                                                          "OP": "GTE"
+                                                        },
+                                                        "inputs": {
+                                                          "A": {
+                                                            "block": {
+                                                              "type": "n8n_get_field",
+                                                              "id": "logic-ffd66b46-566f-56e8-ac62-17f4ea9462ce",
+                                                              "fields": {
+                                                                "PATH": "score"
+                                                              }
+                                                            }
+                                                          },
+                                                          "B": {
+                                                            "block": {
+                                                              "type": "math_number",
+                                                              "id": "logic-fe9b9bd9-ac2c-57cf-aa03-f60851cf424e",
+                                                              "fields": {
+                                                                "NUM": 60
+                                                              }
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  },
+                                                  "next": {
+                                                    "block": {
+                                                      "type": "n8n_object_property",
+                                                      "id": "logic-76ea2533-2c80-5208-a072-bc7b6be8d4c8",
+                                                      "fields": {
+                                                        "KEY": "tags"
+                                                      },
+                                                      "inputs": {
+                                                        "VALUE": {
+                                                          "block": {
+                                                            "type": "lists_create_with",
+                                                            "id": "logic-c79944f0-85af-55aa-893b-033b6cc50cc6",
+                                                            "extraState": {
+                                                              "itemCount": 2
+                                                            },
+                                                            "inputs": {
+                                                              "ADD0": {
+                                                                "block": {
+                                                                  "type": "text",
+                                                                  "id": "logic-e1b0d0b4-c777-59dc-86e5-61c2b84f5b88",
+                                                                  "fields": {
+                                                                    "TEXT": "imported"
+                                                                  }
+                                                                }
+                                                              },
+                                                              "ADD1": {
+                                                                "block": {
+                                                                  "type": "n8n_get_field",
+                                                                  "id": "logic-c5b27c12-82d4-5687-a759-dfa8668b810e",
+                                                                  "fields": {
+                                                                    "PATH": "category"
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      },
+                                      "next": {
+                                        "block": {
+                                          "type": "n8n_if",
+                                          "id": "logic-b7f3b6c0-2a4d-5310-8de3-6e7f789bb928",
+                                          "data": "{\"stepRef\":\"step.22.1.if\",\"source\":{\"sourceRef\":\"source.generic-score-normalizer\",\"start\":{\"line\":22,\"column\":1,\"offset\":737},\"end\":{\"line\":29,\"column\":2,\"offset\":922}}}",
+                                          "inputs": {
+                                            "CONDITION": {
+                                              "block": {
+                                                "type": "logic_operation",
+                                                "id": "logic-c489508c-482c-5d89-864b-9d881239d30c",
+                                                "fields": {
+                                                  "OP": "OR"
+                                                },
+                                                "inputs": {
+                                                  "A": {
+                                                    "block": {
+                                                      "type": "logic_operation",
+                                                      "id": "logic-18979805-f893-5184-8105-85027d5da73e",
+                                                      "fields": {
+                                                        "OP": "AND"
+                                                      },
+                                                      "inputs": {
+                                                        "A": {
+                                                          "block": {
+                                                            "type": "logic_compare",
+                                                            "id": "logic-d2906c6d-2fac-5380-859e-c5354338cff3",
+                                                            "fields": {
+                                                              "OP": "GTE"
+                                                            },
+                                                            "inputs": {
+                                                              "A": {
+                                                                "block": {
+                                                                  "type": "n8n_get_field",
+                                                                  "id": "logic-a62d6d0f-590c-5df7-b332-8d8583f8649b",
+                                                                  "fields": {
+                                                                    "PATH": "score"
+                                                                  }
+                                                                }
+                                                              },
+                                                              "B": {
+                                                                "block": {
+                                                                  "type": "math_number",
+                                                                  "id": "logic-e17bcc55-1b56-5a47-931e-7381ec937847",
+                                                                  "fields": {
+                                                                    "NUM": 60
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        },
+                                                        "B": {
+                                                          "block": {
+                                                            "type": "n8n_convert",
+                                                            "id": "logic-164a66fb-f9ca-5ad2-a7b8-44aef43a1330",
+                                                            "fields": {
+                                                              "TYPE": "BOOLEAN"
+                                                            },
+                                                            "inputs": {
+                                                              "VALUE": {
+                                                                "block": {
+                                                                  "type": "n8n_get_field",
+                                                                  "id": "logic-5b934b75-a85e-57a3-93c6-525b262c7dcf",
+                                                                  "fields": {
+                                                                    "PATH": "enabled"
+                                                                  }
+                                                                }
+                                                              }
+                                                            }
+                                                          }
+                                                        }
+                                                      }
+                                                    }
+                                                  },
+                                                  "B": {
+                                                    "block": {
+                                                      "type": "n8n_get_field",
+                                                      "id": "logic-2c48e6cb-e187-5599-8aef-d7de5091f4ed",
+                                                      "fields": {
+                                                        "PATH": "override"
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            },
+                                            "THEN": {
+                                              "block": {
+                                                "type": "n8n_set_field",
+                                                "id": "logic-1b7fb0fc-da09-5170-be73-a12bae2e33fc",
+                                                "data": "{\"stepRef\":\"step.26.2.set\",\"source\":{\"sourceRef\":\"source.generic-score-normalizer\",\"start\":{\"line\":26,\"column\":2,\"offset\":860},\"end\":{\"line\":26,\"column\":25,\"offset\":883}}}",
+                                                "fields": {
+                                                  "KEY": "accepted"
+                                                },
+                                                "inputs": {
+                                                  "VALUE": {
+                                                    "block": {
+                                                      "type": "logic_boolean",
+                                                      "id": "logic-16de0b8c-f373-5c67-a561-d8ddade85c8d",
+                                                      "fields": {
+                                                        "BOOL": "TRUE"
+                                                      }
+                                                    }
+                                                  }
+                                                }
+                                              }
+                                            },
+                                            "ELSE": {
+                                              "block": {
+                                                "type": "n8n_delete_field",
+                                                "id": "logic-5ec1c3fc-aa41-505d-84aa-69041b240926",
+                                                "data": "{\"stepRef\":\"step.28.2.delete\",\"source\":{\"sourceRef\":\"source.generic-score-normalizer\",\"start\":{\"line\":28,\"column\":2,\"offset\":896},\"end\":{\"line\":28,\"column\":25,\"offset\":919}}}",
+                                                "fields": {
+                                                  "KEY": "accepted"
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "blocklyPayload": "{\"schemaVersion\":2,\"workspace\":{\"blocks\":{\"languageVersion\":0,\"blocks\":[{\"type\":\"n8n_transform_item\",\"id\":\"logic-0d661a97-76db-5255-9fd7-5de299f0ee03\",\"x\":24,\"y\":24,\"fields\":{\"MODE\":\"COPY\"},\"inputs\":{\"STATEMENTS\":{\"block\":{\"type\":\"n8n_assert\",\"id\":\"logic-3c0c6861-8ba2-52de-9826-a79ea0dafa62\",\"data\":\"{\\\"stepRef\\\":\\\"step.11.1.assert\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":11,\\\"column\\\":1,\\\"offset\\\":227},\\\"end\\\":{\\\"line\\\":13,\\\"column\\\":2,\\\"offset\\\":369}}}\",\"inputs\":{\"CONDITION\":{\"block\":{\"type\":\"logic_operation\",\"id\":\"logic-d9a60df4-346e-5233-8640-adb662b73467\",\"fields\":{\"OP\":\"AND\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-45a98c5c-1462-5573-8537-1cca5112ebdb\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-4911bf77-868f-5677-bf69-28eb6712018a\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-df189116-78d8-533f-9e51-fb472af8b441\",\"fields\":{\"NUM\":0}}}}}},\"B\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-1338d240-c992-566c-a0c2-fe67087062a4\",\"fields\":{\"OP\":\"LTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-0a994351-1bb1-5540-b670-213be25093da\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-9a9c7d84-4b10-52ab-b7bb-4b2c2d66d5d0\",\"fields\":{\"NUM\":100}}}}}}}}},\"MESSAGE\":{\"block\":{\"type\":\"text\",\"id\":\"logic-dbc5ba62-9af0-5407-bfae-8653f67ee031\",\"fields\":{\"TEXT\":\"score must be in range\"}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-905c3323-d28f-5ff4-9c16-415408d2c3e4\",\"data\":\"{\\\"stepRef\\\":\\\"step.14.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":14,\\\"column\\\":1,\\\"offset\\\":371},\\\"end\\\":{\\\"line\\\":14,\\\"column\\\":69,\\\"offset\\\":439}}}\",\"fields\":{\"KEY\":\"adjustedScore\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"math_arithmetic\",\"id\":\"logic-889fd10a-3329-56f7-bf5a-adbc378d4a26\",\"fields\":{\"OP\":\"ADD\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"math_arithmetic\",\"id\":\"logic-cf369005-ebcc-504f-9f16-6f11450a8590\",\"fields\":{\"OP\":\"MULTIPLY\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-8f578ebc-677f-50c0-99be-3191e517da7b\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-a89a1b43-9fd9-5d2f-afe0-6a32af4fa0d2\",\"fields\":{\"NUM\":1.1}}}}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-2ead9f9f-a7e9-545d-9bb4-cea631213489\",\"fields\":{\"NUM\":2}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-78fdb96b-43d6-57b5-a598-4b3206a34fb8\",\"data\":\"{\\\"stepRef\\\":\\\"step.15.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":15,\\\"column\\\":1,\\\"offset\\\":441},\\\"end\\\":{\\\"line\\\":15,\\\"column\\\":42,\\\"offset\\\":482}}}\",\"fields\":{\"KEY\":\"displayName\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-faa731a2-6363-5bf4-a539-0be98d083dd5\",\"fields\":{\"PATH\":\"name\"}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-6ed88062-43ef-5cbc-9d22-5dfe58b8d505\",\"data\":\"{\\\"stepRef\\\":\\\"step.16.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":16,\\\"column\\\":1,\\\"offset\\\":484},\\\"end\\\":{\\\"line\\\":16,\\\"column\\\":49,\\\"offset\\\":532}}}\",\"fields\":{\"KEY\":\"active\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_convert\",\"id\":\"logic-75caef84-5d7c-50fb-b93e-782ff0374168\",\"fields\":{\"TYPE\":\"BOOLEAN\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-a597de46-207e-55ba-b07c-cc0a4f771cdb\",\"fields\":{\"PATH\":\"enabled\"}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-43621dcc-6710-51c8-818f-3d325ff545cd\",\"data\":\"{\\\"stepRef\\\":\\\"step.17.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":17,\\\"column\\\":1,\\\"offset\\\":534},\\\"end\\\":{\\\"line\\\":17,\\\"column\\\":79,\\\"offset\\\":612}}}\",\"fields\":{\"KEY\":\"status\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"logic_ternary\",\"id\":\"logic-0802826a-f729-57c2-82c5-8182db4cf810\",\"inputs\":{\"IF\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-a4c09a01-46c1-5a45-9bd8-95ae6522eab2\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-75e97da0-decd-5650-b2c5-ad98479f405f\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-2ecd9988-561f-57eb-a564-ea84a1cdc11d\",\"fields\":{\"NUM\":60}}}}}},\"THEN\":{\"block\":{\"type\":\"text\",\"id\":\"logic-2e36936f-8135-5ade-808b-9ea74dd69441\",\"fields\":{\"TEXT\":\"ready\"}}},\"ELSE\":{\"block\":{\"type\":\"text\",\"id\":\"logic-18e6dd4a-06a8-5b8c-beb2-1220c8dd664d\",\"fields\":{\"TEXT\":\"review\"}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-f75136e0-39e5-5d80-b05e-e794f8d346c0\",\"data\":\"{\\\"stepRef\\\":\\\"step.18.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":18,\\\"column\\\":1,\\\"offset\\\":614},\\\"end\\\":{\\\"line\\\":21,\\\"column\\\":3,\\\"offset\\\":735}}}\",\"fields\":{\"KEY\":\"summary\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_object_create\",\"id\":\"logic-73cbada1-db99-5db4-9533-5e869847de76\",\"inputs\":{\"PROPERTIES\":{\"block\":{\"type\":\"n8n_object_property\",\"id\":\"logic-74ecc838-2e0b-5d21-925c-b3e3df0eecbf\",\"fields\":{\"KEY\":\"passed\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-44c660d6-8e77-550c-9d0e-9ae02e7e252a\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-ffd66b46-566f-56e8-ac62-17f4ea9462ce\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-fe9b9bd9-ac2c-57cf-aa03-f60851cf424e\",\"fields\":{\"NUM\":60}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_object_property\",\"id\":\"logic-76ea2533-2c80-5208-a072-bc7b6be8d4c8\",\"fields\":{\"KEY\":\"tags\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"lists_create_with\",\"id\":\"logic-c79944f0-85af-55aa-893b-033b6cc50cc6\",\"extraState\":{\"itemCount\":2},\"inputs\":{\"ADD0\":{\"block\":{\"type\":\"text\",\"id\":\"logic-e1b0d0b4-c777-59dc-86e5-61c2b84f5b88\",\"fields\":{\"TEXT\":\"imported\"}}},\"ADD1\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-c5b27c12-82d4-5687-a759-dfa8668b810e\",\"fields\":{\"PATH\":\"category\"}}}}}}}}}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_if\",\"id\":\"logic-b7f3b6c0-2a4d-5310-8de3-6e7f789bb928\",\"data\":\"{\\\"stepRef\\\":\\\"step.22.1.if\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":22,\\\"column\\\":1,\\\"offset\\\":737},\\\"end\\\":{\\\"line\\\":29,\\\"column\\\":2,\\\"offset\\\":922}}}\",\"inputs\":{\"CONDITION\":{\"block\":{\"type\":\"logic_operation\",\"id\":\"logic-c489508c-482c-5d89-864b-9d881239d30c\",\"fields\":{\"OP\":\"OR\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"logic_operation\",\"id\":\"logic-18979805-f893-5184-8105-85027d5da73e\",\"fields\":{\"OP\":\"AND\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-d2906c6d-2fac-5380-859e-c5354338cff3\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-a62d6d0f-590c-5df7-b332-8d8583f8649b\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-e17bcc55-1b56-5a47-931e-7381ec937847\",\"fields\":{\"NUM\":60}}}}}},\"B\":{\"block\":{\"type\":\"n8n_convert\",\"id\":\"logic-164a66fb-f9ca-5ad2-a7b8-44aef43a1330\",\"fields\":{\"TYPE\":\"BOOLEAN\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-5b934b75-a85e-57a3-93c6-525b262c7dcf\",\"fields\":{\"PATH\":\"enabled\"}}}}}}}}},\"B\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-2c48e6cb-e187-5599-8aef-d7de5091f4ed\",\"fields\":{\"PATH\":\"override\"}}}}}},\"THEN\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-1b7fb0fc-da09-5170-be73-a12bae2e33fc\",\"data\":\"{\\\"stepRef\\\":\\\"step.26.2.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":26,\\\"column\\\":2,\\\"offset\\\":860},\\\"end\\\":{\\\"line\\\":26,\\\"column\\\":25,\\\"offset\\\":883}}}\",\"fields\":{\"KEY\":\"accepted\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"logic_boolean\",\"id\":\"logic-16de0b8c-f373-5c67-a561-d8ddade85c8d\",\"fields\":{\"BOOL\":\"TRUE\"}}}}}},\"ELSE\":{\"block\":{\"type\":\"n8n_delete_field\",\"id\":\"logic-5ec1c3fc-aa41-505d-84aa-69041b240926\",\"data\":\"{\\\"stepRef\\\":\\\"step.28.2.delete\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":28,\\\"column\\\":2,\\\"offset\\\":896},\\\"end\\\":{\\\"line\\\":28,\\\"column\\\":25,\\\"offset\\\":919}}}\",\"fields\":{\"KEY\":\"accepted\"}}}}}}}}}}}}}}}}}}}}]}},\"javascript\":\"const output = { ...$json };\\nif (!(((($json?.[\\\"score\\\"] ?? null) >= 0) && (($json?.[\\\"score\\\"] ?? null) <= 100)))) {\\n\\tthrow new Error(String(\\\"score must be in range\\\"));\\n}\\noutput[\\\"adjustedScore\\\"] = ((($json?.[\\\"score\\\"] ?? null) * 1.1) + 2);\\noutput[\\\"displayName\\\"] = ($json?.[\\\"name\\\"] ?? null);\\noutput[\\\"active\\\"] = Boolean(($json?.[\\\"enabled\\\"] ?? null));\\noutput[\\\"status\\\"] = ((($json?.[\\\"score\\\"] ?? null) >= 60) ? \\\"ready\\\" : \\\"review\\\");\\noutput[\\\"summary\\\"] = { [\\\"passed\\\"]: (($json?.[\\\"score\\\"] ?? null) >= 60), [\\\"tags\\\"]: [\\\"imported\\\", ($json?.[\\\"category\\\"] ?? null)] };\\nif ((((($json?.[\\\"score\\\"] ?? null) >= 60) && Boolean(($json?.[\\\"enabled\\\"] ?? null))) || ($json?.[\\\"override\\\"] ?? null))) {\\n\\toutput[\\\"accepted\\\"] = true;\\n} else {\\n\\tdelete output[\\\"accepted\\\"];\\n}\\nreturn { json: output };\\n\"}",
+    "javascript": "const output = { ...$json };\nif (!(((($json?.[\"score\"] ?? null) >= 0) && (($json?.[\"score\"] ?? null) <= 100)))) {\n\tthrow new Error(String(\"score must be in range\"));\n}\noutput[\"adjustedScore\"] = ((($json?.[\"score\"] ?? null) * 1.1) + 2);\noutput[\"displayName\"] = ($json?.[\"name\"] ?? null);\noutput[\"active\"] = Boolean(($json?.[\"enabled\"] ?? null));\noutput[\"status\"] = ((($json?.[\"score\"] ?? null) >= 60) ? \"ready\" : \"review\");\noutput[\"summary\"] = { [\"passed\"]: (($json?.[\"score\"] ?? null) >= 60), [\"tags\"]: [\"imported\", ($json?.[\"category\"] ?? null)] };\nif ((((($json?.[\"score\"] ?? null) >= 60) && Boolean(($json?.[\"enabled\"] ?? null))) || ($json?.[\"override\"] ?? null))) {\n\toutput[\"accepted\"] = true;\n} else {\n\tdelete output[\"accepted\"];\n}\nreturn { json: output };\n",
+    "blockRefs": [
+      "logic-0d661a97-76db-5255-9fd7-5de299f0ee03",
+      "logic-3c0c6861-8ba2-52de-9826-a79ea0dafa62",
+      "logic-d9a60df4-346e-5233-8640-adb662b73467",
+      "logic-45a98c5c-1462-5573-8537-1cca5112ebdb",
+      "logic-4911bf77-868f-5677-bf69-28eb6712018a",
+      "logic-df189116-78d8-533f-9e51-fb472af8b441",
+      "logic-1338d240-c992-566c-a0c2-fe67087062a4",
+      "logic-0a994351-1bb1-5540-b670-213be25093da",
+      "logic-9a9c7d84-4b10-52ab-b7bb-4b2c2d66d5d0",
+      "logic-dbc5ba62-9af0-5407-bfae-8653f67ee031",
+      "logic-905c3323-d28f-5ff4-9c16-415408d2c3e4",
+      "logic-889fd10a-3329-56f7-bf5a-adbc378d4a26",
+      "logic-cf369005-ebcc-504f-9f16-6f11450a8590",
+      "logic-8f578ebc-677f-50c0-99be-3191e517da7b",
+      "logic-a89a1b43-9fd9-5d2f-afe0-6a32af4fa0d2",
+      "logic-2ead9f9f-a7e9-545d-9bb4-cea631213489",
+      "logic-78fdb96b-43d6-57b5-a598-4b3206a34fb8",
+      "logic-faa731a2-6363-5bf4-a539-0be98d083dd5",
+      "logic-6ed88062-43ef-5cbc-9d22-5dfe58b8d505",
+      "logic-75caef84-5d7c-50fb-b93e-782ff0374168",
+      "logic-a597de46-207e-55ba-b07c-cc0a4f771cdb",
+      "logic-43621dcc-6710-51c8-818f-3d325ff545cd",
+      "logic-0802826a-f729-57c2-82c5-8182db4cf810",
+      "logic-a4c09a01-46c1-5a45-9bd8-95ae6522eab2",
+      "logic-75e97da0-decd-5650-b2c5-ad98479f405f",
+      "logic-2ecd9988-561f-57eb-a564-ea84a1cdc11d",
+      "logic-2e36936f-8135-5ade-808b-9ea74dd69441",
+      "logic-18e6dd4a-06a8-5b8c-beb2-1220c8dd664d",
+      "logic-f75136e0-39e5-5d80-b05e-e794f8d346c0",
+      "logic-73cbada1-db99-5db4-9533-5e869847de76",
+      "logic-74ecc838-2e0b-5d21-925c-b3e3df0eecbf",
+      "logic-44c660d6-8e77-550c-9d0e-9ae02e7e252a",
+      "logic-ffd66b46-566f-56e8-ac62-17f4ea9462ce",
+      "logic-fe9b9bd9-ac2c-57cf-aa03-f60851cf424e",
+      "logic-76ea2533-2c80-5208-a072-bc7b6be8d4c8",
+      "logic-c79944f0-85af-55aa-893b-033b6cc50cc6",
+      "logic-e1b0d0b4-c777-59dc-86e5-61c2b84f5b88",
+      "logic-c5b27c12-82d4-5687-a759-dfa8668b810e",
+      "logic-b7f3b6c0-2a4d-5310-8de3-6e7f789bb928",
+      "logic-c489508c-482c-5d89-864b-9d881239d30c",
+      "logic-18979805-f893-5184-8105-85027d5da73e",
+      "logic-d2906c6d-2fac-5380-859e-c5354338cff3",
+      "logic-a62d6d0f-590c-5df7-b332-8d8583f8649b",
+      "logic-e17bcc55-1b56-5a47-931e-7381ec937847",
+      "logic-164a66fb-f9ca-5ad2-a7b8-44aef43a1330",
+      "logic-5b934b75-a85e-57a3-93c6-525b262c7dcf",
+      "logic-2c48e6cb-e187-5599-8aef-d7de5091f4ed",
+      "logic-1b7fb0fc-da09-5170-be73-a12bae2e33fc",
+      "logic-16de0b8c-f373-5c67-a561-d8ddade85c8d",
+      "logic-5ec1c3fc-aa41-505d-84aa-69041b240926"
+    ],
+    "sourceMap": [
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-2b425527-856c-53fb-8d84-670fa801ad16",
+        "semanticRef": "step.11.1.assert",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-3c0c6861-8ba2-52de-9826-a79ea0dafa62"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 11,
+            "column": 1,
+            "offset": 227
+          },
+          "end": {
+            "line": 13,
+            "column": 2,
+            "offset": 369
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "assert"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-782c7c67-ed3c-5c79-bfe9-0e0a679deb8c",
+        "semanticRef": "step.14.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-905c3323-d28f-5ff4-9c16-415408d2c3e4"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 14,
+            "column": 1,
+            "offset": 371
+          },
+          "end": {
+            "line": 14,
+            "column": 69,
+            "offset": 439
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "adjustedScore"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-dd506e85-b2a3-5275-8904-40f2c7a0e423",
+        "semanticRef": "step.15.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-78fdb96b-43d6-57b5-a598-4b3206a34fb8"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 15,
+            "column": 1,
+            "offset": 441
+          },
+          "end": {
+            "line": 15,
+            "column": 42,
+            "offset": 482
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "displayName"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-e2ca55c0-09c5-54d0-be44-124a52ac5408",
+        "semanticRef": "step.16.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-6ed88062-43ef-5cbc-9d22-5dfe58b8d505"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 16,
+            "column": 1,
+            "offset": 484
+          },
+          "end": {
+            "line": 16,
+            "column": 49,
+            "offset": 532
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "active"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-01312a6f-9da0-5ceb-b4f4-735419cf861d",
+        "semanticRef": "step.17.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-43621dcc-6710-51c8-818f-3d325ff545cd"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 17,
+            "column": 1,
+            "offset": 534
+          },
+          "end": {
+            "line": 17,
+            "column": 79,
+            "offset": 612
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "status"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-e4ea60eb-b324-5e1d-a74f-30328125d46e",
+        "semanticRef": "step.18.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-f75136e0-39e5-5d80-b05e-e794f8d346c0"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 18,
+            "column": 1,
+            "offset": 614
+          },
+          "end": {
+            "line": 21,
+            "column": 3,
+            "offset": 735
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "summary"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-b2fcf18a-685f-5749-8115-0fb3ec1a5012",
+        "semanticRef": "step.22.1.if",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-b7f3b6c0-2a4d-5310-8de3-6e7f789bb928"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 22,
+            "column": 1,
+            "offset": 737
+          },
+          "end": {
+            "line": 29,
+            "column": 2,
+            "offset": 922
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "if"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-06c5e574-7df8-53be-b393-dc77c990d31a",
+        "semanticRef": "step.26.2.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-1b7fb0fc-da09-5170-be73-a12bae2e33fc"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 26,
+            "column": 2,
+            "offset": 860
+          },
+          "end": {
+            "line": 26,
+            "column": 25,
+            "offset": 883
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "accepted"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-d05e9ade-1a1d-59fb-a16f-ea5c696d082f",
+        "semanticRef": "step.28.2.delete",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-5ec1c3fc-aa41-505d-84aa-69041b240926"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 28,
+            "column": 2,
+            "offset": 896
+          },
+          "end": {
+            "line": 28,
+            "column": 25,
+            "offset": 919
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "delete",
+          "targetField": "accepted"
+        }
+      }
+    ]
+  },
+  "dualCanvasDocument": {
+    "apiVersion": 1,
+    "documentRef": "education.generic-score-normalizer",
+    "revisionRef": "revision.1",
+    "title": "Generic score normalizer",
+    "profileRef": "education.generic-data-transform",
+    "workflow": {
+      "apiVersion": 1,
+      "fragmentRef": "fragment-b3a654f1-8b45-5ab2-b725-8291b676ee6a",
+      "nodes": [
+        {
+          "nodeRef": "node-c8fec746-c3c4-5a51-a4f5-18d6413032de",
+          "bindingRef": "manualTrigger",
+          "nodeType": "n8n-nodes-base.manualTrigger",
+          "typeVersion": 1,
+          "label": "Start",
+          "position": {
+            "x": 0,
+            "y": 0
+          },
+          "parameters": {}
+        },
+        {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "bindingRef": "blocklyCode",
+          "nodeType": "n8n-nodes-blockly-code.blocklyCode",
+          "typeVersion": 1,
+          "label": "Normalize score",
+          "position": {
+            "x": 280,
+            "y": 0
+          },
+          "parameters": {
+            "blocklyPayload": "{\"schemaVersion\":2,\"workspace\":{\"blocks\":{\"languageVersion\":0,\"blocks\":[{\"type\":\"n8n_transform_item\",\"id\":\"logic-0d661a97-76db-5255-9fd7-5de299f0ee03\",\"x\":24,\"y\":24,\"fields\":{\"MODE\":\"COPY\"},\"inputs\":{\"STATEMENTS\":{\"block\":{\"type\":\"n8n_assert\",\"id\":\"logic-3c0c6861-8ba2-52de-9826-a79ea0dafa62\",\"data\":\"{\\\"stepRef\\\":\\\"step.11.1.assert\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":11,\\\"column\\\":1,\\\"offset\\\":227},\\\"end\\\":{\\\"line\\\":13,\\\"column\\\":2,\\\"offset\\\":369}}}\",\"inputs\":{\"CONDITION\":{\"block\":{\"type\":\"logic_operation\",\"id\":\"logic-d9a60df4-346e-5233-8640-adb662b73467\",\"fields\":{\"OP\":\"AND\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-45a98c5c-1462-5573-8537-1cca5112ebdb\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-4911bf77-868f-5677-bf69-28eb6712018a\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-df189116-78d8-533f-9e51-fb472af8b441\",\"fields\":{\"NUM\":0}}}}}},\"B\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-1338d240-c992-566c-a0c2-fe67087062a4\",\"fields\":{\"OP\":\"LTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-0a994351-1bb1-5540-b670-213be25093da\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-9a9c7d84-4b10-52ab-b7bb-4b2c2d66d5d0\",\"fields\":{\"NUM\":100}}}}}}}}},\"MESSAGE\":{\"block\":{\"type\":\"text\",\"id\":\"logic-dbc5ba62-9af0-5407-bfae-8653f67ee031\",\"fields\":{\"TEXT\":\"score must be in range\"}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-905c3323-d28f-5ff4-9c16-415408d2c3e4\",\"data\":\"{\\\"stepRef\\\":\\\"step.14.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":14,\\\"column\\\":1,\\\"offset\\\":371},\\\"end\\\":{\\\"line\\\":14,\\\"column\\\":69,\\\"offset\\\":439}}}\",\"fields\":{\"KEY\":\"adjustedScore\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"math_arithmetic\",\"id\":\"logic-889fd10a-3329-56f7-bf5a-adbc378d4a26\",\"fields\":{\"OP\":\"ADD\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"math_arithmetic\",\"id\":\"logic-cf369005-ebcc-504f-9f16-6f11450a8590\",\"fields\":{\"OP\":\"MULTIPLY\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-8f578ebc-677f-50c0-99be-3191e517da7b\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-a89a1b43-9fd9-5d2f-afe0-6a32af4fa0d2\",\"fields\":{\"NUM\":1.1}}}}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-2ead9f9f-a7e9-545d-9bb4-cea631213489\",\"fields\":{\"NUM\":2}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-78fdb96b-43d6-57b5-a598-4b3206a34fb8\",\"data\":\"{\\\"stepRef\\\":\\\"step.15.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":15,\\\"column\\\":1,\\\"offset\\\":441},\\\"end\\\":{\\\"line\\\":15,\\\"column\\\":42,\\\"offset\\\":482}}}\",\"fields\":{\"KEY\":\"displayName\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-faa731a2-6363-5bf4-a539-0be98d083dd5\",\"fields\":{\"PATH\":\"name\"}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-6ed88062-43ef-5cbc-9d22-5dfe58b8d505\",\"data\":\"{\\\"stepRef\\\":\\\"step.16.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":16,\\\"column\\\":1,\\\"offset\\\":484},\\\"end\\\":{\\\"line\\\":16,\\\"column\\\":49,\\\"offset\\\":532}}}\",\"fields\":{\"KEY\":\"active\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_convert\",\"id\":\"logic-75caef84-5d7c-50fb-b93e-782ff0374168\",\"fields\":{\"TYPE\":\"BOOLEAN\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-a597de46-207e-55ba-b07c-cc0a4f771cdb\",\"fields\":{\"PATH\":\"enabled\"}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-43621dcc-6710-51c8-818f-3d325ff545cd\",\"data\":\"{\\\"stepRef\\\":\\\"step.17.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":17,\\\"column\\\":1,\\\"offset\\\":534},\\\"end\\\":{\\\"line\\\":17,\\\"column\\\":79,\\\"offset\\\":612}}}\",\"fields\":{\"KEY\":\"status\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"logic_ternary\",\"id\":\"logic-0802826a-f729-57c2-82c5-8182db4cf810\",\"inputs\":{\"IF\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-a4c09a01-46c1-5a45-9bd8-95ae6522eab2\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-75e97da0-decd-5650-b2c5-ad98479f405f\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-2ecd9988-561f-57eb-a564-ea84a1cdc11d\",\"fields\":{\"NUM\":60}}}}}},\"THEN\":{\"block\":{\"type\":\"text\",\"id\":\"logic-2e36936f-8135-5ade-808b-9ea74dd69441\",\"fields\":{\"TEXT\":\"ready\"}}},\"ELSE\":{\"block\":{\"type\":\"text\",\"id\":\"logic-18e6dd4a-06a8-5b8c-beb2-1220c8dd664d\",\"fields\":{\"TEXT\":\"review\"}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-f75136e0-39e5-5d80-b05e-e794f8d346c0\",\"data\":\"{\\\"stepRef\\\":\\\"step.18.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":18,\\\"column\\\":1,\\\"offset\\\":614},\\\"end\\\":{\\\"line\\\":21,\\\"column\\\":3,\\\"offset\\\":735}}}\",\"fields\":{\"KEY\":\"summary\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_object_create\",\"id\":\"logic-73cbada1-db99-5db4-9533-5e869847de76\",\"inputs\":{\"PROPERTIES\":{\"block\":{\"type\":\"n8n_object_property\",\"id\":\"logic-74ecc838-2e0b-5d21-925c-b3e3df0eecbf\",\"fields\":{\"KEY\":\"passed\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-44c660d6-8e77-550c-9d0e-9ae02e7e252a\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-ffd66b46-566f-56e8-ac62-17f4ea9462ce\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-fe9b9bd9-ac2c-57cf-aa03-f60851cf424e\",\"fields\":{\"NUM\":60}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_object_property\",\"id\":\"logic-76ea2533-2c80-5208-a072-bc7b6be8d4c8\",\"fields\":{\"KEY\":\"tags\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"lists_create_with\",\"id\":\"logic-c79944f0-85af-55aa-893b-033b6cc50cc6\",\"extraState\":{\"itemCount\":2},\"inputs\":{\"ADD0\":{\"block\":{\"type\":\"text\",\"id\":\"logic-e1b0d0b4-c777-59dc-86e5-61c2b84f5b88\",\"fields\":{\"TEXT\":\"imported\"}}},\"ADD1\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-c5b27c12-82d4-5687-a759-dfa8668b810e\",\"fields\":{\"PATH\":\"category\"}}}}}}}}}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_if\",\"id\":\"logic-b7f3b6c0-2a4d-5310-8de3-6e7f789bb928\",\"data\":\"{\\\"stepRef\\\":\\\"step.22.1.if\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":22,\\\"column\\\":1,\\\"offset\\\":737},\\\"end\\\":{\\\"line\\\":29,\\\"column\\\":2,\\\"offset\\\":922}}}\",\"inputs\":{\"CONDITION\":{\"block\":{\"type\":\"logic_operation\",\"id\":\"logic-c489508c-482c-5d89-864b-9d881239d30c\",\"fields\":{\"OP\":\"OR\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"logic_operation\",\"id\":\"logic-18979805-f893-5184-8105-85027d5da73e\",\"fields\":{\"OP\":\"AND\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-d2906c6d-2fac-5380-859e-c5354338cff3\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-a62d6d0f-590c-5df7-b332-8d8583f8649b\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-e17bcc55-1b56-5a47-931e-7381ec937847\",\"fields\":{\"NUM\":60}}}}}},\"B\":{\"block\":{\"type\":\"n8n_convert\",\"id\":\"logic-164a66fb-f9ca-5ad2-a7b8-44aef43a1330\",\"fields\":{\"TYPE\":\"BOOLEAN\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-5b934b75-a85e-57a3-93c6-525b262c7dcf\",\"fields\":{\"PATH\":\"enabled\"}}}}}}}}},\"B\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-2c48e6cb-e187-5599-8aef-d7de5091f4ed\",\"fields\":{\"PATH\":\"override\"}}}}}},\"THEN\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-1b7fb0fc-da09-5170-be73-a12bae2e33fc\",\"data\":\"{\\\"stepRef\\\":\\\"step.26.2.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":26,\\\"column\\\":2,\\\"offset\\\":860},\\\"end\\\":{\\\"line\\\":26,\\\"column\\\":25,\\\"offset\\\":883}}}\",\"fields\":{\"KEY\":\"accepted\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"logic_boolean\",\"id\":\"logic-16de0b8c-f373-5c67-a561-d8ddade85c8d\",\"fields\":{\"BOOL\":\"TRUE\"}}}}}},\"ELSE\":{\"block\":{\"type\":\"n8n_delete_field\",\"id\":\"logic-5ec1c3fc-aa41-505d-84aa-69041b240926\",\"data\":\"{\\\"stepRef\\\":\\\"step.28.2.delete\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":28,\\\"column\\\":2,\\\"offset\\\":896},\\\"end\\\":{\\\"line\\\":28,\\\"column\\\":25,\\\"offset\\\":919}}}\",\"fields\":{\"KEY\":\"accepted\"}}}}}}}}}}}}}}}}}}}}]}},\"javascript\":\"const output = { ...$json };\\nif (!(((($json?.[\\\"score\\\"] ?? null) >= 0) && (($json?.[\\\"score\\\"] ?? null) <= 100)))) {\\n\\tthrow new Error(String(\\\"score must be in range\\\"));\\n}\\noutput[\\\"adjustedScore\\\"] = ((($json?.[\\\"score\\\"] ?? null) * 1.1) + 2);\\noutput[\\\"displayName\\\"] = ($json?.[\\\"name\\\"] ?? null);\\noutput[\\\"active\\\"] = Boolean(($json?.[\\\"enabled\\\"] ?? null));\\noutput[\\\"status\\\"] = ((($json?.[\\\"score\\\"] ?? null) >= 60) ? \\\"ready\\\" : \\\"review\\\");\\noutput[\\\"summary\\\"] = { [\\\"passed\\\"]: (($json?.[\\\"score\\\"] ?? null) >= 60), [\\\"tags\\\"]: [\\\"imported\\\", ($json?.[\\\"category\\\"] ?? null)] };\\nif ((((($json?.[\\\"score\\\"] ?? null) >= 60) && Boolean(($json?.[\\\"enabled\\\"] ?? null))) || ($json?.[\\\"override\\\"] ?? null))) {\\n\\toutput[\\\"accepted\\\"] = true;\\n} else {\\n\\tdelete output[\\\"accepted\\\"];\\n}\\nreturn { json: output };\\n\"}"
+          }
+        }
+      ],
+      "connections": [
+        {
+          "connectionRef": "connection-65f7955d-affe-5aa8-9c01-bffe6d7e8987",
+          "from": {
+            "nodeRef": "node-c8fec746-c3c4-5a51-a4f5-18d6413032de",
+            "port": "main",
+            "index": 0
+          },
+          "to": {
+            "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+            "port": "main",
+            "index": 0
+          }
+        }
+      ],
+      "entryNodeRefs": [
+        "node-c8fec746-c3c4-5a51-a4f5-18d6413032de"
+      ],
+      "exitNodeRefs": [
+        "node-8470535e-6039-52d7-8763-370c91f64d7c"
+      ],
+      "metadata": {
+        "importerRef": "source-import.typescript.v1",
+        "sourceSemanticsRef": "source-semantics.blockly-data-transform-equivalent.v1",
+        "sourceRef": "source.generic-score-normalizer",
+        "canvasRef": "canvas-6786a3f6-676b-529f-ae7f-6a1ab0bf3590"
+      }
+    },
+    "canvases": [
+      {
+        "apiVersion": 1,
+        "canvasRef": "canvas-6786a3f6-676b-529f-ae7f-6a1ab0bf3590",
+        "adapterRef": "blockly.data-transform.v1",
+        "ownerNodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+        "payloadMediaType": "application/vnd.n8n.blockly-data+json",
+        "payload": "{\"schemaVersion\":2,\"workspace\":{\"blocks\":{\"languageVersion\":0,\"blocks\":[{\"type\":\"n8n_transform_item\",\"id\":\"logic-0d661a97-76db-5255-9fd7-5de299f0ee03\",\"x\":24,\"y\":24,\"fields\":{\"MODE\":\"COPY\"},\"inputs\":{\"STATEMENTS\":{\"block\":{\"type\":\"n8n_assert\",\"id\":\"logic-3c0c6861-8ba2-52de-9826-a79ea0dafa62\",\"data\":\"{\\\"stepRef\\\":\\\"step.11.1.assert\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":11,\\\"column\\\":1,\\\"offset\\\":227},\\\"end\\\":{\\\"line\\\":13,\\\"column\\\":2,\\\"offset\\\":369}}}\",\"inputs\":{\"CONDITION\":{\"block\":{\"type\":\"logic_operation\",\"id\":\"logic-d9a60df4-346e-5233-8640-adb662b73467\",\"fields\":{\"OP\":\"AND\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-45a98c5c-1462-5573-8537-1cca5112ebdb\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-4911bf77-868f-5677-bf69-28eb6712018a\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-df189116-78d8-533f-9e51-fb472af8b441\",\"fields\":{\"NUM\":0}}}}}},\"B\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-1338d240-c992-566c-a0c2-fe67087062a4\",\"fields\":{\"OP\":\"LTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-0a994351-1bb1-5540-b670-213be25093da\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-9a9c7d84-4b10-52ab-b7bb-4b2c2d66d5d0\",\"fields\":{\"NUM\":100}}}}}}}}},\"MESSAGE\":{\"block\":{\"type\":\"text\",\"id\":\"logic-dbc5ba62-9af0-5407-bfae-8653f67ee031\",\"fields\":{\"TEXT\":\"score must be in range\"}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-905c3323-d28f-5ff4-9c16-415408d2c3e4\",\"data\":\"{\\\"stepRef\\\":\\\"step.14.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":14,\\\"column\\\":1,\\\"offset\\\":371},\\\"end\\\":{\\\"line\\\":14,\\\"column\\\":69,\\\"offset\\\":439}}}\",\"fields\":{\"KEY\":\"adjustedScore\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"math_arithmetic\",\"id\":\"logic-889fd10a-3329-56f7-bf5a-adbc378d4a26\",\"fields\":{\"OP\":\"ADD\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"math_arithmetic\",\"id\":\"logic-cf369005-ebcc-504f-9f16-6f11450a8590\",\"fields\":{\"OP\":\"MULTIPLY\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-8f578ebc-677f-50c0-99be-3191e517da7b\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-a89a1b43-9fd9-5d2f-afe0-6a32af4fa0d2\",\"fields\":{\"NUM\":1.1}}}}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-2ead9f9f-a7e9-545d-9bb4-cea631213489\",\"fields\":{\"NUM\":2}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-78fdb96b-43d6-57b5-a598-4b3206a34fb8\",\"data\":\"{\\\"stepRef\\\":\\\"step.15.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":15,\\\"column\\\":1,\\\"offset\\\":441},\\\"end\\\":{\\\"line\\\":15,\\\"column\\\":42,\\\"offset\\\":482}}}\",\"fields\":{\"KEY\":\"displayName\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-faa731a2-6363-5bf4-a539-0be98d083dd5\",\"fields\":{\"PATH\":\"name\"}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-6ed88062-43ef-5cbc-9d22-5dfe58b8d505\",\"data\":\"{\\\"stepRef\\\":\\\"step.16.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":16,\\\"column\\\":1,\\\"offset\\\":484},\\\"end\\\":{\\\"line\\\":16,\\\"column\\\":49,\\\"offset\\\":532}}}\",\"fields\":{\"KEY\":\"active\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_convert\",\"id\":\"logic-75caef84-5d7c-50fb-b93e-782ff0374168\",\"fields\":{\"TYPE\":\"BOOLEAN\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-a597de46-207e-55ba-b07c-cc0a4f771cdb\",\"fields\":{\"PATH\":\"enabled\"}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-43621dcc-6710-51c8-818f-3d325ff545cd\",\"data\":\"{\\\"stepRef\\\":\\\"step.17.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":17,\\\"column\\\":1,\\\"offset\\\":534},\\\"end\\\":{\\\"line\\\":17,\\\"column\\\":79,\\\"offset\\\":612}}}\",\"fields\":{\"KEY\":\"status\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"logic_ternary\",\"id\":\"logic-0802826a-f729-57c2-82c5-8182db4cf810\",\"inputs\":{\"IF\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-a4c09a01-46c1-5a45-9bd8-95ae6522eab2\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-75e97da0-decd-5650-b2c5-ad98479f405f\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-2ecd9988-561f-57eb-a564-ea84a1cdc11d\",\"fields\":{\"NUM\":60}}}}}},\"THEN\":{\"block\":{\"type\":\"text\",\"id\":\"logic-2e36936f-8135-5ade-808b-9ea74dd69441\",\"fields\":{\"TEXT\":\"ready\"}}},\"ELSE\":{\"block\":{\"type\":\"text\",\"id\":\"logic-18e6dd4a-06a8-5b8c-beb2-1220c8dd664d\",\"fields\":{\"TEXT\":\"review\"}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-f75136e0-39e5-5d80-b05e-e794f8d346c0\",\"data\":\"{\\\"stepRef\\\":\\\"step.18.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":18,\\\"column\\\":1,\\\"offset\\\":614},\\\"end\\\":{\\\"line\\\":21,\\\"column\\\":3,\\\"offset\\\":735}}}\",\"fields\":{\"KEY\":\"summary\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_object_create\",\"id\":\"logic-73cbada1-db99-5db4-9533-5e869847de76\",\"inputs\":{\"PROPERTIES\":{\"block\":{\"type\":\"n8n_object_property\",\"id\":\"logic-74ecc838-2e0b-5d21-925c-b3e3df0eecbf\",\"fields\":{\"KEY\":\"passed\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-44c660d6-8e77-550c-9d0e-9ae02e7e252a\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-ffd66b46-566f-56e8-ac62-17f4ea9462ce\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-fe9b9bd9-ac2c-57cf-aa03-f60851cf424e\",\"fields\":{\"NUM\":60}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_object_property\",\"id\":\"logic-76ea2533-2c80-5208-a072-bc7b6be8d4c8\",\"fields\":{\"KEY\":\"tags\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"lists_create_with\",\"id\":\"logic-c79944f0-85af-55aa-893b-033b6cc50cc6\",\"extraState\":{\"itemCount\":2},\"inputs\":{\"ADD0\":{\"block\":{\"type\":\"text\",\"id\":\"logic-e1b0d0b4-c777-59dc-86e5-61c2b84f5b88\",\"fields\":{\"TEXT\":\"imported\"}}},\"ADD1\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-c5b27c12-82d4-5687-a759-dfa8668b810e\",\"fields\":{\"PATH\":\"category\"}}}}}}}}}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_if\",\"id\":\"logic-b7f3b6c0-2a4d-5310-8de3-6e7f789bb928\",\"data\":\"{\\\"stepRef\\\":\\\"step.22.1.if\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":22,\\\"column\\\":1,\\\"offset\\\":737},\\\"end\\\":{\\\"line\\\":29,\\\"column\\\":2,\\\"offset\\\":922}}}\",\"inputs\":{\"CONDITION\":{\"block\":{\"type\":\"logic_operation\",\"id\":\"logic-c489508c-482c-5d89-864b-9d881239d30c\",\"fields\":{\"OP\":\"OR\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"logic_operation\",\"id\":\"logic-18979805-f893-5184-8105-85027d5da73e\",\"fields\":{\"OP\":\"AND\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-d2906c6d-2fac-5380-859e-c5354338cff3\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-a62d6d0f-590c-5df7-b332-8d8583f8649b\",\"fields\":{\"PATH\":\"score\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-e17bcc55-1b56-5a47-931e-7381ec937847\",\"fields\":{\"NUM\":60}}}}}},\"B\":{\"block\":{\"type\":\"n8n_convert\",\"id\":\"logic-164a66fb-f9ca-5ad2-a7b8-44aef43a1330\",\"fields\":{\"TYPE\":\"BOOLEAN\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-5b934b75-a85e-57a3-93c6-525b262c7dcf\",\"fields\":{\"PATH\":\"enabled\"}}}}}}}}},\"B\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-2c48e6cb-e187-5599-8aef-d7de5091f4ed\",\"fields\":{\"PATH\":\"override\"}}}}}},\"THEN\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-1b7fb0fc-da09-5170-be73-a12bae2e33fc\",\"data\":\"{\\\"stepRef\\\":\\\"step.26.2.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":26,\\\"column\\\":2,\\\"offset\\\":860},\\\"end\\\":{\\\"line\\\":26,\\\"column\\\":25,\\\"offset\\\":883}}}\",\"fields\":{\"KEY\":\"accepted\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"logic_boolean\",\"id\":\"logic-16de0b8c-f373-5c67-a561-d8ddade85c8d\",\"fields\":{\"BOOL\":\"TRUE\"}}}}}},\"ELSE\":{\"block\":{\"type\":\"n8n_delete_field\",\"id\":\"logic-5ec1c3fc-aa41-505d-84aa-69041b240926\",\"data\":\"{\\\"stepRef\\\":\\\"step.28.2.delete\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-score-normalizer\\\",\\\"start\\\":{\\\"line\\\":28,\\\"column\\\":2,\\\"offset\\\":896},\\\"end\\\":{\\\"line\\\":28,\\\"column\\\":25,\\\"offset\\\":919}}}\",\"fields\":{\"KEY\":\"accepted\"}}}}}}}}}}}}}}}}}}}}]}},\"javascript\":\"const output = { ...$json };\\nif (!(((($json?.[\\\"score\\\"] ?? null) >= 0) && (($json?.[\\\"score\\\"] ?? null) <= 100)))) {\\n\\tthrow new Error(String(\\\"score must be in range\\\"));\\n}\\noutput[\\\"adjustedScore\\\"] = ((($json?.[\\\"score\\\"] ?? null) * 1.1) + 2);\\noutput[\\\"displayName\\\"] = ($json?.[\\\"name\\\"] ?? null);\\noutput[\\\"active\\\"] = Boolean(($json?.[\\\"enabled\\\"] ?? null));\\noutput[\\\"status\\\"] = ((($json?.[\\\"score\\\"] ?? null) >= 60) ? \\\"ready\\\" : \\\"review\\\");\\noutput[\\\"summary\\\"] = { [\\\"passed\\\"]: (($json?.[\\\"score\\\"] ?? null) >= 60), [\\\"tags\\\"]: [\\\"imported\\\", ($json?.[\\\"category\\\"] ?? null)] };\\nif ((((($json?.[\\\"score\\\"] ?? null) >= 60) && Boolean(($json?.[\\\"enabled\\\"] ?? null))) || ($json?.[\\\"override\\\"] ?? null))) {\\n\\toutput[\\\"accepted\\\"] = true;\\n} else {\\n\\tdelete output[\\\"accepted\\\"];\\n}\\nreturn { json: output };\\n\"}",
+        "preview": "const output = { ...$json };\nif (!(((($json?.[\"score\"] ?? null) >= 0) && (($json?.[\"score\"] ?? null) <= 100)))) {\n\tthrow new Error(String(\"score must be in range\"));\n}\noutput[\"adjustedScore\"] = ((($json?.[\"score\"] ?? null) * 1.1) + 2);\noutput[\"displayName\"] = ($json?.[\"name\"] ?? null);\noutput[\"active\"] = Boolean(($json?.[\"enabled\"] ?? null));\noutput[\"status\"] = ((($json?.[\"score\"] ?? null) >= 60) ? \"ready\" : \"review\");\noutput[\"summary\"] = { [\"passed\"]: (($json?.[\"score\"] ?? null) >= 60), [\"tags\"]: [\"imported\", ($json?.[\"category\"] ?? null)] };\nif ((((($json?.[\"score\"] ?? null) >= 60) && Boolean(($json?.[\"enabled\"] ?? null))) || ($json?.[\"override\"] ?? null))) {\n\toutput[\"accepted\"] = true;\n} else {\n\tdelete output[\"accepted\"];\n}\nreturn { json: output };\n",
+        "blockRefs": [
+          "logic-0d661a97-76db-5255-9fd7-5de299f0ee03",
+          "logic-3c0c6861-8ba2-52de-9826-a79ea0dafa62",
+          "logic-d9a60df4-346e-5233-8640-adb662b73467",
+          "logic-45a98c5c-1462-5573-8537-1cca5112ebdb",
+          "logic-4911bf77-868f-5677-bf69-28eb6712018a",
+          "logic-df189116-78d8-533f-9e51-fb472af8b441",
+          "logic-1338d240-c992-566c-a0c2-fe67087062a4",
+          "logic-0a994351-1bb1-5540-b670-213be25093da",
+          "logic-9a9c7d84-4b10-52ab-b7bb-4b2c2d66d5d0",
+          "logic-dbc5ba62-9af0-5407-bfae-8653f67ee031",
+          "logic-905c3323-d28f-5ff4-9c16-415408d2c3e4",
+          "logic-889fd10a-3329-56f7-bf5a-adbc378d4a26",
+          "logic-cf369005-ebcc-504f-9f16-6f11450a8590",
+          "logic-8f578ebc-677f-50c0-99be-3191e517da7b",
+          "logic-a89a1b43-9fd9-5d2f-afe0-6a32af4fa0d2",
+          "logic-2ead9f9f-a7e9-545d-9bb4-cea631213489",
+          "logic-78fdb96b-43d6-57b5-a598-4b3206a34fb8",
+          "logic-faa731a2-6363-5bf4-a539-0be98d083dd5",
+          "logic-6ed88062-43ef-5cbc-9d22-5dfe58b8d505",
+          "logic-75caef84-5d7c-50fb-b93e-782ff0374168",
+          "logic-a597de46-207e-55ba-b07c-cc0a4f771cdb",
+          "logic-43621dcc-6710-51c8-818f-3d325ff545cd",
+          "logic-0802826a-f729-57c2-82c5-8182db4cf810",
+          "logic-a4c09a01-46c1-5a45-9bd8-95ae6522eab2",
+          "logic-75e97da0-decd-5650-b2c5-ad98479f405f",
+          "logic-2ecd9988-561f-57eb-a564-ea84a1cdc11d",
+          "logic-2e36936f-8135-5ade-808b-9ea74dd69441",
+          "logic-18e6dd4a-06a8-5b8c-beb2-1220c8dd664d",
+          "logic-f75136e0-39e5-5d80-b05e-e794f8d346c0",
+          "logic-73cbada1-db99-5db4-9533-5e869847de76",
+          "logic-74ecc838-2e0b-5d21-925c-b3e3df0eecbf",
+          "logic-44c660d6-8e77-550c-9d0e-9ae02e7e252a",
+          "logic-ffd66b46-566f-56e8-ac62-17f4ea9462ce",
+          "logic-fe9b9bd9-ac2c-57cf-aa03-f60851cf424e",
+          "logic-76ea2533-2c80-5208-a072-bc7b6be8d4c8",
+          "logic-c79944f0-85af-55aa-893b-033b6cc50cc6",
+          "logic-e1b0d0b4-c777-59dc-86e5-61c2b84f5b88",
+          "logic-c5b27c12-82d4-5687-a759-dfa8668b810e",
+          "logic-b7f3b6c0-2a4d-5310-8de3-6e7f789bb928",
+          "logic-c489508c-482c-5d89-864b-9d881239d30c",
+          "logic-18979805-f893-5184-8105-85027d5da73e",
+          "logic-d2906c6d-2fac-5380-859e-c5354338cff3",
+          "logic-a62d6d0f-590c-5df7-b332-8d8583f8649b",
+          "logic-e17bcc55-1b56-5a47-931e-7381ec937847",
+          "logic-164a66fb-f9ca-5ad2-a7b8-44aef43a1330",
+          "logic-5b934b75-a85e-57a3-93c6-525b262c7dcf",
+          "logic-2c48e6cb-e187-5599-8aef-d7de5091f4ed",
+          "logic-1b7fb0fc-da09-5170-be73-a12bae2e33fc",
+          "logic-16de0b8c-f373-5c67-a561-d8ddade85c8d",
+          "logic-5ec1c3fc-aa41-505d-84aa-69041b240926"
+        ],
+        "sourceMap": [
+          {
+            "apiVersion": 1,
+            "mappingRef": "mapping-3c21a0bd-2f86-51b5-8e01-ca511c92f73d",
+            "semanticRef": "step-c2e96536-8307-5479-b493-db9e4c4b3635",
+            "artifact": {
+              "kind": "canvas",
+              "ref": "canvas-6786a3f6-676b-529f-ae7f-6a1ab0bf3590"
+            },
+            "source": {
+              "sourceRef": "source.generic-score-normalizer",
+              "start": {
+                "line": 10,
+                "column": 1,
+                "offset": 172
+              },
+              "end": {
+                "line": 10,
+                "column": 54,
+                "offset": 225
+              }
+            },
+            "context": {
+              "importerRef": "source-import.typescript.v1"
+            }
+          },
+          {
+            "apiVersion": 1,
+            "mappingRef": "mapping-2b425527-856c-53fb-8d84-670fa801ad16",
+            "semanticRef": "step.11.1.assert",
+            "artifact": {
+              "kind": "canvasBlock",
+              "ref": "logic-3c0c6861-8ba2-52de-9826-a79ea0dafa62"
+            },
+            "source": {
+              "sourceRef": "source.generic-score-normalizer",
+              "start": {
+                "line": 11,
+                "column": 1,
+                "offset": 227
+              },
+              "end": {
+                "line": 13,
+                "column": 2,
+                "offset": 369
+              }
+            },
+            "context": {
+              "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+              "statementKind": "assert"
+            }
+          },
+          {
+            "apiVersion": 1,
+            "mappingRef": "mapping-782c7c67-ed3c-5c79-bfe9-0e0a679deb8c",
+            "semanticRef": "step.14.1.set",
+            "artifact": {
+              "kind": "canvasBlock",
+              "ref": "logic-905c3323-d28f-5ff4-9c16-415408d2c3e4"
+            },
+            "source": {
+              "sourceRef": "source.generic-score-normalizer",
+              "start": {
+                "line": 14,
+                "column": 1,
+                "offset": 371
+              },
+              "end": {
+                "line": 14,
+                "column": 69,
+                "offset": 439
+              }
+            },
+            "context": {
+              "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+              "statementKind": "set",
+              "targetField": "adjustedScore"
+            }
+          },
+          {
+            "apiVersion": 1,
+            "mappingRef": "mapping-dd506e85-b2a3-5275-8904-40f2c7a0e423",
+            "semanticRef": "step.15.1.set",
+            "artifact": {
+              "kind": "canvasBlock",
+              "ref": "logic-78fdb96b-43d6-57b5-a598-4b3206a34fb8"
+            },
+            "source": {
+              "sourceRef": "source.generic-score-normalizer",
+              "start": {
+                "line": 15,
+                "column": 1,
+                "offset": 441
+              },
+              "end": {
+                "line": 15,
+                "column": 42,
+                "offset": 482
+              }
+            },
+            "context": {
+              "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+              "statementKind": "set",
+              "targetField": "displayName"
+            }
+          },
+          {
+            "apiVersion": 1,
+            "mappingRef": "mapping-e2ca55c0-09c5-54d0-be44-124a52ac5408",
+            "semanticRef": "step.16.1.set",
+            "artifact": {
+              "kind": "canvasBlock",
+              "ref": "logic-6ed88062-43ef-5cbc-9d22-5dfe58b8d505"
+            },
+            "source": {
+              "sourceRef": "source.generic-score-normalizer",
+              "start": {
+                "line": 16,
+                "column": 1,
+                "offset": 484
+              },
+              "end": {
+                "line": 16,
+                "column": 49,
+                "offset": 532
+              }
+            },
+            "context": {
+              "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+              "statementKind": "set",
+              "targetField": "active"
+            }
+          },
+          {
+            "apiVersion": 1,
+            "mappingRef": "mapping-01312a6f-9da0-5ceb-b4f4-735419cf861d",
+            "semanticRef": "step.17.1.set",
+            "artifact": {
+              "kind": "canvasBlock",
+              "ref": "logic-43621dcc-6710-51c8-818f-3d325ff545cd"
+            },
+            "source": {
+              "sourceRef": "source.generic-score-normalizer",
+              "start": {
+                "line": 17,
+                "column": 1,
+                "offset": 534
+              },
+              "end": {
+                "line": 17,
+                "column": 79,
+                "offset": 612
+              }
+            },
+            "context": {
+              "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+              "statementKind": "set",
+              "targetField": "status"
+            }
+          },
+          {
+            "apiVersion": 1,
+            "mappingRef": "mapping-e4ea60eb-b324-5e1d-a74f-30328125d46e",
+            "semanticRef": "step.18.1.set",
+            "artifact": {
+              "kind": "canvasBlock",
+              "ref": "logic-f75136e0-39e5-5d80-b05e-e794f8d346c0"
+            },
+            "source": {
+              "sourceRef": "source.generic-score-normalizer",
+              "start": {
+                "line": 18,
+                "column": 1,
+                "offset": 614
+              },
+              "end": {
+                "line": 21,
+                "column": 3,
+                "offset": 735
+              }
+            },
+            "context": {
+              "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+              "statementKind": "set",
+              "targetField": "summary"
+            }
+          },
+          {
+            "apiVersion": 1,
+            "mappingRef": "mapping-b2fcf18a-685f-5749-8115-0fb3ec1a5012",
+            "semanticRef": "step.22.1.if",
+            "artifact": {
+              "kind": "canvasBlock",
+              "ref": "logic-b7f3b6c0-2a4d-5310-8de3-6e7f789bb928"
+            },
+            "source": {
+              "sourceRef": "source.generic-score-normalizer",
+              "start": {
+                "line": 22,
+                "column": 1,
+                "offset": 737
+              },
+              "end": {
+                "line": 29,
+                "column": 2,
+                "offset": 922
+              }
+            },
+            "context": {
+              "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+              "statementKind": "if"
+            }
+          },
+          {
+            "apiVersion": 1,
+            "mappingRef": "mapping-06c5e574-7df8-53be-b393-dc77c990d31a",
+            "semanticRef": "step.26.2.set",
+            "artifact": {
+              "kind": "canvasBlock",
+              "ref": "logic-1b7fb0fc-da09-5170-be73-a12bae2e33fc"
+            },
+            "source": {
+              "sourceRef": "source.generic-score-normalizer",
+              "start": {
+                "line": 26,
+                "column": 2,
+                "offset": 860
+              },
+              "end": {
+                "line": 26,
+                "column": 25,
+                "offset": 883
+              }
+            },
+            "context": {
+              "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+              "statementKind": "set",
+              "targetField": "accepted"
+            }
+          },
+          {
+            "apiVersion": 1,
+            "mappingRef": "mapping-d05e9ade-1a1d-59fb-a16f-ea5c696d082f",
+            "semanticRef": "step.28.2.delete",
+            "artifact": {
+              "kind": "canvasBlock",
+              "ref": "logic-5ec1c3fc-aa41-505d-84aa-69041b240926"
+            },
+            "source": {
+              "sourceRef": "source.generic-score-normalizer",
+              "start": {
+                "line": 28,
+                "column": 2,
+                "offset": 896
+              },
+              "end": {
+                "line": 28,
+                "column": 25,
+                "offset": 919
+              }
+            },
+            "context": {
+              "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+              "statementKind": "delete",
+              "targetField": "accepted"
+            }
+          }
+        ]
+      }
+    ],
+    "sources": [
+      {
+        "apiVersion": 1,
+        "sourceRef": "source.generic-score-normalizer",
+        "language": "typescript",
+        "content": "interface ScoreInput {\n\tname: string;\n\tscore: number | string;\n\tenabled: boolean;\n\toverride: boolean;\n\tcategory: string;\n}\n\nexport function transform(input: ScoreInput) {\n\tconst output: Record<string, unknown> = { ...input };\n\tif (!(((input?.score ?? null) as number) >= 0 && ((input?.score ?? null) as number) <= 100)) {\n\t\tthrow new Error('score must be in range');\n\t}\n\toutput.adjustedScore = ((input?.score ?? null) as number) * 1.1 + 2;\n\toutput.displayName = input?.name ?? null;\n\toutput.active = Boolean(input?.enabled ?? null);\n\toutput.status = ((input?.score ?? null) as number) >= 60 ? 'ready' : 'review';\n\toutput.summary = {\n\t\tpassed: ((input?.score ?? null) as number) >= 60,\n\t\ttags: ['imported', input?.category ?? null],\n\t};\n\tif (\n\t\t(((input?.score ?? null) as number) >= 60 && Boolean(input?.enabled ?? null)) ||\n\t\t(input?.override ?? null)\n\t) {\n\t\toutput.accepted = true;\n\t} else {\n\t\tdelete output.accepted;\n\t}\n\treturn output;\n}\n",
+        "uri": "docs/education/examples/generic-score-normalizer.ts"
+      }
+    ],
+    "sourceMap": [
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-83255232-cdae-5719-b3e4-85548fa87c19",
+        "semanticRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+        "artifact": {
+          "kind": "workflowNode",
+          "ref": "node-8470535e-6039-52d7-8763-370c91f64d7c"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 9,
+            "column": 0,
+            "offset": 124
+          },
+          "end": {
+            "line": 31,
+            "column": 1,
+            "offset": 940
+          }
+        },
+        "context": {
+          "importerRef": "source-import.typescript.v1"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-3c21a0bd-2f86-51b5-8e01-ca511c92f73d",
+        "semanticRef": "step-c2e96536-8307-5479-b493-db9e4c4b3635",
+        "artifact": {
+          "kind": "canvas",
+          "ref": "canvas-6786a3f6-676b-529f-ae7f-6a1ab0bf3590"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 10,
+            "column": 1,
+            "offset": 172
+          },
+          "end": {
+            "line": 10,
+            "column": 54,
+            "offset": 225
+          }
+        },
+        "context": {
+          "importerRef": "source-import.typescript.v1"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-e2064c6c-eb87-5a93-a439-08c383700616",
+        "semanticRef": "step-3583bd1e-844d-5278-a1c5-cdaa77ff36eb",
+        "artifact": {
+          "kind": "workflowNode",
+          "ref": "node-8470535e-6039-52d7-8763-370c91f64d7c"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 30,
+            "column": 1,
+            "offset": 924
+          },
+          "end": {
+            "line": 30,
+            "column": 15,
+            "offset": 938
+          }
+        },
+        "context": {
+          "importerRef": "source-import.typescript.v1"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-2b425527-856c-53fb-8d84-670fa801ad16",
+        "semanticRef": "step.11.1.assert",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-3c0c6861-8ba2-52de-9826-a79ea0dafa62"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 11,
+            "column": 1,
+            "offset": 227
+          },
+          "end": {
+            "line": 13,
+            "column": 2,
+            "offset": 369
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "assert"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-782c7c67-ed3c-5c79-bfe9-0e0a679deb8c",
+        "semanticRef": "step.14.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-905c3323-d28f-5ff4-9c16-415408d2c3e4"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 14,
+            "column": 1,
+            "offset": 371
+          },
+          "end": {
+            "line": 14,
+            "column": 69,
+            "offset": 439
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "adjustedScore"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-dd506e85-b2a3-5275-8904-40f2c7a0e423",
+        "semanticRef": "step.15.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-78fdb96b-43d6-57b5-a598-4b3206a34fb8"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 15,
+            "column": 1,
+            "offset": 441
+          },
+          "end": {
+            "line": 15,
+            "column": 42,
+            "offset": 482
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "displayName"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-e2ca55c0-09c5-54d0-be44-124a52ac5408",
+        "semanticRef": "step.16.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-6ed88062-43ef-5cbc-9d22-5dfe58b8d505"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 16,
+            "column": 1,
+            "offset": 484
+          },
+          "end": {
+            "line": 16,
+            "column": 49,
+            "offset": 532
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "active"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-01312a6f-9da0-5ceb-b4f4-735419cf861d",
+        "semanticRef": "step.17.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-43621dcc-6710-51c8-818f-3d325ff545cd"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 17,
+            "column": 1,
+            "offset": 534
+          },
+          "end": {
+            "line": 17,
+            "column": 79,
+            "offset": 612
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "status"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-e4ea60eb-b324-5e1d-a74f-30328125d46e",
+        "semanticRef": "step.18.1.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-f75136e0-39e5-5d80-b05e-e794f8d346c0"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 18,
+            "column": 1,
+            "offset": 614
+          },
+          "end": {
+            "line": 21,
+            "column": 3,
+            "offset": 735
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "summary"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-b2fcf18a-685f-5749-8115-0fb3ec1a5012",
+        "semanticRef": "step.22.1.if",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-b7f3b6c0-2a4d-5310-8de3-6e7f789bb928"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 22,
+            "column": 1,
+            "offset": 737
+          },
+          "end": {
+            "line": 29,
+            "column": 2,
+            "offset": 922
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "if"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-06c5e574-7df8-53be-b393-dc77c990d31a",
+        "semanticRef": "step.26.2.set",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-1b7fb0fc-da09-5170-be73-a12bae2e33fc"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 26,
+            "column": 2,
+            "offset": 860
+          },
+          "end": {
+            "line": 26,
+            "column": 25,
+            "offset": 883
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "set",
+          "targetField": "accepted"
+        }
+      },
+      {
+        "apiVersion": 1,
+        "mappingRef": "mapping-d05e9ade-1a1d-59fb-a16f-ea5c696d082f",
+        "semanticRef": "step.28.2.delete",
+        "artifact": {
+          "kind": "canvasBlock",
+          "ref": "logic-5ec1c3fc-aa41-505d-84aa-69041b240926"
+        },
+        "source": {
+          "sourceRef": "source.generic-score-normalizer",
+          "start": {
+            "line": 28,
+            "column": 2,
+            "offset": 896
+          },
+          "end": {
+            "line": 28,
+            "column": 25,
+            "offset": 919
+          }
+        },
+        "context": {
+          "nodeRef": "node-8470535e-6039-52d7-8763-370c91f64d7c",
+          "statementKind": "delete",
+          "targetField": "accepted"
+        }
+      }
+    ],
+    "metadata": {
+      "importerRef": "source-import.typescript.v1",
+      "sourceSemanticsRef": "source-semantics.blockly-data-transform-equivalent.v1"
+    }
+  }
+}

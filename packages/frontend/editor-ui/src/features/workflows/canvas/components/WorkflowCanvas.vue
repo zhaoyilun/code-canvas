@@ -36,6 +36,7 @@ import Canvas from './Canvas.vue';
 import { injectWorkflowDocumentStore } from '@/app/stores/workflowDocument.store';
 import { useWorkflowDocumentRenderData } from '@/app/stores/workflowDocument/useWorkflowDocumentRenderData';
 import { useExperimentalNdvStore } from '../experimental/experimentalNdv.store';
+import { resolveWorkflowWorkbenchProfile } from '@/app/components/workbench/workflowWorkbench';
 
 defineOptions({
 	inheritAttrs: false,
@@ -100,12 +101,10 @@ const nodes = computed(() => {
 		: workflowDocumentStore.value.allNodes;
 });
 const connections = computed(() => workflowDocumentStore.value.connectionsBySourceNode);
-const isCompetitionCanvas = computed(() =>
-	nodes.value.some(
-		(node) =>
-			node.type === 'CUSTOM.blocklyCode' ||
-			node.type === 'CUSTOM.robotSkillPlan' ||
-			node.type.startsWith('CUSTOM.robot'),
+const workbenchProfile = computed(() =>
+	resolveWorkflowWorkbenchProfile(
+		workflowDocumentStore.value.meta,
+		workflowDocumentStore.value.allNodes,
 	),
 );
 
@@ -305,7 +304,8 @@ defineExpose({
 
 <template>
 	<div
-		:class="[$style.wrapper, { 'competition-canvas': isCompetitionCanvas }]"
+		:class="$style.wrapper"
+		:data-canvas-profile="workbenchProfile?.id"
 		data-test-id="canvas-wrapper"
 	>
 		<div id="canvas" :class="$style.canvas">
@@ -350,4 +350,4 @@ defineExpose({
 }
 </style>
 
-<style lang="scss" src="./WorkflowCanvas.competition.scss"></style>
+<style lang="scss" src="./WorkflowCanvas.workbench.scss"></style>

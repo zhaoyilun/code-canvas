@@ -1,19 +1,21 @@
-# n8n-blockly — Blockly 数据变换 + RoboFrame 机器人技能节点(n8n fork)
+# n8n-blockly — 通用代码双画布教学平台（n8n fork）
 
-> 基于 n8n `2.35.4` 快照的 fork,增加两套自研能力并验证了 RK3588 离线部署。以下为上游 n8n 原始 README。
+> 本分支只负责教育侧的通用能力：把代码转换为同一份中间表示，并同步呈现 Blockly 逻辑画布与 n8n 工作流画布。设备适配、硬件通信和具体机器人产品均在插件或硬件交付边界内实现。以下为上游 n8n 原始 README。
 
 ## 本仓库新增内容
 
-| 能力 | 说明 | 入口 |
+| 层级 | 作用 | 入口 |
 | --- | --- | --- |
-| **Blockly Data Transform** | 可视化积木式数据变换节点(`CUSTOM.blocklyCode`),共享编译器 + 只读 JS 预览,运行时始终重编译防篡改 | `custom-nodes/n8n-nodes-blockly-code/`、`packages/@n8n/blockly-data-transform/` |
-| **RoboFrame 机器人技能节点族** | Robot Catalog / Status / Skill / Validate / Task / Skill Plan 六节点,经 HTTP bridge 对接 [IB_Robot](https://gitcode.com/openeuler/IB_Robot) 的 `robot-skill` sanctioned 边界 | `custom-nodes/n8n-nodes-roboframe/`、`services/roboframe-bridge/` |
-| **Blockly 技能计划编辑器** | `robotSkillEditor` 参数编辑器 + `@n8n/blockly-robot-skills` 共享编译器 | `packages/frontend/editor-ui/.../BlocklyEditor/` |
-| **RK3588 离线 Kiosk 部署** | arm64 Docker 镜像、systemd、触控屏全屏自启、离线加固;不联外网单机自治 | `deploy/rk3588/`、[docs/roboframe/deploy-rk3588.md](docs/roboframe/deploy-rk3588.md) |
+| **双画布核心** | 定义版本化 IR、能力目录、执行计划、映射、诊断和 Plugin SDK；核心保持领域无关 | `packages/@n8n/dual-canvas-core/` |
+| **TypeScript 导入器** | 将受支持的 JavaScript、TypeScript、ArkTS 教学子集转换为 IR、Blockly 工作区和 n8n 工作流片段 | `packages/@n8n/dual-canvas-typescript-importer/` |
+| **Blockly Data Transform** | 用 Blockly 编辑逐项数据变换；运行时从工作区重新编译，代码预览只用于解释 | `custom-nodes/n8n-nodes-blockly-code/`、`packages/@n8n/blockly-data-transform/` |
+| **通用能力计划编辑器** | 按能力目录组织可视化计划，不在宿主中固化某个设备领域 | `packages/@n8n/blockly-capability-plan/` |
 
-设计与验收:`docs/roboframe/`(集成设计稿 v0.2、Phase 1/2 验收记录)、`.agents/specs/`。
+## 插件与硬件边界
 
-bridge 已在 arm64 ROS 2 Humble 容器中对照真实 `robot-skill` CLI 完成契约校准并端到端跑通(HTTP → bridge → CLI → Gateway → 4 原语执行 → completed)。
+RoboFrame 适配已拆到独立仓库 `n8n-dual-canvas-roboframe-plugin`。该插件负责把通用能力目录和执行计划映射到 RoboFrame 节点；设备 bridge、部署文件与设备验证证据由硬件交付边界持有。本仓库不包含这些实现，也不据此声明设备运行结果。
+
+通用数据流为：`源代码 → TypeScript 导入器 → VisualProgramIR → Blockly 逻辑画布 + n8n 工作流画布`。两张画布共享稳定标识和源代码位置映射，领域插件只接入公开契约。
 
 ---
 

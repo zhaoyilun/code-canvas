@@ -1,0 +1,190 @@
+[data-canvas-profile] {
+	--n8n--workbench-canvas--color--surface: light-dark(
+		color-mix(in oklch, var(--color--blue-500) 5%, var(--background--surface)),
+		color-mix(in oklch, var(--color--blue-500) 12%, var(--background--surface))
+	);
+	--n8n--workbench-canvas--color--ink: light-dark(var(--color--neutral-800), var(--text-color));
+	--n8n--workbench-canvas--color--muted-ink: light-dark(
+		var(--color--neutral-600),
+		var(--text-color--subtle)
+	);
+	--n8n--workbench-canvas--color--signal: var(--color--purple-500);
+	--n8n--workbench-canvas--color--node-surface: light-dark(
+		var(--color--neutral-50),
+		var(--background--surface)
+	);
+
+	--canvas--color--background: var(--n8n--workbench-canvas--color--surface);
+	--canvas--dot--color: color-mix(
+		in oklch,
+		var(--n8n--workbench-canvas--color--signal) 32%,
+		transparent
+	);
+	--canvas--label--color: var(--n8n--workbench-canvas--color--ink);
+	--canvas--label--color--background: color-mix(
+		in oklch,
+		var(--n8n--workbench-canvas--color--surface) 88%,
+		transparent
+	);
+
+	isolation: isolate;
+	container-name: workflow-workbench-canvas;
+	container-type: inline-size;
+
+	> #canvas {
+		isolation: isolate;
+		background:
+			radial-gradient(
+				circle at 12% 14%,
+				color-mix(in oklch, var(--color--purple-100) 72%, transparent),
+				transparent 30%
+			),
+			radial-gradient(
+				circle at 88% 82%,
+				color-mix(in oklch, var(--color--blue-200) 46%, transparent),
+				transparent 34%
+			),
+			linear-gradient(
+				90deg,
+				color-mix(in oklch, var(--color--purple-300) 18%, transparent) 1px,
+				transparent 1px
+			),
+			linear-gradient(
+				color-mix(in oklch, var(--color--blue-300) 13%, transparent) 1px,
+				transparent 1px
+			),
+			var(--n8n--workbench-canvas--color--surface);
+		background-size:
+			auto,
+			auto,
+			calc(var(--spacing--3xl) * 2) calc(var(--spacing--3xl) * 2),
+			calc(var(--spacing--3xl) * 2) calc(var(--spacing--3xl) * 2),
+			auto;
+	}
+
+	> #canvas::before {
+		content: '';
+		position: absolute;
+		inset: 0;
+		z-index: 0;
+		pointer-events: none;
+		background:
+			radial-gradient(
+				circle,
+				color-mix(in oklch, var(--color--purple-500) 34%, transparent) 0 var(--spacing--4xs),
+				transparent calc(var(--spacing--4xs) + 1px)
+			),
+			linear-gradient(
+				90deg,
+				transparent calc(50% - 1px),
+				color-mix(in oklch, var(--color--blue-400) 18%, transparent) calc(50% - 1px) calc(50% + 1px),
+				transparent calc(50% + 1px)
+			);
+		background-position: center;
+		background-size:
+			calc(var(--spacing--4xl) * 1.5) calc(var(--spacing--4xl) * 1.5),
+			calc(var(--spacing--4xl) * 3) calc(var(--spacing--4xl) * 3);
+		opacity: 0.5;
+	}
+
+	> #canvas > .vue-flow {
+		position: relative;
+		z-index: 1;
+	}
+
+	:where(.vue-flow__background) {
+		opacity: 0.7;
+	}
+
+	:where([data-test-id='canvas-default-node']) {
+		--canvas-node--color--background: var(--n8n--workbench-canvas--color--node-surface);
+		--canvas-node--border-color: var(--color--purple-300);
+
+		color: var(--n8n--workbench-canvas--color--ink);
+		box-shadow:
+			0 0 0 1px color-mix(in oklch, var(--color--purple-300) 44%, transparent),
+			var(--shadow--sm);
+	}
+
+	:where([data-test-id='canvas-default-node']):hover {
+		box-shadow:
+			0 0 0 var(--spacing--4xs)
+				color-mix(in oklch, var(--n8n--workbench-canvas--color--signal) 18%, transparent),
+			var(--shadow--md);
+	}
+
+	:where([data-canvas-node-render-type='default']) :where([class*='_description_']) {
+		box-sizing: border-box;
+		padding: var(--spacing--4xs) var(--spacing--2xs);
+		border: 1px solid color-mix(in oklch, var(--color--purple-300) 42%, transparent);
+		border-radius: var(--radius--sm);
+		background: var(--canvas--label--color--background);
+		box-shadow: var(--shadow--2xs);
+		backdrop-filter: blur(var(--spacing--2xs));
+	}
+
+	:where([data-canvas-node-render-type='default']) :where([class*='_label_']) {
+		color: var(--n8n--workbench-canvas--color--ink);
+	}
+
+	:where([data-canvas-node-render-type='default']) :where([class*='_subtitle_']) {
+		color: var(--n8n--workbench-canvas--color--muted-ink);
+	}
+
+	:where([data-test-id='edge']) {
+		--canvas-edge--color: var(--color--purple-400);
+
+		filter: drop-shadow(
+			0 0 var(--spacing--4xs) color-mix(in oklch, var(--color--purple-400) 36%, transparent)
+		);
+	}
+
+	:where([data-test-id='edge']) :where(.vue-flow__edge-path) {
+		stroke-linecap: round;
+		opacity: 0.9;
+	}
+
+	:where([data-test-id='canvas-controls']) :where([role='group']) {
+		border: 1px solid color-mix(in oklch, var(--color--purple-300) 58%, transparent);
+		border-radius: var(--radius--lg);
+		background: color-mix(
+			in oklch,
+			var(--n8n--workbench-canvas--color--node-surface) 88%,
+			transparent
+		);
+		box-shadow: var(--shadow--md);
+		backdrop-filter: blur(var(--spacing--xs));
+	}
+
+	:where([data-test-id='canvas-minimap']) {
+		border: 1px solid color-mix(in oklch, var(--color--purple-300) 58%, transparent);
+		border-radius: var(--radius--lg);
+		background: color-mix(
+			in oklch,
+			var(--n8n--workbench-canvas--color--node-surface) 88%,
+			transparent
+		);
+		box-shadow: var(--shadow--sm);
+	}
+}
+
+@container workflow-workbench-canvas (max-width: 900px) {
+	[data-canvas-profile] > #canvas {
+		background-size:
+			auto,
+			auto,
+			calc(var(--spacing--3xl) * 1.5) calc(var(--spacing--3xl) * 1.5),
+			calc(var(--spacing--3xl) * 1.5) calc(var(--spacing--3xl) * 1.5),
+			auto;
+	}
+
+	[data-canvas-profile] :where([data-test-id='canvas-controls']) {
+		max-inline-size: calc(100% - var(--spacing--sm) * 2);
+	}
+}
+
+@container workflow-workbench-canvas (max-width: 720px) {
+	[data-canvas-profile] :where([data-test-id='canvas-minimap']) {
+		display: none;
+	}
+}

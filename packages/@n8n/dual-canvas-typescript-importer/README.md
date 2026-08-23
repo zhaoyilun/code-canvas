@@ -1,0 +1,129 @@
+# `@n8n/dual-canvas-typescript-importer`
+
+This package turns a deliberately small JavaScript, TypeScript, or TypeScript-compatible ArkTS
+data-transformation function into dual-canvas artifacts. Version one accepts only source forms whose
+runtime result is equivalent to the generated `@n8n/blockly-data-transform` program:
+
+- `VisualProgramIRV1`;
+- a generic Blockly Logic workspace and canonical payload;
+- source-span mappings for the outer workflow node and every statement block;
+- a minimal n8n workflow fragment containing a manual trigger followed by a Blockly Code node;
+- a linked `DualCanvasDocumentV1`.
+
+Installed n8n node type names are supplied by `NodeTypeBindingsV1`. The importer does not embed
+environment-specific node type names.
+
+## Frozen source subset
+
+The selected entry function has one plain input parameter. Its first statement initializes
+`output`, and its final statement returns it:
+
+```ts
+export function transform(input: Input) {
+	const output = { ...input }; // `const output = {};` is also supported
+	output.total = Number(input.amount) * 1.2;
+	return output;
+}
+```
+
+Input reads use an explicit null-normalized optional path because Blockly data-transform reads map
+missing or null values to `null`:
+
+```ts
+output.score = input?.score ?? null;
+output.firstTag = input?.profile?.tags?.[0] ?? null;
+```
+
+Direct reads such as `input.score` and partially optional paths are diagnosed before artifact
+generation. This makes a missing field produce the same result on both sides instead of JavaScript's
+`undefined` on one side and Blockly's `null` on the other.
+
+The statements between the frozen boundaries may contain:
+
+- assignments to and deletion of top-level static `output` fields;
+- numeric, text, boolean, array, and explicit object literals;
+- null-normalized fully optional static input paths;
+- `Boolean` conversions, plus `Number` and `String` conversions of supported primitive literals;
+- arithmetic, strict comparisons, boolean operations, negation, and conditional expressions;
+- `if`/`else`, including nested branches;
+- throwing validation guards in the exact form `if (!condition) { throw new Error(message); }`.
+
+In this source subset, both assertion spellings become a throwing validation block. Nested output
+assignment or deletion, arbitrary property/index reads, negative bracket indexes, nullable
+`Number`/`String` conversions, `assert(...)`/`console.assert(...)` calls, and other result-changing forms produce
+`SOURCE_SEMANTICS_MISMATCH`. For example, `Number(null)` is `0` in JavaScript while the Blockly
+number conversion preserves it as `null`; `String(null)` is similarly different. Nested writes after
+`const output = { ...input }` are also excluded because JavaScript mutates the shared nested object
+while Blockly clones that parent path. Assertion calls are excluded because `console.assert` only logs
+in JavaScript, whereas a Blockly validation block throws; the accepted explicit throwing guard has the
+same terminal behavior on both sides.
+
+Other syntax outside the subset produces versioned diagnostics with a 1-based line, 0-based column,
+and UTF-16 source offset. ArkTS support covers its TypeScript-compatible data-transformation syntax;
+UI component DSL syntax is reported at its source location. Source import parses syntax and does not
+execute the submitted program. Accepted artifacts record
+`source-semantics.blockly-data-transform-equivalent.v1` in metadata.
+
+See [`examples/score-normalizer.ts`](examples/score-normalizer.ts) for a domain-independent input.
+
+## API
+
+```ts
+import { importTypeScriptSource } from '@n8n/dual-canvas-typescript-importer';
+
+const result = importTypeScriptSource({
+	apiVersion: 1,
+	documentRef: 'lesson.score-normalizer',
+	revisionRef: 'revision.1',
+	title: 'Score normalizer',
+	profileRef: 'teaching.data-transform',
+	entryFunction: 'transform',
+	source: {
+		apiVersion: 1,
+		sourceRef: 'source.main',
+		language: 'typescript',
+		content: SOURCE,
+	},
+	bindings: {
+		apiVersion: 1,
+		packageName: 'n8n-nodes-teaching',
+		nodeTypes: {
+			manual: 'n8n-nodes-base.manualTrigger',
+			logic: 'n8n-nodes-teaching.blocklyCode',
+		},
+	},
+	workflow: {
+		manualTrigger: { bindingRef: 'manual', typeVersion: 1, label: 'Start' },
+		blocklyCode: { bindingRef: 'logic', typeVersion: 1, label: 'Transform data' },
+	},
+	canvasAdapterRef: 'blockly.data-transform.v1',
+});
+```
+
+`importTypeScriptSource` returns the complete document, workflow, canvas, and IR artifact. The
+package also exports a core-compatible `SourceImporterV1` implementation; its `importSource` method
+returns only `VisualProgramIRV1` as required by the generic contract. Core import options contain
+only the source entry name and display title; installed node bindings, workflow layout, and canvas
+adapter selection belong to the later assembly API:
+
+```ts
+import { typescriptSourceImporterV1 } from '@n8n/dual-canvas-typescript-importer';
+
+const programResult = typescriptSourceImporterV1.importSource({
+	apiVersion: 1,
+	documentRef: 'lesson.score-normalizer',
+	revisionRef: 'revision.1',
+	profileRef: 'teaching.data-transform',
+	source: {
+		apiVersion: 1,
+		sourceRef: 'source.main',
+		language: 'typescript',
+		content: SOURCE,
+	},
+	options: {
+		apiVersion: 1,
+		title: 'Score normalizer',
+		entryFunction: 'transform',
+	},
+});
+```

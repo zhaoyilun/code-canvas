@@ -75,6 +75,7 @@ export class BlocklyCode implements INodeType {
 				noDataExpression: true,
 				typeOptions: {
 					editor: 'blocklyEditor',
+					editorProfile: 'data-transform',
 					rows: 8,
 				},
 				description: '在此节点中打开 Blockly，以可视化方式转换每个输入项',

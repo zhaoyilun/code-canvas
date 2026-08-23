@@ -14,6 +14,7 @@ import {
 } from '@/app/stores/workflowDocument.store';
 import type { IWorkflowDb } from '@/Interface';
 import * as vueuse from '@vueuse/core';
+import type { WorkflowFEMeta } from 'n8n-workflow';
 
 // Instantiates a store that derives the workflow id from the route. These tests run
 // without a router, so resolve the id directly.
@@ -46,6 +47,16 @@ const renderComponent = createComponentRenderer(WorkflowCanvas, {
 	},
 });
 
+const educationNodeType = 'n8n-nodes-blockly-code.blocklyCode';
+const educationMeta = {
+	visualProgramming: {
+		schemaVersion: 1,
+		profileId: 'education-code-lab',
+		displayName: 'Visual Code Lab',
+		stages: [{ id: 'build', label: 'Build', nodeTypes: [educationNodeType] }],
+	},
+} satisfies WorkflowFEMeta;
+
 beforeEach(() => {
 	const pinia = createPinia();
 	setActivePinia(pinia);
@@ -72,6 +83,58 @@ describe('WorkflowCanvas', () => {
 		const { getByTestId } = renderComponent();
 
 		expect(getByTestId('canvas')).toBeVisible();
+		expect(getByTestId('canvas-wrapper')).not.toHaveAttribute('data-canvas-profile');
+	});
+
+	it('uses the resolved workbench profile to theme a teaching workflow', () => {
+		const blocklyNodeDescription = {
+			...defaultNodeDescriptions[0],
+			name: educationNodeType,
+			displayName: 'Blockly Code',
+		};
+		useNodeTypesStore().setNodeTypes([blocklyNodeDescription]);
+		setupWorkflow(
+			createTestWorkflow({
+				id: '1',
+				name: 'Visual programming lesson',
+				nodes: [createTestNode({ id: 'blockly', type: educationNodeType })],
+				connections: {},
+				meta: educationMeta as unknown as IWorkflowDb['meta'],
+			}),
+		);
+
+		const { getByTestId } = renderComponent();
+
+		expect(getByTestId('canvas-wrapper')).toHaveAttribute(
+			'data-canvas-profile',
+			'education-code-lab',
+		);
+	});
+
+	it('requires stored workflow nodes as well as metadata to select a profile', () => {
+		useNodeTypesStore().setNodeTypes([
+			{
+				...defaultNodeDescriptions[0],
+				name: educationNodeType,
+				displayName: 'Blockly Code',
+			},
+		]);
+		setupWorkflow(
+			createTestWorkflow({
+				id: '1',
+				name: 'Empty visual programming lesson',
+				nodes: [],
+				connections: {},
+				meta: educationMeta as unknown as IWorkflowDb['meta'],
+			}),
+		);
+		const { getByTestId } = renderComponent({
+			props: {
+				fallbackNodes: [createTestNode({ type: educationNodeType })],
+			},
+		});
+
+		expect(getByTestId('canvas-wrapper')).not.toHaveAttribute('data-canvas-profile');
 	});
 
 	it('should render nodes and connections', async () => {

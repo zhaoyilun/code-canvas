@@ -39,15 +39,3 @@
 !packages/@n8n/typescript-config
 !packages/@n8n/typescript-config/**
 
-# === RK3588 offline image (deploy/rk3588/Dockerfile) ===
-!deploy
-!deploy/rk3588
-!deploy/rk3588/Dockerfile
-!deploy/rk3588/docker-entrypoint.sh
-!custom-nodes/n8n-nodes-blockly-code/package.json
-!custom-nodes/n8n-nodes-blockly-code/dist
-!custom-nodes/n8n-nodes-blockly-code/dist/**
-!custom-nodes/n8n-nodes-roboframe/package.json
-!custom-nodes/n8n-nodes-roboframe/dist
-!custom-nodes/n8n-nodes-roboframe/dist/**
-
