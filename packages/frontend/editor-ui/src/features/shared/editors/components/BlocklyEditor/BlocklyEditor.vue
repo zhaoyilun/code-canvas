@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { N8nNotice, N8nText } from '@n8n/design-system';
-import { useI18n } from '@n8n/i18n';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { createToolbox, loadWorkspaceOrDefault, registerN8nBlocks } from './blockly';
 import {
@@ -21,6 +20,105 @@ import {
 import type { RobotBlockLabels, RobotCatalog } from './robotSkills';
 import { createCompetitionBlocklyTheme } from './competitionTheme';
 
+const LOGIC_TOOLBOX_LABELS = {
+	transform: '数据处理',
+	logic: '条件判断',
+	math: '数值运算',
+	text: '文本处理',
+	arrays: '数组操作',
+	objects: '对象操作',
+	types: '类型转换',
+};
+
+const ROBOT_TOOLBOX_LABELS = {
+	robot: '动作编排',
+	primitives: '基础动作',
+	math: '数值',
+	text: '文本',
+};
+
+const LOGIC_BLOCK_LABELS = {
+	transformItem: '数据处理',
+	copyInput: '复制输入',
+	emptyOutput: '清空输出',
+	setField: '设置字段',
+	to: '设为',
+	getField: '读取字段',
+	path: '路径',
+	deleteField: '删除字段',
+	if: '如果',
+	do: '执行',
+	else: '否则',
+	assert: '断言',
+	message: '提示',
+	getPath: '读取路径',
+	from: '来源',
+	convert: '转换',
+	as: '为',
+	convertText: '文本',
+	convertNumber: '数值',
+	convertBoolean: '布尔值',
+	arrayItemAt: '读取数组项',
+	index: '下标',
+	mapArrayPath: '映射数组路径',
+	filterArrayPath: '筛选数组路径',
+	operatorEqual: '等于',
+	operatorNotEqual: '不等于',
+	operatorLess: '小于',
+	operatorLessEqual: '小于等于',
+	operatorGreater: '大于',
+	operatorGreaterEqual: '大于等于',
+	objectCreate: '创建对象',
+	objectProperty: '添加属性',
+	key: '键名',
+};
+
+const WORKBENCH_COPY = {
+	logic: {
+		ariaLabel: '逻辑积木教学工作台',
+		badge: 'AI 代码理解',
+		title: '逻辑积木工作台',
+		description: '用积木描述数据处理步骤，右侧实时呈现对应的 JavaScript 代码。',
+		nodeCaption: '当前节点',
+		nodeBadge: 'n8n 流程节点',
+		workspaceTitle: '逻辑积木',
+		workspaceState: '拖拽编排',
+		workspaceHint: '从输入字段开始，用积木搭出每一步数据逻辑',
+		previewTitle: '生成代码预览',
+		previewHint: '实时同步生成',
+		path: [
+			{ id: '01', label: '理解输入', detail: '识别数据与目标' },
+			{ id: '02', label: '拼接逻辑', detail: '用积木表达步骤' },
+			{ id: '03', label: '解释代码', detail: '同步查看结果' },
+		],
+	},
+	robot: {
+		ariaLabel: '机器人动作编排教学工作台',
+		badge: 'RoboFrame · 动作编排',
+		title: '机器人任务工作台',
+		description: '用积木编排动作与条件，右侧实时生成结构化任务计划。',
+		nodeCaption: '当前节点',
+		nodeBadge: 'n8n 流程节点',
+		workspaceTitle: '动作积木',
+		workspaceState: '拖拽编排',
+		workspaceHint: '从技能积木开始，把任务拆成可执行的机器人步骤',
+		previewTitle: '任务计划预览',
+		previewHint: '结构化计划',
+		path: [
+			{ id: '01', label: '任务意图', detail: '明确目标与约束' },
+			{ id: '02', label: '技能编排', detail: '用积木组织动作' },
+			{ id: '03', label: '执行计划', detail: '交给 RoboFrame' },
+		],
+	},
+} as const;
+
+const WORKSPACE_LOAD_ERROR = '工作区内容加载失败，请检查积木结构。';
+
+const CHINESE_BLOCKLY_MESSAGE_OVERRIDES = {
+	LOGIC_BOOLEAN_TRUE: '真',
+	LOGIC_BOOLEAN_FALSE: '假',
+};
+
 type Props = {
 	modelValue: string;
 	isReadOnly?: boolean;
@@ -32,7 +130,6 @@ const props = withDefaults(defineProps<Props>(), {
 	editorMode: 'data-transform',
 });
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
-const i18n = useI18n();
 const editorContainer = ref<HTMLDivElement>();
 const javascriptPreview = ref('');
 const compileError = ref('');
@@ -45,45 +142,10 @@ let resizeObserver: ResizeObserver | undefined;
 
 const isRobotMode = computed(() => props.editorMode === 'robot-skills');
 const modeVisual = computed(() =>
-	isRobotMode.value
-		? {
-				badge: 'RoboFrame · 动作编排',
-				workspaceHint: '从技能积木开始，把任务拆成可执行的机器人步骤',
-				previewHint: '结构化任务计划',
-				path: [
-					{ id: '01', label: '任务意图', detail: '明确目标与约束' },
-					{ id: '02', label: '技能编排', detail: '用积木组织动作' },
-					{ id: '03', label: '执行计划', detail: '交给 RoboFrame' },
-				],
-			}
-		: {
-				badge: 'AI 可解释代码',
-				workspaceHint: '从输入字段开始，用积木搭出每一步数据逻辑',
-				previewHint: '只读生成代码',
-				path: [
-					{ id: '01', label: '理解输入', detail: '识别数据与目标' },
-					{ id: '02', label: '拼接逻辑', detail: '用积木表达步骤' },
-					{ id: '03', label: '解释代码', detail: '同步查看结果' },
-				],
-			},
+	isRobotMode.value ? WORKBENCH_COPY.robot : WORKBENCH_COPY.logic,
 );
 const compileStatus = computed(() =>
 	compileError.value ? '等待修正' : javascriptPreview.value ? '实时同步' : '准备就绪',
-);
-const previewTitle = computed(() =>
-	isRobotMode.value
-		? i18n.baseText('robotSkillEditor.preview.title')
-		: i18n.baseText('blocklyEditor.preview.title'),
-);
-const editorTitle = computed(() =>
-	isRobotMode.value
-		? i18n.baseText('robotSkillEditor.title')
-		: i18n.baseText('blocklyEditor.title'),
-);
-const editorDescription = computed(() =>
-	isRobotMode.value
-		? i18n.baseText('robotSkillEditor.description')
-		: i18n.baseText('blocklyEditor.description'),
 );
 
 onMounted(async () => {
@@ -98,60 +160,13 @@ onMounted(async () => {
 		if (initialPayload.ok) robotCatalog = initialPayload.payload.catalog;
 		registerRobotBlocks(blockly, createRobotBlockLabels(), robotCatalog);
 	} else {
-		registerN8nBlocks(blockly, {
-			transformItem: i18n.baseText('blocklyEditor.blocks.transformItem'),
-			copyInput: i18n.baseText('blocklyEditor.blocks.copyInput'),
-			emptyOutput: i18n.baseText('blocklyEditor.blocks.emptyOutput'),
-			setField: i18n.baseText('blocklyEditor.blocks.setField'),
-			to: i18n.baseText('blocklyEditor.blocks.to'),
-			getField: i18n.baseText('blocklyEditor.blocks.getField'),
-			path: i18n.baseText('blocklyEditor.blocks.path'),
-			deleteField: i18n.baseText('blocklyEditor.blocks.deleteField'),
-			if: i18n.baseText('blocklyEditor.blocks.if'),
-			do: i18n.baseText('blocklyEditor.blocks.do'),
-			else: i18n.baseText('blocklyEditor.blocks.else'),
-			assert: i18n.baseText('blocklyEditor.blocks.assert'),
-			message: i18n.baseText('blocklyEditor.blocks.message'),
-			getPath: i18n.baseText('blocklyEditor.blocks.getPath'),
-			from: i18n.baseText('blocklyEditor.blocks.from'),
-			convert: i18n.baseText('blocklyEditor.blocks.convert'),
-			as: i18n.baseText('blocklyEditor.blocks.as'),
-			convertText: i18n.baseText('blocklyEditor.blocks.convertText'),
-			convertNumber: i18n.baseText('blocklyEditor.blocks.convertNumber'),
-			convertBoolean: i18n.baseText('blocklyEditor.blocks.convertBoolean'),
-			arrayItemAt: i18n.baseText('blocklyEditor.blocks.arrayItemAt'),
-			index: i18n.baseText('blocklyEditor.blocks.index'),
-			mapArrayPath: i18n.baseText('blocklyEditor.blocks.mapArrayPath'),
-			filterArrayPath: i18n.baseText('blocklyEditor.blocks.filterArrayPath'),
-			operatorEqual: i18n.baseText('blocklyEditor.blocks.operatorEqual'),
-			operatorNotEqual: i18n.baseText('blocklyEditor.blocks.operatorNotEqual'),
-			operatorLess: i18n.baseText('blocklyEditor.blocks.operatorLess'),
-			operatorLessEqual: i18n.baseText('blocklyEditor.blocks.operatorLessEqual'),
-			operatorGreater: i18n.baseText('blocklyEditor.blocks.operatorGreater'),
-			operatorGreaterEqual: i18n.baseText('blocklyEditor.blocks.operatorGreaterEqual'),
-			objectCreate: i18n.baseText('blocklyEditor.blocks.objectCreate'),
-			objectProperty: i18n.baseText('blocklyEditor.blocks.objectProperty'),
-			key: i18n.baseText('blocklyEditor.blocks.key'),
-		});
+		registerN8nBlocks(blockly, LOGIC_BLOCK_LABELS);
 	}
 	workspace = blockly.inject(container, {
 		theme: createCompetitionBlocklyTheme(loadedBlockly, props.editorMode),
 		toolbox: isRobotMode.value
-			? createRobotToolbox({
-					robot: i18n.baseText('robotSkillEditor.categories.robot'),
-					primitives: i18n.baseText('robotSkillEditor.categories.primitives'),
-					math: i18n.baseText('blocklyEditor.categories.math'),
-					text: i18n.baseText('blocklyEditor.categories.text'),
-				})
-			: createToolbox({
-					transform: i18n.baseText('blocklyEditor.categories.transform'),
-					logic: i18n.baseText('blocklyEditor.categories.logic'),
-					math: i18n.baseText('blocklyEditor.categories.math'),
-					text: i18n.baseText('blocklyEditor.categories.text'),
-					arrays: i18n.baseText('blocklyEditor.categories.arrays'),
-					objects: i18n.baseText('blocklyEditor.categories.objects'),
-					types: i18n.baseText('blocklyEditor.categories.types'),
-				}),
+			? createRobotToolbox(ROBOT_TOOLBOX_LABELS)
+			: createToolbox(LOGIC_TOOLBOX_LABELS),
 		readOnly: props.isReadOnly,
 	});
 	workspace.addChangeListener(handleWorkspaceChange);
@@ -201,7 +216,7 @@ function loadModelValue(value: string) {
 			),
 		);
 		if (!loadedWorkspace) {
-			compileError.value = i18n.baseText('blocklyEditor.loadError');
+			compileError.value = WORKSPACE_LOAD_ERROR;
 			javascriptPreview.value = '';
 			return;
 		}
@@ -227,7 +242,7 @@ function loadModelValue(value: string) {
 	if (!loadedWorkspace) {
 		const result = compileBlocklyWorkspace(payload.payload.workspace);
 		javascriptPreview.value = '';
-		compileError.value = result.ok ? i18n.baseText('blocklyEditor.loadError') : result.error;
+		compileError.value = result.ok ? WORKSPACE_LOAD_ERROR : result.error;
 		return;
 	}
 	updateCompileState();
@@ -280,32 +295,42 @@ function serializeWorkspace(): string {
 }
 function createRobotBlockLabels(): RobotBlockLabels {
 	return {
-		taskPlan: i18n.baseText('robotSkillEditor.blocks.taskPlan'),
-		executeSkill: i18n.baseText('robotSkillEditor.blocks.executeSkill'),
-		skill: i18n.baseText('robotSkillEditor.blocks.skill'),
-		executePrimitive: i18n.baseText('robotSkillEditor.blocks.executePrimitive'),
-		primitive: i18n.baseText('robotSkillEditor.blocks.primitive'),
-		wait: i18n.baseText('robotSkillEditor.blocks.wait'),
-		seconds: i18n.baseText('robotSkillEditor.blocks.seconds'),
-		gripper: i18n.baseText('robotSkillEditor.blocks.gripper'),
-		gripperOpen: i18n.baseText('robotSkillEditor.blocks.gripperOpen'),
-		gripperClose: i18n.baseText('robotSkillEditor.blocks.gripperClose'),
-		gripperRotateCw: i18n.baseText('robotSkillEditor.blocks.gripperRotateCw'),
-		gripperRotateCcw: i18n.baseText('robotSkillEditor.blocks.gripperRotateCcw'),
-		condition: i18n.baseText('robotSkillEditor.blocks.condition'),
-		conditionField: i18n.baseText('robotSkillEditor.blocks.conditionField'),
-		conditionOp: i18n.baseText('robotSkillEditor.blocks.conditionOp'),
-		target: i18n.baseText('robotSkillEditor.blocks.target'),
-		place: i18n.baseText('robotSkillEditor.blocks.place'),
-		direction: i18n.baseText('robotSkillEditor.blocks.direction'),
-		directionNone: i18n.baseText('robotSkillEditor.blocks.directionNone'),
-		distance: i18n.baseText('robotSkillEditor.blocks.distance'),
-		timeout: i18n.baseText('robotSkillEditor.blocks.timeout'),
-		extraParams: i18n.baseText('robotSkillEditor.blocks.extraParams'),
+		taskPlan: '机器人任务计划',
+		executeSkill: '执行技能',
+		skill: '技能',
+		executePrimitive: '执行基础动作',
+		primitive: '基础动作',
+		wait: '等待',
+		seconds: '秒',
+		gripper: '夹爪动作',
+		gripperOpen: '打开',
+		gripperClose: '闭合',
+		gripperRotateCw: '顺时针旋转',
+		gripperRotateCcw: '逆时针旋转',
+		condition: '当',
+		conditionField: '状态字段',
+		conditionOp: '条件值',
+		target: '目标',
+		place: '位置',
+		direction: '方向',
+		directionNone: '默认方向',
+		distance: '距离',
+		timeout: '超时',
+		extraParams: '补充参数',
 	};
 }
 async function loadBlocklyModule(): Promise<typeof import('blockly')> {
-	return await import('blockly');
+	const [loadedBlockly, chineseMessages] = await Promise.all([
+		import('blockly'),
+		import('blockly/msg/zh-hans'),
+	]);
+	const localeMessages: Record<string, string> = {};
+	for (const [key, value] of Object.entries(chineseMessages)) {
+		if (typeof value === 'string') localeMessages[key] = value;
+	}
+	Object.assign(localeMessages, CHINESE_BLOCKLY_MESSAGE_OVERRIDES);
+	loadedBlockly.setLocale(localeMessages);
+	return loadedBlockly;
 }
 type TeachingAnnotation = {
 	intentStepId: string;
@@ -354,23 +379,17 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 	<section
 		:class="[$style.editor, isRobotMode ? $style.robot : $style.logic]"
 		:data-editor-mode="props.editorMode"
-		:aria-label="
-			isRobotMode
-				? i18n.baseText('robotSkillEditor.ariaLabel')
-				: i18n.baseText('blocklyEditor.ariaLabel')
-		"
+		:aria-label="modeVisual.ariaLabel"
 	>
 		<header :class="$style.header">
 			<div :class="$style.heading">
 				<div :class="$style.modeLine">
 					<span :class="$style.modeBadge">{{ modeVisual.badge }}</span>
 					<span :class="$style.modeRule" aria-hidden="true" />
-					<span :class="$style.modeCaption">{{
-						i18n.baseText('blocklyEditor.location.node')
-					}}</span>
+					<span :class="$style.modeCaption">{{ modeVisual.nodeCaption }}</span>
 				</div>
-				<N8nText tag="h3" size="medium" bold>{{ editorTitle }}</N8nText>
-				<N8nText tag="p" size="small">{{ editorDescription }}</N8nText>
+				<N8nText tag="h3" size="medium" bold>{{ modeVisual.title }}</N8nText>
+				<N8nText tag="p" size="small">{{ modeVisual.description }}</N8nText>
 			</div>
 			<div :class="$style.headerStatus">
 				<span
@@ -379,7 +398,7 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 					<span :class="$style.statusDot" aria-hidden="true" />
 					{{ compileStatus }}
 				</span>
-				<span :class="$style.locationBadge">n8n Node</span>
+				<span :class="$style.locationBadge">{{ modeVisual.nodeBadge }}</span>
 			</div>
 		</header>
 
@@ -399,10 +418,10 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 					<div :class="$style.panelTitle">
 						<span :class="$style.panelIndex">01</span>
 						<N8nText tag="h4" size="small" bold>
-							{{ i18n.baseText('blocklyEditor.workspace.title') }}
+							{{ modeVisual.workspaceTitle }}
 						</N8nText>
 					</div>
-					<span :class="$style.panelState">拖拽编辑</span>
+					<span :class="$style.panelState">{{ modeVisual.workspaceState }}</span>
 				</div>
 				<div :class="$style.workspaceShell">
 					<div ref="editorContainer" :class="$style.workspace" data-test-id="blockly-workspace" />
@@ -416,7 +435,7 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 				<div :class="$style.panelHeading">
 					<div :class="$style.panelTitle">
 						<span :class="$style.panelIndex">02</span>
-						<N8nText tag="h4" size="small" bold>{{ previewTitle }}</N8nText>
+						<N8nText tag="h4" size="small" bold>{{ modeVisual.previewTitle }}</N8nText>
 					</div>
 					<span :class="$style.panelState">{{ modeVisual.previewHint }}</span>
 				</div>
@@ -432,7 +451,7 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 			:class="$style.compileError"
 			data-test-id="blockly-compile-error"
 		>
-			{{ i18n.baseText('blocklyEditor.compileError', { interpolate: { error: compileError } }) }}
+			{{ `编译提示：${compileError}` }}
 		</N8nNotice>
 		<aside
 			v-if="selectedTeaching"
@@ -449,15 +468,15 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 			</div>
 			<dl :class="$style.teachingDetails">
 				<div>
-					<dt>{{ i18n.baseText('blocklyEditor.teaching.why') }}</dt>
+					<dt>为什么这样做</dt>
 					<dd>{{ selectedTeaching.why }}</dd>
 				</div>
 				<div>
-					<dt>{{ i18n.baseText('blocklyEditor.teaching.expectedEffect') }}</dt>
+					<dt>预期效果</dt>
 					<dd>{{ selectedTeaching.expectedEffect }}</dd>
 				</div>
 				<div v-if="selectedTeaching.editable.length > 0">
-					<dt>{{ i18n.baseText('blocklyEditor.teaching.editable') }}</dt>
+					<dt>可调整项</dt>
 					<dd>{{ selectedTeaching.editable.join(' · ') }}</dd>
 				</div>
 			</dl>
@@ -471,11 +490,13 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 	--blockly-editor--accent-strong: var(--color--blue-800);
 	--blockly-editor--accent-soft: var(--background--info);
 	--blockly-editor--accent-text: var(--text-color--info);
+	--blockly-editor--stage-height: clamp(22rem, 48vh, 34rem);
 
 	display: flex;
 	flex-direction: column;
 	gap: var(--spacing--md);
 	min-width: 0;
+	max-width: 100%;
 	padding: var(--spacing--md);
 	border: var(--border-width) var(--border-style) var(--border-color--subtle);
 	border-radius: var(--radius--lg);
@@ -483,6 +504,7 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 		radial-gradient(circle at top right, var(--blockly-editor--accent-soft), transparent 42%),
 		var(--background--surface);
 	box-shadow: 0 var(--spacing--2xs) var(--spacing--xl) var(--color--black-alpha-100);
+	container-type: inline-size;
 }
 
 .robot {
@@ -495,10 +517,12 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 	display: flex;
 	align-items: flex-start;
 	justify-content: space-between;
+	flex-wrap: wrap;
 	gap: var(--spacing--md);
 }
 .heading {
 	display: flex;
+	flex: 1 1 22rem;
 	flex-direction: column;
 	gap: var(--spacing--3xs);
 	min-width: 0;
@@ -506,6 +530,7 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 .heading p {
 	margin: 0;
 	color: var(--text-color--subtle);
+	line-height: var(--line-height--lg);
 }
 
 .modeLine,
@@ -527,7 +552,7 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 .statusBadge,
 .panelState {
 	white-space: nowrap;
-	font-size: var(--font-size--3xs);
+	font-size: var(--font-size--2xs);
 	font-weight: var(--font-weight--bold);
 	line-height: var(--line-height--md);
 }
@@ -549,7 +574,7 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 
 .modeCaption {
 	color: var(--text-color--subtler);
-	font-size: var(--font-size--3xs);
+	font-size: var(--font-size--2xs);
 }
 
 .headerStatus {
@@ -656,7 +681,7 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 
 .pathCopy strong {
 	color: var(--text-color);
-	font-size: var(--font-size--2xs);
+	font-size: var(--font-size--xs);
 	font-weight: var(--font-weight--bold);
 	line-height: var(--line-height--sm);
 }
@@ -664,20 +689,22 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 .pathCopy small {
 	overflow: hidden;
 	color: var(--text-color--subtler);
-	font-size: var(--font-size--3xs);
+	font-size: var(--font-size--2xs);
 	line-height: var(--line-height--sm);
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
 .editorGrid {
 	display: grid;
-	grid-template-columns: minmax(0, 3fr) minmax(16rem, 2fr);
+	grid-template-columns: minmax(0, 1.65fr) minmax(20rem, 0.85fr);
+	align-items: stretch;
 	gap: var(--spacing--sm);
 }
 .blockPanel,
 .preview {
 	display: flex;
 	min-width: 0;
+	max-width: 100%;
 	flex-direction: column;
 	gap: var(--spacing--2xs);
 	padding: var(--spacing--sm);
@@ -689,6 +716,7 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 
 .panelHeading {
 	justify-content: space-between;
+	flex-wrap: wrap;
 	gap: var(--spacing--sm);
 }
 
@@ -712,8 +740,9 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 
 .workspaceShell {
 	position: relative;
-	min-height: var(--spacing--5xl);
-	height: calc(var(--spacing--5xl) + var(--spacing--5xl));
+	min-width: 0;
+	min-height: var(--blockly-editor--stage-height);
+	height: var(--blockly-editor--stage-height);
 	overflow: hidden;
 	border: var(--border-width) var(--border-style) var(--border-color--strong);
 	border-radius: var(--radius--md);
@@ -735,6 +764,7 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 }
 
 .workspace {
+	min-width: 0;
 	width: 100%;
 	height: 100%;
 	background: transparent;
@@ -744,12 +774,14 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 	}
 
 	:global(.blocklyToolboxDiv) {
+		max-inline-size: min(11rem, 46%);
 		border-right: var(--border-width) var(--border-style) var(--border-color--subtle);
 		box-shadow: var(--shadow--light);
 	}
 
 	:global(.blocklyToolboxCategory) {
 		margin: var(--spacing--4xs);
+		min-width: 0;
 		border-radius: var(--radius--sm);
 	}
 
@@ -762,8 +794,11 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 	}
 
 	:global(.blocklyTreeLabel) {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
 		font-family: var(--font-family);
-		font-size: var(--font-size--2xs);
+		font-size: var(--font-size--xs);
 		font-weight: var(--font-weight--medium);
 	}
 
@@ -795,7 +830,7 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 	background: var(--background--surface);
 	box-shadow: var(--shadow--light);
 	pointer-events: none;
-	font-size: var(--font-size--3xs);
+	font-size: var(--font-size--2xs);
 	line-height: var(--line-height--sm);
 }
 
@@ -820,7 +855,7 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 .teachingKicker {
 	gap: var(--spacing--4xs);
 	color: var(--blockly-editor--accent-text);
-	font-size: var(--font-size--3xs);
+	font-size: var(--font-size--2xs);
 	font-weight: var(--font-weight--bold);
 	letter-spacing: var(--letter-spacing--tighter);
 }
@@ -850,18 +885,19 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 .teachingDetails dt {
 	margin-bottom: var(--spacing--3xs);
 	color: var(--text-color--subtler);
-	font-size: var(--font-size--3xs);
+	font-size: var(--font-size--2xs);
 	font-weight: var(--font-weight--bold);
 	text-transform: uppercase;
 }
 .teachingDetails dd {
 	margin: 0;
 	color: var(--text-color);
-	font-size: var(--font-size--2xs);
+	font-size: var(--font-size--xs);
 }
 .code {
-	min-height: var(--spacing--5xl);
-	height: calc(var(--spacing--5xl) + var(--spacing--5xl));
+	min-width: 0;
+	min-height: var(--blockly-editor--stage-height);
+	height: var(--blockly-editor--stage-height);
 	margin: 0;
 	padding: var(--spacing--sm);
 	color: var(--color--neutral-white);
@@ -871,43 +907,69 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 	border: var(--border-width) var(--border-style) var(--color--slate-700);
 	border-radius: var(--radius--md);
 	overflow: auto;
-	white-space: pre-wrap;
+	white-space: pre;
 	font-family: var(--font-family--monospace);
-	font-size: var(--font-size--2xs);
+	font-size: var(--font-size--xs);
 	line-height: var(--line-height--xl);
 }
 
-@media (max-width: 900px) {
+@container (max-width: 62rem) {
 	.editor {
-		padding: var(--spacing--sm);
-	}
-
-	.header {
-		flex-direction: column;
-	}
-
-	.headerStatus {
-		justify-content: flex-start;
-	}
-
-	.learningPath {
-		grid-template-columns: minmax(0, 1fr);
+		--blockly-editor--stage-height: clamp(20rem, 42vh, 28rem);
 	}
 
 	.editorGrid {
 		grid-template-columns: minmax(0, 1fr);
 	}
 
-	.workspaceShell {
-		height: var(--spacing--5xl);
+	.code {
+		min-height: clamp(15rem, 32vh, 20rem);
+		height: clamp(15rem, 32vh, 20rem);
+	}
+}
+
+@container (max-width: 42rem) {
+	.editor {
+		--blockly-editor--stage-height: clamp(20rem, 48vh, 25rem);
+
+		padding: var(--spacing--sm);
+		gap: var(--spacing--sm);
+	}
+
+	.header {
+		gap: var(--spacing--sm);
+	}
+
+	.headerStatus {
+		justify-content: flex-start;
+	}
+
+	.modeLine,
+	.panelHeading {
+		align-items: flex-start;
+	}
+
+	.learningPath {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.pathCopy small {
+		white-space: normal;
+	}
+
+	.workspaceGuide {
+		max-width: calc(100% - var(--spacing--lg));
+		font-size: var(--font-size--3xs);
 	}
 
 	.teachingDetails {
 		grid-template-columns: minmax(0, 1fr);
 	}
+
 	.code {
-		height: auto;
-		max-height: calc(var(--spacing--5xl) + var(--spacing--5xl));
+		min-height: 14rem;
+		height: 14rem;
+		font-size: var(--font-size--2xs);
 	}
 }
 </style>

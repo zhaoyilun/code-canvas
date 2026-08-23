@@ -1,0 +1,42 @@
+{
+  "lesson": {
+    "title": "AI 可解释机器人课堂：观察、解释与确认",
+    "objective": "让学员把一段 AI 开发逻辑对应到数据、积木、计划和执行记录。"
+  },
+  "engagementScore": "78",
+  "students": [
+    {
+      "profile": {
+        "name": "小林"
+      },
+      "active": true
+    },
+    {
+      "profile": {
+        "name": "小陈"
+      },
+      "active": true
+    },
+    {
+      "profile": {
+        "name": "小周"
+      },
+      "active": false
+    }
+  ],
+  "teacher": {
+    "name": "张老师",
+    "approvalRequired": true
+  },
+  "robotTask": {
+    "goal": "观察讲台区域、向课堂问候并回到安全位。",
+    "boundary": "仅在校验通过、教师确认和设备侧运动授权齐备后进入 RoboFrame 执行。"
+  },
+  "normalizedEngagement": 93.6,
+  "activeStudentNames": [
+    "小林",
+    "小陈"
+  ],
+  "classroomGate": "可进入机器人计划讲解",
+  "explanationCard": "输入参与度已规范化为 93.6；已识别 2 名活跃学员。"
+}

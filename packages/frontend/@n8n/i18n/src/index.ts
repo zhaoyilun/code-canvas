@@ -5,6 +5,7 @@ import { createI18n } from 'vue-i18n';
 import type { I18n } from 'vue-i18n';
 
 import englishBaseText from './locales/en.json';
+import { chineseBaseText } from './locales/zh-CN';
 import type { BaseTextKey, LocaleMessages, INodeTranslationHeaders } from './types';
 import {
 	deriveMiddleKey,
@@ -21,11 +22,15 @@ export type * from './types';
 type LooseSchema = Record<string, unknown>;
 export const i18nInstance: I18n<LooseSchema, LooseSchema, LooseSchema, string, false> = createI18n({
 	legacy: false,
-	locale: 'en',
+	locale: 'zh-CN',
 	fallbackLocale: 'en',
-	messages: { en: englishBaseText },
+	messages: { en: englishBaseText, 'zh-CN': chineseBaseText },
 	warnHtmlMessage: false,
 });
+
+if (typeof document !== 'undefined') {
+	document.documentElement.lang = 'zh-CN';
+}
 
 // Reactive version to signal i18n message updates to Vue computations
 export const i18nVersion = ref(0);

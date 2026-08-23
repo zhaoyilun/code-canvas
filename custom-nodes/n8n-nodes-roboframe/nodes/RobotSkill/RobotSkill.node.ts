@@ -23,33 +23,32 @@ const SKILL_ACTION = 'skill' as const;
 
 export class RobotSkill implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'Robot Skill',
+		displayName: '机器人技能',
 		name: 'robotSkill',
 		icon: { light: 'file:roboframe.svg', dark: 'file:roboframe.dark.svg' },
 		group: ['transform'],
 		version: 1,
-		description: 'Execute one high-level robot skill through the RoboFrame bridge',
-		subtitle: 'Executes one robot skill',
-		defaults: { name: 'Robot Skill' },
+		description: '通过 RoboFrame 网关执行一个高层机器人技能',
+		subtitle: '执行一个机器人技能',
+		defaults: { name: '机器人技能' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
 		credentials: [{ name: 'robframeBridgeApi', required: true }],
 		properties: [
 			...skillParams,
 			{
-				displayName: 'Validate First',
+				displayName: '执行前校验',
 				name: 'validateFirst',
 				type: 'boolean',
 				default: true,
-				description:
-					'Whether to run gateway validation before execution (schema + safety check, no motion)',
+				description: '是否先进行网关校验（参数结构和安全校验，不执行动作）',
 			},
 			{
-				displayName: 'Wait For Result',
+				displayName: '等待执行结果',
 				name: 'waitForResult',
 				type: 'boolean',
 				default: true,
-				description: 'Whether to wait for the terminal task state instead of returning on submit',
+				description: '是否等待任务进入结束状态，而非提交后立即返回',
 			},
 		],
 	};

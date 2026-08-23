@@ -1,0 +1,503 @@
+{
+  "schemaVersion": "2.0",
+  "designId": "demo.ai-explainable-robot-classroom",
+  "revisionId": "revision-1",
+  "catalogDigest": "rk3588-classroom-demo-v2",
+  "n8nNodeCount": 17,
+  "logicNodes": [
+    {
+      "nodeRef": "logic.normalize-classroom-input",
+      "label": "规范化课堂输入",
+      "workspace": {
+        "blocks": {
+          "languageVersion": 0,
+          "blocks": [
+            {
+              "type": "n8n_transform_item",
+              "id": "logic-4b85e81b-dede-57e9-b426-18224c39217a",
+              "x": 24,
+              "y": 24,
+              "fields": {
+                "MODE": "COPY"
+              },
+              "inputs": {
+                "STATEMENTS": {
+                  "block": {
+                    "type": "n8n_set_field",
+                    "id": "logic-b10b6b0d-c3b3-5853-8635-00310ebbaf0b",
+                    "data": "{\"intentStepId\":\"logic.normalize-engagement-score\",\"teaching\":{\"what\":\"把字符串参与度转换为数字，并乘以课堂权重 1.2。\",\"why\":\"把 AI 代码里的类型转换和算术表达式变成可阅读、可编辑的积木。\",\"editable\":[\"输入字段 engagementScore\",\"类型转换 number\",\"倍率 1.2\"],\"expectedEffect\":\"得到统一数值口径的 normalizedEngagement。\"}}",
+                    "fields": {
+                      "KEY": "normalizedEngagement"
+                    },
+                    "inputs": {
+                      "VALUE": {
+                        "block": {
+                          "type": "math_arithmetic",
+                          "id": "logic-1dcc6b52-7842-53c3-9400-f39e118888f4",
+                          "fields": {
+                            "OP": "MULTIPLY"
+                          },
+                          "inputs": {
+                            "A": {
+                              "block": {
+                                "type": "n8n_convert",
+                                "id": "logic-94f33071-0707-5f98-b854-983468d3115c",
+                                "fields": {
+                                  "TYPE": "NUMBER"
+                                },
+                                "inputs": {
+                                  "VALUE": {
+                                    "block": {
+                                      "type": "n8n_get_field",
+                                      "id": "logic-0a92aff8-a58a-5b55-bf30-cb5818e88d5b",
+                                      "fields": {
+                                        "PATH": "engagementScore"
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "B": {
+                              "block": {
+                                "type": "math_number",
+                                "id": "logic-33bebdf8-42ad-5c46-b0fc-bfcbd1cb0034",
+                                "fields": {
+                                  "NUM": 1.2
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "next": {
+                      "block": {
+                        "type": "n8n_set_field",
+                        "id": "logic-99aeb130-3be3-5f59-8f36-33143ce261ce",
+                        "data": "{\"intentStepId\":\"logic.select-active-students\",\"teaching\":{\"what\":\"筛选 active 为 true 的学员，再映射读取 profile.name。\",\"why\":\"让学员看见数组筛选与字段映射如何取代手写循环。\",\"editable\":[\"数组路径 students\",\"筛选字段 active\",\"姓名路径 profile.name\"],\"expectedEffect\":\"activeStudentNames 只包含小林和小陈。\"}}",
+                        "fields": {
+                          "KEY": "activeStudentNames"
+                        },
+                        "inputs": {
+                          "VALUE": {
+                            "block": {
+                              "type": "n8n_array_map_path",
+                              "id": "logic-34f7fe72-4733-52a7-b67d-5e020dc8b45b",
+                              "fields": {
+                                "PATH": "profile.name"
+                              },
+                              "inputs": {
+                                "ARRAY": {
+                                  "block": {
+                                    "type": "n8n_array_filter_path",
+                                    "id": "logic-43566d2a-5551-5843-981c-df3a40c8739d",
+                                    "fields": {
+                                      "PATH": "active",
+                                      "OP": "EQ"
+                                    },
+                                    "inputs": {
+                                      "ARRAY": {
+                                        "block": {
+                                          "type": "n8n_get_field",
+                                          "id": "logic-2f11fe21-35a1-5c0b-bf70-70391e50cf94",
+                                          "fields": {
+                                            "PATH": "students"
+                                          }
+                                        }
+                                      },
+                                      "VALUE": {
+                                        "block": {
+                                          "type": "logic_boolean",
+                                          "id": "logic-05559ca1-f394-510b-83cd-00970cf697d1",
+                                          "fields": {
+                                            "BOOL": "TRUE"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "blocklyPayload": "{\"schemaVersion\":2,\"workspace\":{\"blocks\":{\"languageVersion\":0,\"blocks\":[{\"type\":\"n8n_transform_item\",\"id\":\"logic-4b85e81b-dede-57e9-b426-18224c39217a\",\"x\":24,\"y\":24,\"fields\":{\"MODE\":\"COPY\"},\"inputs\":{\"STATEMENTS\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-b10b6b0d-c3b3-5853-8635-00310ebbaf0b\",\"data\":\"{\\\"intentStepId\\\":\\\"logic.normalize-engagement-score\\\",\\\"teaching\\\":{\\\"what\\\":\\\"把字符串参与度转换为数字，并乘以课堂权重 1.2。\\\",\\\"why\\\":\\\"把 AI 代码里的类型转换和算术表达式变成可阅读、可编辑的积木。\\\",\\\"editable\\\":[\\\"输入字段 engagementScore\\\",\\\"类型转换 number\\\",\\\"倍率 1.2\\\"],\\\"expectedEffect\\\":\\\"得到统一数值口径的 normalizedEngagement。\\\"}}\",\"fields\":{\"KEY\":\"normalizedEngagement\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"math_arithmetic\",\"id\":\"logic-1dcc6b52-7842-53c3-9400-f39e118888f4\",\"fields\":{\"OP\":\"MULTIPLY\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_convert\",\"id\":\"logic-94f33071-0707-5f98-b854-983468d3115c\",\"fields\":{\"TYPE\":\"NUMBER\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-0a92aff8-a58a-5b55-bf30-cb5818e88d5b\",\"fields\":{\"PATH\":\"engagementScore\"}}}}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-33bebdf8-42ad-5c46-b0fc-bfcbd1cb0034\",\"fields\":{\"NUM\":1.2}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-99aeb130-3be3-5f59-8f36-33143ce261ce\",\"data\":\"{\\\"intentStepId\\\":\\\"logic.select-active-students\\\",\\\"teaching\\\":{\\\"what\\\":\\\"筛选 active 为 true 的学员，再映射读取 profile.name。\\\",\\\"why\\\":\\\"让学员看见数组筛选与字段映射如何取代手写循环。\\\",\\\"editable\\\":[\\\"数组路径 students\\\",\\\"筛选字段 active\\\",\\\"姓名路径 profile.name\\\"],\\\"expectedEffect\\\":\\\"activeStudentNames 只包含小林和小陈。\\\"}}\",\"fields\":{\"KEY\":\"activeStudentNames\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_array_map_path\",\"id\":\"logic-34f7fe72-4733-52a7-b67d-5e020dc8b45b\",\"fields\":{\"PATH\":\"profile.name\"},\"inputs\":{\"ARRAY\":{\"block\":{\"type\":\"n8n_array_filter_path\",\"id\":\"logic-43566d2a-5551-5843-981c-df3a40c8739d\",\"fields\":{\"PATH\":\"active\",\"OP\":\"EQ\"},\"inputs\":{\"ARRAY\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-2f11fe21-35a1-5c0b-bf70-70391e50cf94\",\"fields\":{\"PATH\":\"students\"}}},\"VALUE\":{\"block\":{\"type\":\"logic_boolean\",\"id\":\"logic-05559ca1-f394-510b-83cd-00970cf697d1\",\"fields\":{\"BOOL\":\"TRUE\"}}}}}}}}}}}}}}}}]}},\"javascript\":\"const output = { ...$json };\\noutput[\\\"normalizedEngagement\\\"] = (((value) => { if (value === null || value === '') return null; const number = Number(value); return Number.isFinite(number) ? number : null; })(($json?.[\\\"engagementScore\\\"] ?? null)) * 1.2);\\noutput[\\\"activeStudentNames\\\"] = ((items) => Array.isArray(items) ? items.map((item) => (item?.[\\\"profile\\\"]?.[\\\"name\\\"] ?? null)) : [])(((items, expected) => Array.isArray(items) ? items.filter((item) => ((item?.[\\\"active\\\"] ?? null) === expected)) : [])(($json?.[\\\"students\\\"] ?? null), true));\\nreturn { json: output };\\n\"}",
+      "javascript": "const output = { ...$json };\noutput[\"normalizedEngagement\"] = (((value) => { if (value === null || value === '') return null; const number = Number(value); return Number.isFinite(number) ? number : null; })(($json?.[\"engagementScore\"] ?? null)) * 1.2);\noutput[\"activeStudentNames\"] = ((items) => Array.isArray(items) ? items.map((item) => (item?.[\"profile\"]?.[\"name\"] ?? null)) : [])(((items, expected) => Array.isArray(items) ? items.filter((item) => ((item?.[\"active\"] ?? null) === expected)) : [])(($json?.[\"students\"] ?? null), true));\nreturn { json: output };\n",
+      "sourceMap": [
+        {
+          "logicNodeRef": "logic.normalize-classroom-input",
+          "intentStepId": "logic.normalize-engagement-score",
+          "blockId": "logic-b10b6b0d-c3b3-5853-8635-00310ebbaf0b",
+          "statementKind": "set",
+          "targetField": "normalizedEngagement"
+        },
+        {
+          "logicNodeRef": "logic.normalize-classroom-input",
+          "intentStepId": "logic.select-active-students",
+          "blockId": "logic-99aeb130-3be3-5f59-8f36-33143ce261ce",
+          "statementKind": "set",
+          "targetField": "activeStudentNames"
+        }
+      ],
+      "n8nNodeId": "21a79d15-0d8d-57c9-aad2-45b637265031"
+    },
+    {
+      "nodeRef": "logic.compose-explanation-card",
+      "label": "生成课堂解释卡片",
+      "workspace": {
+        "blocks": {
+          "languageVersion": 0,
+          "blocks": [
+            {
+              "type": "n8n_transform_item",
+              "id": "logic-d0d8e850-f142-5a01-8b2c-d28e16a60f60",
+              "x": 24,
+              "y": 24,
+              "fields": {
+                "MODE": "COPY"
+              },
+              "inputs": {
+                "STATEMENTS": {
+                  "block": {
+                    "type": "n8n_set_field",
+                    "id": "logic-8afb7029-2468-54c6-a7b9-0de0c3310d71",
+                    "data": "{\"intentStepId\":\"logic.choose-classroom-gate\",\"teaching\":{\"what\":\"用阈值 80 把规范化参与度转成课堂讲解分支。\",\"why\":\"展示条件判断在 Blockly 中的输入、比较和两个可解释结果。\",\"editable\":[\"阈值 80\",\"通过提示\",\"复盘提示\"],\"expectedEffect\":\"本案例输出“可进入机器人计划讲解”。\"}}",
+                    "fields": {
+                      "KEY": "classroomGate"
+                    },
+                    "inputs": {
+                      "VALUE": {
+                        "block": {
+                          "type": "logic_ternary",
+                          "id": "logic-1d7b6f91-e337-5acb-b607-692abe948ae6",
+                          "inputs": {
+                            "IF": {
+                              "block": {
+                                "type": "logic_compare",
+                                "id": "logic-7a2ebf8f-24b1-5060-8202-aceb5a8aded1",
+                                "fields": {
+                                  "OP": "GTE"
+                                },
+                                "inputs": {
+                                  "A": {
+                                    "block": {
+                                      "type": "n8n_get_field",
+                                      "id": "logic-bba6b921-13e0-5096-acac-ca483326b94c",
+                                      "fields": {
+                                        "PATH": "normalizedEngagement"
+                                      }
+                                    }
+                                  },
+                                  "B": {
+                                    "block": {
+                                      "type": "math_number",
+                                      "id": "logic-87c579ef-024b-53d2-a198-609f7193d4f8",
+                                      "fields": {
+                                        "NUM": 80
+                                      }
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "THEN": {
+                              "block": {
+                                "type": "text",
+                                "id": "logic-82b8981f-0dee-5713-9cc1-70931d1efe85",
+                                "fields": {
+                                  "TEXT": "可进入机器人计划讲解"
+                                }
+                              }
+                            },
+                            "ELSE": {
+                              "block": {
+                                "type": "text",
+                                "id": "logic-1bc58634-0c30-5233-9074-48d0a9871593",
+                                "fields": {
+                                  "TEXT": "先复盘课堂输入质量"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "next": {
+                      "block": {
+                        "type": "n8n_set_field",
+                        "id": "logic-4bb1b4c1-d5c0-562e-8e3e-d4ca61bd3b4f",
+                        "data": "{\"intentStepId\":\"logic.compose-explanation-card\",\"teaching\":{\"what\":\"把数值、数组长度和中文提示拼成一张课堂解释卡片。\",\"why\":\"让学员同时看到数据如何成为面向人的说明，而非停留在代码变量。\",\"editable\":[\"中文提示文本\",\"要显示的字段\",\"名单计数来源\"],\"expectedEffect\":\"输出“输入参与度已规范化为 93.6；已识别 2 名活跃学员。”\"}}",
+                        "fields": {
+                          "KEY": "explanationCard"
+                        },
+                        "inputs": {
+                          "VALUE": {
+                            "block": {
+                              "type": "text_join",
+                              "id": "logic-c83bc19d-e909-5fd5-9ba7-b2ae8344f482",
+                              "extraState": {
+                                "itemCount": 5
+                              },
+                              "inputs": {
+                                "ADD0": {
+                                  "block": {
+                                    "type": "text",
+                                    "id": "logic-e20091dc-8885-52a9-8911-823dd5243035",
+                                    "fields": {
+                                      "TEXT": "输入参与度已规范化为 "
+                                    }
+                                  }
+                                },
+                                "ADD1": {
+                                  "block": {
+                                    "type": "n8n_convert",
+                                    "id": "logic-69adc5d7-7bf1-5969-85b4-a441b2e24c23",
+                                    "fields": {
+                                      "TYPE": "TEXT"
+                                    },
+                                    "inputs": {
+                                      "VALUE": {
+                                        "block": {
+                                          "type": "n8n_get_field",
+                                          "id": "logic-a37f2dfd-bfc0-5f6d-a198-0d526b1c0cd1",
+                                          "fields": {
+                                            "PATH": "normalizedEngagement"
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                "ADD2": {
+                                  "block": {
+                                    "type": "text",
+                                    "id": "logic-f801ecad-a60e-5969-bed5-50b6b202e1d6",
+                                    "fields": {
+                                      "TEXT": "；已识别 "
+                                    }
+                                  }
+                                },
+                                "ADD3": {
+                                  "block": {
+                                    "type": "n8n_convert",
+                                    "id": "logic-75ed0ab5-561f-506e-ab01-9b3bba527ace",
+                                    "fields": {
+                                      "TYPE": "TEXT"
+                                    },
+                                    "inputs": {
+                                      "VALUE": {
+                                        "block": {
+                                          "type": "lists_length",
+                                          "id": "logic-0cea25d4-d63f-5094-a68d-43e135d6838b",
+                                          "inputs": {
+                                            "VALUE": {
+                                              "block": {
+                                                "type": "n8n_get_field",
+                                                "id": "logic-87ec1158-1195-5f49-942f-1e7551e4b625",
+                                                "fields": {
+                                                  "PATH": "activeStudentNames"
+                                                }
+                                              }
+                                            }
+                                          }
+                                        }
+                                      }
+                                    }
+                                  }
+                                },
+                                "ADD4": {
+                                  "block": {
+                                    "type": "text",
+                                    "id": "logic-5441f5de-5602-5364-9cf7-b565e3d9f99b",
+                                    "fields": {
+                                      "TEXT": " 名活跃学员。"
+                                    }
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      },
+      "blocklyPayload": "{\"schemaVersion\":2,\"workspace\":{\"blocks\":{\"languageVersion\":0,\"blocks\":[{\"type\":\"n8n_transform_item\",\"id\":\"logic-d0d8e850-f142-5a01-8b2c-d28e16a60f60\",\"x\":24,\"y\":24,\"fields\":{\"MODE\":\"COPY\"},\"inputs\":{\"STATEMENTS\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-8afb7029-2468-54c6-a7b9-0de0c3310d71\",\"data\":\"{\\\"intentStepId\\\":\\\"logic.choose-classroom-gate\\\",\\\"teaching\\\":{\\\"what\\\":\\\"用阈值 80 把规范化参与度转成课堂讲解分支。\\\",\\\"why\\\":\\\"展示条件判断在 Blockly 中的输入、比较和两个可解释结果。\\\",\\\"editable\\\":[\\\"阈值 80\\\",\\\"通过提示\\\",\\\"复盘提示\\\"],\\\"expectedEffect\\\":\\\"本案例输出“可进入机器人计划讲解”。\\\"}}\",\"fields\":{\"KEY\":\"classroomGate\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"logic_ternary\",\"id\":\"logic-1d7b6f91-e337-5acb-b607-692abe948ae6\",\"inputs\":{\"IF\":{\"block\":{\"type\":\"logic_compare\",\"id\":\"logic-7a2ebf8f-24b1-5060-8202-aceb5a8aded1\",\"fields\":{\"OP\":\"GTE\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-bba6b921-13e0-5096-acac-ca483326b94c\",\"fields\":{\"PATH\":\"normalizedEngagement\"}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-87c579ef-024b-53d2-a198-609f7193d4f8\",\"fields\":{\"NUM\":80}}}}}},\"THEN\":{\"block\":{\"type\":\"text\",\"id\":\"logic-82b8981f-0dee-5713-9cc1-70931d1efe85\",\"fields\":{\"TEXT\":\"可进入机器人计划讲解\"}}},\"ELSE\":{\"block\":{\"type\":\"text\",\"id\":\"logic-1bc58634-0c30-5233-9074-48d0a9871593\",\"fields\":{\"TEXT\":\"先复盘课堂输入质量\"}}}}}}},\"next\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-4bb1b4c1-d5c0-562e-8e3e-d4ca61bd3b4f\",\"data\":\"{\\\"intentStepId\\\":\\\"logic.compose-explanation-card\\\",\\\"teaching\\\":{\\\"what\\\":\\\"把数值、数组长度和中文提示拼成一张课堂解释卡片。\\\",\\\"why\\\":\\\"让学员同时看到数据如何成为面向人的说明，而非停留在代码变量。\\\",\\\"editable\\\":[\\\"中文提示文本\\\",\\\"要显示的字段\\\",\\\"名单计数来源\\\"],\\\"expectedEffect\\\":\\\"输出“输入参与度已规范化为 93.6；已识别 2 名活跃学员。”\\\"}}\",\"fields\":{\"KEY\":\"explanationCard\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"text_join\",\"id\":\"logic-c83bc19d-e909-5fd5-9ba7-b2ae8344f482\",\"extraState\":{\"itemCount\":5},\"inputs\":{\"ADD0\":{\"block\":{\"type\":\"text\",\"id\":\"logic-e20091dc-8885-52a9-8911-823dd5243035\",\"fields\":{\"TEXT\":\"输入参与度已规范化为 \"}}},\"ADD1\":{\"block\":{\"type\":\"n8n_convert\",\"id\":\"logic-69adc5d7-7bf1-5969-85b4-a441b2e24c23\",\"fields\":{\"TYPE\":\"TEXT\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-a37f2dfd-bfc0-5f6d-a198-0d526b1c0cd1\",\"fields\":{\"PATH\":\"normalizedEngagement\"}}}}}},\"ADD2\":{\"block\":{\"type\":\"text\",\"id\":\"logic-f801ecad-a60e-5969-bed5-50b6b202e1d6\",\"fields\":{\"TEXT\":\"；已识别 \"}}},\"ADD3\":{\"block\":{\"type\":\"n8n_convert\",\"id\":\"logic-75ed0ab5-561f-506e-ab01-9b3bba527ace\",\"fields\":{\"TYPE\":\"TEXT\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"lists_length\",\"id\":\"logic-0cea25d4-d63f-5094-a68d-43e135d6838b\",\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-87ec1158-1195-5f49-942f-1e7551e4b625\",\"fields\":{\"PATH\":\"activeStudentNames\"}}}}}}}}},\"ADD4\":{\"block\":{\"type\":\"text\",\"id\":\"logic-5441f5de-5602-5364-9cf7-b565e3d9f99b\",\"fields\":{\"TEXT\":\" 名活跃学员。\"}}}}}}}}}}}}}]}},\"javascript\":\"const output = { ...$json };\\noutput[\\\"classroomGate\\\"] = ((($json?.[\\\"normalizedEngagement\\\"] ?? null) >= 80) ? \\\"可进入机器人计划讲解\\\" : \\\"先复盘课堂输入质量\\\");\\noutput[\\\"explanationCard\\\"] = [\\\"输入参与度已规范化为 \\\", ((value) => value === null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value))(($json?.[\\\"normalizedEngagement\\\"] ?? null)), \\\"；已识别 \\\", ((value) => value === null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value))(((value) => Array.isArray(value) || typeof value === 'string' ? value.length : 0)(($json?.[\\\"activeStudentNames\\\"] ?? null))), \\\" 名活跃学员。\\\"].join('');\\nreturn { json: output };\\n\"}",
+      "javascript": "const output = { ...$json };\noutput[\"classroomGate\"] = ((($json?.[\"normalizedEngagement\"] ?? null) >= 80) ? \"可进入机器人计划讲解\" : \"先复盘课堂输入质量\");\noutput[\"explanationCard\"] = [\"输入参与度已规范化为 \", ((value) => value === null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value))(($json?.[\"normalizedEngagement\"] ?? null)), \"；已识别 \", ((value) => value === null ? '' : typeof value === 'object' ? JSON.stringify(value) : String(value))(((value) => Array.isArray(value) || typeof value === 'string' ? value.length : 0)(($json?.[\"activeStudentNames\"] ?? null))), \" 名活跃学员。\"].join('');\nreturn { json: output };\n",
+      "sourceMap": [
+        {
+          "logicNodeRef": "logic.compose-explanation-card",
+          "intentStepId": "logic.choose-classroom-gate",
+          "blockId": "logic-8afb7029-2468-54c6-a7b9-0de0c3310d71",
+          "statementKind": "set",
+          "targetField": "classroomGate"
+        },
+        {
+          "logicNodeRef": "logic.compose-explanation-card",
+          "intentStepId": "logic.compose-explanation-card",
+          "blockId": "logic-4bb1b4c1-d5c0-562e-8e3e-d4ca61bd3b4f",
+          "statementKind": "set",
+          "targetField": "explanationCard"
+        }
+      ],
+      "n8nNodeId": "1e32a6a4-add3-5c64-a972-7df06bee60c6"
+    }
+  ],
+  "robotPlan": {
+    "schemaVersion": 1,
+    "robot": "rk3588_training_arm",
+    "configDigest": "rk3588-classroom-demo-v2",
+    "plan": [
+      {
+        "step": "skill",
+        "skill": "inspect_scene",
+        "timeoutSec": 30,
+        "blockId": "robot-321e1eb5a22d0fb5",
+        "planStepId": "step:robot-321e1eb5a22d0fb5"
+      },
+      {
+        "step": "wait",
+        "seconds": 0.5,
+        "blockId": "robot-28c39baf96f515fd",
+        "planStepId": "step:robot-28c39baf96f515fd"
+      },
+      {
+        "step": "skill",
+        "skill": "wave_hello",
+        "timeoutSec": 30,
+        "skipIf": {
+          "field": "last.success",
+          "op": "!=",
+          "value": true
+        },
+        "blockId": "robot-f25abdd32c9ec76d",
+        "planStepId": "step:robot-f25abdd32c9ec76d"
+      },
+      {
+        "step": "skill",
+        "skill": "recover_safe_pose",
+        "timeoutSec": 30,
+        "skipIf": {
+          "field": "last.success",
+          "op": "!=",
+          "value": true
+        },
+        "blockId": "robot-aa15111412e0c74c",
+        "planStepId": "step:robot-aa15111412e0c74c"
+      }
+    ]
+  },
+  "traceMap": [
+    {
+      "logicNodeRef": "logic.normalize-classroom-input",
+      "intentStepId": "logic.normalize-engagement-score",
+      "blockId": "logic-b10b6b0d-c3b3-5853-8635-00310ebbaf0b",
+      "statementKind": "set",
+      "targetField": "normalizedEngagement",
+      "surface": "blocklyLogic",
+      "n8nNodeId": "21a79d15-0d8d-57c9-aad2-45b637265031"
+    },
+    {
+      "logicNodeRef": "logic.normalize-classroom-input",
+      "intentStepId": "logic.select-active-students",
+      "blockId": "logic-99aeb130-3be3-5f59-8f36-33143ce261ce",
+      "statementKind": "set",
+      "targetField": "activeStudentNames",
+      "surface": "blocklyLogic",
+      "n8nNodeId": "21a79d15-0d8d-57c9-aad2-45b637265031"
+    },
+    {
+      "logicNodeRef": "logic.compose-explanation-card",
+      "intentStepId": "logic.choose-classroom-gate",
+      "blockId": "logic-8afb7029-2468-54c6-a7b9-0de0c3310d71",
+      "statementKind": "set",
+      "targetField": "classroomGate",
+      "surface": "blocklyLogic",
+      "n8nNodeId": "1e32a6a4-add3-5c64-a972-7df06bee60c6"
+    },
+    {
+      "logicNodeRef": "logic.compose-explanation-card",
+      "intentStepId": "logic.compose-explanation-card",
+      "blockId": "logic-4bb1b4c1-d5c0-562e-8e3e-d4ca61bd3b4f",
+      "statementKind": "set",
+      "targetField": "explanationCard",
+      "surface": "blocklyLogic",
+      "n8nNodeId": "1e32a6a4-add3-5c64-a972-7df06bee60c6"
+    },
+    {
+      "planRef": "plan.observe-greet-safe-return",
+      "stepRef": "robot.inspect-scene",
+      "blockId": "robot-321e1eb5a22d0fb5",
+      "planStepId": "step:robot-321e1eb5a22d0fb5",
+      "kind": "skill",
+      "capabilityName": "inspect_scene",
+      "surface": "robotPlan",
+      "intentStepId": "robot.inspect-scene",
+      "n8nNodeId": "a078162c-0780-5309-99e7-f825c89ad399",
+      "n8nExecutionNodeId": "a650f727-64da-580f-84a7-d76b43b4d4dc"
+    },
+    {
+      "planRef": "plan.observe-greet-safe-return",
+      "stepRef": "robot.pause-for-explanation",
+      "blockId": "robot-28c39baf96f515fd",
+      "planStepId": "step:robot-28c39baf96f515fd",
+      "kind": "wait",
+      "surface": "robotPlan",
+      "intentStepId": "robot.pause-for-explanation",
+      "n8nNodeId": "a078162c-0780-5309-99e7-f825c89ad399",
+      "n8nExecutionNodeId": "a650f727-64da-580f-84a7-d76b43b4d4dc"
+    },
+    {
+      "planRef": "plan.observe-greet-safe-return",
+      "stepRef": "robot.wave-classroom",
+      "blockId": "robot-f25abdd32c9ec76d",
+      "planStepId": "step:robot-f25abdd32c9ec76d",
+      "kind": "skill",
+      "guardBlockId": "robot-f25abdd32c9ec76d-guard",
+      "capabilityName": "wave_hello",
+      "surface": "robotPlan",
+      "intentStepId": "robot.wave-classroom",
+      "n8nNodeId": "a078162c-0780-5309-99e7-f825c89ad399",
+      "n8nExecutionNodeId": "a650f727-64da-580f-84a7-d76b43b4d4dc"
+    },
+    {
+      "planRef": "plan.observe-greet-safe-return",
+      "stepRef": "robot.return-safe-pose",
+      "blockId": "robot-aa15111412e0c74c",
+      "planStepId": "step:robot-aa15111412e0c74c",
+      "kind": "skill",
+      "guardBlockId": "robot-aa15111412e0c74c-guard",
+      "capabilityName": "recover_safe_pose",
+      "surface": "robotPlan",
+      "intentStepId": "robot.return-safe-pose",
+      "n8nNodeId": "a078162c-0780-5309-99e7-f825c89ad399",
+      "n8nExecutionNodeId": "a650f727-64da-580f-84a7-d76b43b4d4dc"
+    }
+  ],
+  "hardwareBoundary": {
+    "robotProfile": "rk3588_training_arm",
+    "configDigest": "rk3588-classroom-demo-v2",
+    "credentialReference": "REPLACE_WITH_ROBOFRAME_CREDENTIAL_*",
+    "executionPrerequisites": [
+      "目标 n8n 实例已绑定 RoboFrame Bridge API 凭据。",
+      "Robot Status 返回 motionAuthorized=true 且 busy=false。",
+      "Robot Validate 接受该计划与当前 live catalog digest。",
+      "教师在 n8n 审批表单中选择“批准”。"
+    ]
+  }
+}

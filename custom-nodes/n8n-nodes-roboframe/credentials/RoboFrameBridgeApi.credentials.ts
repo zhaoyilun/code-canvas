@@ -3,7 +3,7 @@ import type { ICredentialType, INodeProperties } from 'n8n-workflow';
 export class RoboFrameBridgeApi implements ICredentialType {
 	name = 'robframeBridgeApi';
 
-	displayName = 'RoboFrame Bridge API';
+	displayName = 'RoboFrame 网关凭据';
 
 	documentationUrl = 'https://gitcode.com/openeuler/IB_Robot';
 
@@ -11,7 +11,7 @@ export class RoboFrameBridgeApi implements ICredentialType {
 
 	properties: INodeProperties[] = [
 		{
-			displayName: 'Base URL',
+			displayName: '网关地址',
 			name: 'baseUrl',
 			type: 'string',
 			default: '',
@@ -19,12 +19,12 @@ export class RoboFrameBridgeApi implements ICredentialType {
 			required: true,
 		},
 		{
-			displayName: 'Bearer Token',
+			displayName: '访问令牌',
 			name: 'token',
 			type: 'string',
 			typeOptions: { password: true },
 			default: '',
-			description: 'RoboFrame bridge token (ROBOFRAME_BRIDGE_TOKEN on the robot side)',
+			description: 'RoboFrame 网关的访问令牌（机器人端环境变量 ROBOFRAME_BRIDGE_TOKEN）',
 		},
 	];
 
@@ -41,7 +41,7 @@ export class RoboFrameBridgeApi implements ICredentialType {
 		rules: [
 			{
 				type: 'responseCode',
-				properties: { value: 200, message: 'Bridge authorization check failed' },
+				properties: { value: 200, message: '网关授权校验失败' },
 			},
 		],
 	};

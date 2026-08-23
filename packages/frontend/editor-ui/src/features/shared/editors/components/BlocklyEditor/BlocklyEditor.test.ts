@@ -1,6 +1,7 @@
 import { flushPromises, mount } from '@vue/test-utils';
 
 import BlocklyEditor from './BlocklyEditor.vue';
+import { createToolbox, registerN8nBlocks } from './blockly';
 import { createDefaultWorkspace, serializeBlocklyDataPayload } from './payload';
 import {
 	ROBOT_EXECUTE_SKILL_BLOCK,
@@ -42,6 +43,7 @@ const workspace = {
 
 const blockly = {
 	Blocks: {},
+	setLocale: vi.fn(),
 	Theme: {
 		defineTheme: vi.fn((name: string, configuration: { name: string }) => ({
 			...configuration,
@@ -82,6 +84,12 @@ vi.mock('@n8n/i18n', () => ({
 }));
 
 vi.mock('blockly', () => blockly);
+
+vi.mock('blockly/msg/zh-hans', () => ({
+	LOGIC_BOOLEAN_TRUE: '真',
+	LOGIC_BOOLEAN_FALSE: '假',
+	MATH_ADDITION_SYMBOL: '+',
+}));
 
 vi.mock('./blockly', () => ({
 	createToolbox: vi.fn(() => ({ contents: [] })),
@@ -170,7 +178,7 @@ describe('BlocklyEditor.vue', () => {
 		{
 			name: 'logic',
 			props: { modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()) },
-			title: 'blocklyEditor.title',
+			title: '逻辑积木工作台',
 		},
 		{
 			name: 'robot plan',
@@ -187,10 +195,10 @@ describe('BlocklyEditor.vue', () => {
 				}),
 				editorMode: 'robot-skills' as const,
 			},
-			title: 'robotSkillEditor.title',
+			title: '机器人任务工作台',
 		},
 	])(
-		'identifies the $name Blockly editor as part of the current n8n node',
+		'identifies the $name Blockly editor as a Chinese n8n teaching workspace',
 		async ({ props, title }) => {
 			const editorProps: {
 				modelValue: string;
@@ -201,10 +209,76 @@ describe('BlocklyEditor.vue', () => {
 			await flushPromises();
 
 			expect(wrapper.text()).toContain(title);
-			expect(wrapper.text()).toContain('blocklyEditor.location.node');
+			expect(wrapper.text()).toContain('当前节点');
+			expect(wrapper.text()).toContain('n8n 流程节点');
 			wrapper.unmount();
 		},
 	);
+
+	it('uses Chinese Blockly messages, toolbox categories, and custom block labels', async () => {
+		const wrapper = mount(BlocklyEditor, {
+			props: { modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()) },
+		});
+
+		await flushPromises();
+
+		expect(blockly.setLocale).toHaveBeenCalledWith(
+			expect.objectContaining({ LOGIC_BOOLEAN_TRUE: '真' }),
+		);
+		expect(createToolbox).toHaveBeenCalledWith({
+			transform: '数据处理',
+			logic: '条件判断',
+			math: '数值运算',
+			text: '文本处理',
+			arrays: '数组操作',
+			objects: '对象操作',
+			types: '类型转换',
+		});
+		expect(registerN8nBlocks).toHaveBeenCalledWith(
+			blockly,
+			expect.objectContaining({
+				transformItem: '数据处理',
+				setField: '设置字段',
+				filterArrayPath: '筛选数组路径',
+			}),
+		);
+		wrapper.unmount();
+	});
+
+	it('uses Chinese labels for the robot action toolbox', async () => {
+		const wrapper = mount(BlocklyEditor, {
+			props: {
+				editorMode: 'robot-skills',
+				modelValue: serializeRobotPlanPayload({
+					catalog: {
+						robotName: 'rk3588_lab_arm',
+						configDigest: 'rk3588-live-digest',
+						skills: [],
+						primitives: [],
+						namedPoses: [],
+					},
+					workspace: { blocks: { blocks: [] } },
+				}),
+			},
+		});
+
+		await flushPromises();
+
+		expect(blockly.inject).toHaveBeenLastCalledWith(
+			expect.any(HTMLDivElement),
+			expect.objectContaining({
+				toolbox: expect.objectContaining({
+					contents: expect.arrayContaining([
+						expect.objectContaining({ name: '动作编排' }),
+						expect.objectContaining({ name: '基础动作' }),
+						expect.objectContaining({ name: '数值' }),
+						expect.objectContaining({ name: '文本' }),
+					]),
+				}),
+			}),
+		);
+		wrapper.unmount();
+	});
 
 	it.each([
 		{

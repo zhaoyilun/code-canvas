@@ -11,14 +11,14 @@ import { wrapError } from '../shared/errors';
 
 export class RobotStatus implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'Robot Status',
+		displayName: '机器人状态',
 		name: 'robotStatus',
 		icon: { light: 'file:roboframe.svg', dark: 'file:roboframe.dark.svg' },
 		group: ['input'],
 		version: 1,
-		description: 'Query the RoboFrame skill gateway status',
-		subtitle: 'Queries the skill gateway status',
-		defaults: { name: 'Robot Status' },
+		description: '查询 RoboFrame 技能网关的当前状态',
+		subtitle: '读取技能网关状态',
+		defaults: { name: '机器人状态' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
 		credentials: [{ name: 'robframeBridgeApi', required: true }],

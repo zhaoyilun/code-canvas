@@ -22,14 +22,14 @@ import {
 
 export class RobotTask implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'Robot Task',
+		displayName: '机器人任务执行',
 		name: 'robotTask',
 		icon: { light: 'file:roboframe.svg', dark: 'file:roboframe.dark.svg' },
 		group: ['transform'],
 		version: 1,
-		description: 'Execute a structured RoboFrame task plan step by step',
-		subtitle: 'Runs a structured task plan',
-		defaults: { name: 'Robot Task' },
+		description: '按步骤执行结构化 RoboFrame 机器人任务计划',
+		subtitle: '执行结构化机器人任务计划',
+		defaults: { name: '机器人任务执行' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
 		credentials: [{ name: 'robframeBridgeApi', required: true }],

@@ -53,22 +53,22 @@ function createNodeError(node: INode, message: string, itemIndex?: number): Node
 
 export class BlocklyCode implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'Blockly Logic',
+		displayName: 'Blockly 逻辑',
 		name: 'blocklyCode',
 		icon: { light: 'file:blockly-code.svg', dark: 'file:blockly-code.dark.svg' },
 		group: ['transform'],
 		version: [1],
-		description: 'Replace local JavaScript with visual logic inside this n8n node',
-		subtitle: 'Visual logic · one output per input item',
+		description: '在此 n8n 节点中用可视化逻辑替代本地 JavaScript',
+		subtitle: '可视化逻辑 · 每个输入项输出一条结果',
 		defaults: {
-			name: 'Blockly Logic',
+			name: 'Blockly 逻辑',
 		},
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
 		parameterPane: 'wide',
 		properties: [
 			{
-				displayName: 'Logic',
+				displayName: '逻辑',
 				name: 'blocklyPayload',
 				type: 'string',
 				default: DEFAULT_BLOCKLY_PAYLOAD,
@@ -77,7 +77,7 @@ export class BlocklyCode implements INodeType {
 					editor: 'blocklyEditor',
 					rows: 8,
 				},
-				description: 'Open Blockly inside this node to transform each input item visually',
+				description: '在此节点中打开 Blockly，以可视化方式转换每个输入项',
 			},
 		],
 	};

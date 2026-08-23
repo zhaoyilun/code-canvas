@@ -14,24 +14,24 @@ import { booleanParam } from '../shared/params';
 
 export class RobotCatalog implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'Robot Catalog',
+		displayName: '机器人能力目录',
 		name: 'robotCatalog',
 		icon: { light: 'file:roboframe.svg', dark: 'file:roboframe.dark.svg' },
 		group: ['input'],
 		version: 1,
-		description: 'List robot skills and primitives from the RoboFrame bridge catalog',
-		subtitle: 'Retrieves the robot action catalog',
-		defaults: { name: 'Robot Catalog' },
+		description: '从 RoboFrame 网关能力目录中读取机器人技能和基础动作',
+		subtitle: '读取机器人动作能力目录',
+		defaults: { name: '机器人能力目录' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
 		credentials: [{ name: 'robframeBridgeApi', required: true }],
 		properties: [
 			{
-				displayName: 'Include Details',
+				displayName: '包含详细信息',
 				name: 'includeDetails',
 				type: 'boolean',
 				default: false,
-				description: 'Whether to include parameter schemas and policies in each action item',
+				description: '是否在每个动作条目中包含参数结构和执行策略',
 			},
 		],
 	};

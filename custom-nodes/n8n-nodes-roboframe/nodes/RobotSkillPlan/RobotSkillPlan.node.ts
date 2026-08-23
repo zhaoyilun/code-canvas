@@ -18,20 +18,20 @@ const DEFAULT_ROBOT_PAYLOAD = createDefaultRobotPlanPayload();
 
 export class RobotSkillPlan implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'Robot Plan',
+		displayName: '机器人计划',
 		name: 'robotSkillPlan',
 		icon: { light: 'file:roboframe.svg', dark: 'file:roboframe.dark.svg' },
 		group: ['transform'],
 		version: 1,
-		description: 'Compose the detailed robot steps with Blockly inside an n8n node',
-		subtitle: 'Blockly details inside the n8n workflow',
-		defaults: { name: 'Robot Plan' },
+		description: '在 n8n 节点内使用 Blockly 编排详细机器人步骤',
+		subtitle: '在 n8n 工作流节点内编写 Blockly 细节',
+		defaults: { name: '机器人计划' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
 		parameterPane: 'wide',
 		properties: [
 			{
-				displayName: 'Robot Plan',
+				displayName: 'Blockly 机器人计划',
 				name: 'blocklyPayload',
 				type: 'string',
 				default: DEFAULT_ROBOT_PAYLOAD,
@@ -40,8 +40,7 @@ export class RobotSkillPlan implements INodeType {
 					editor: 'robotSkillEditor',
 					rows: 8,
 				},
-				description:
-					'Open the Blockly editor inside this node to review or change the detailed robot steps',
+				description: '打开本节点内的 Blockly 编辑器，查看或调整详细机器人步骤',
 			},
 		],
 	};

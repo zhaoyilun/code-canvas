@@ -2,7 +2,7 @@ import { renderComponent } from '@/__tests__/render';
 import CompetitionWorkbenchHeader from './CompetitionWorkbenchHeader.vue';
 
 const props = {
-	workflowName: 'AI 可解释机器人课程',
+	workflowName: '人工智能可解释机器人课程',
 	nodes: [
 		{ type: 'CUSTOM.blocklyCode' },
 		{ type: 'CUSTOM.robotStatus' },
@@ -27,8 +27,10 @@ describe('CompetitionWorkbenchHeader', () => {
 		});
 
 		expect(getByTestId('competition-workbench-header')).toBeInTheDocument();
-		expect(getByText('AI 代码理解实验室')).toBeInTheDocument();
+		expect(getByText('人工智能代码理解实验室')).toBeInTheDocument();
 		expect(getByText('最近运行成功')).toBeInTheDocument();
+		expect(getByText('1 个可视化逻辑节点')).toBeInTheDocument();
+		expect(getByText('4 个机器人任务节点')).toBeInTheDocument();
 		expect(document.documentElement.dataset.competitionWorkbench).toBe('true');
 
 		unmount();

@@ -60,17 +60,21 @@ beforeEach(() => {
 });
 
 describe('BlocklyCode', () => {
-	it('declares Blockly Logic with a wide, expression-free embedded editor', () => {
+	it('declares a Chinese Blockly Logic node with a wide, expression-free embedded editor', () => {
 		const node = new BlocklyCode();
 		const parameter = node.description.properties.find(({ name }) => name === 'blocklyPayload');
 
-		expect(node.description.displayName).toBe('Blockly Logic');
+		expect(node.description.displayName).toBe('Blockly 逻辑');
+		expect(node.description.description).toBe('在此 n8n 节点中用可视化逻辑替代本地 JavaScript');
+		expect(node.description.subtitle).toBe('可视化逻辑 · 每个输入项输出一条结果');
+		expect(node.description.defaults.name).toBe('Blockly 逻辑');
 		expect(node.description.name).toBe('blocklyCode');
 		expect(node.description.version).toEqual([1]);
 		expect(node.description.parameterPane).toBe('wide');
 		expect(node.description.properties).toHaveLength(1);
 		expect(parameter?.name).toBe('blocklyPayload');
-		expect(parameter?.displayName).toBe('Logic');
+		expect(parameter?.displayName).toBe('逻辑');
+		expect(parameter?.description).toBe('在此节点中打开 Blockly，以可视化方式转换每个输入项');
 		expect(parameter?.noDataExpression).toBe(true);
 		expect(parameter?.typeOptions?.editor).toBe('blocklyEditor');
 	});

@@ -20,6 +20,8 @@
 	);
 
 	isolation: isolate;
+	container-name: competition-canvas;
+	container-type: inline-size;
 
 	> #canvas {
 		isolation: isolate;
@@ -173,6 +175,27 @@
 		border-radius: var(--radius--lg);
 		background: color-mix(in oklch, var(--color--neutral-50) 88%, transparent);
 		box-shadow: var(--shadow--sm);
+	}
+}
+
+@container competition-canvas (max-width: 900px) {
+	.competition-canvas > #canvas {
+		background-size:
+			auto,
+			auto,
+			calc(var(--spacing--3xl) * 1.5) calc(var(--spacing--3xl) * 1.5),
+			calc(var(--spacing--3xl) * 1.5) calc(var(--spacing--3xl) * 1.5),
+			auto;
+	}
+
+	.competition-canvas :where([data-test-id='canvas-controls']) {
+		max-inline-size: calc(100% - var(--spacing--sm) * 2);
+	}
+}
+
+@container competition-canvas (max-width: 720px) {
+	.competition-canvas :where([data-test-id='canvas-minimap']) {
+		display: none;
 	}
 }
 

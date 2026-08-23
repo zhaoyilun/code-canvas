@@ -143,6 +143,10 @@ const dataTestId = computed(() => {
 	return `canvas-${type}-node`;
 });
 
+const localizedSubtitle = computed(() =>
+	subtitle.value === 'combine' ? i18n.baseText('canvas.nodeSubtitle.combine') : subtitle.value,
+);
+
 const isStrikethroughVisible = computed(() => {
 	const isSingleMainInputNode =
 		mainInputs.value.length === 1 && mainInputConnections.value.length <= 1;
@@ -244,8 +248,8 @@ function onActivate(event: MouseEvent) {
 			<div v-if="isDisabled" :class="$style.disabledLabel">
 				({{ i18n.baseText('node.disabled') }})
 			</div>
-			<div v-if="subtitle && !isNotInstalledCommunityNode" :class="$style.subtitle">
-				{{ subtitle }}
+			<div v-if="localizedSubtitle && !isNotInstalledCommunityNode" :class="$style.subtitle">
+				{{ localizedSubtitle }}
 			</div>
 		</div>
 		<CanvasNodeStatusIcons v-if="!isDisabled" :class="$style.statusIcons" />

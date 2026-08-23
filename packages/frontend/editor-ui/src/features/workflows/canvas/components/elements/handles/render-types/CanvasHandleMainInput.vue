@@ -1,12 +1,14 @@
 <script lang="ts" setup>
 import { useCanvasNodeHandle } from '../../../../composables/useCanvasNodeHandle';
 import { computed, useCssModule } from 'vue';
+import { useI18n } from '@n8n/i18n';
 import CanvasHandleDot from './parts/CanvasHandleDot.vue';
 import { useCanvas } from '../../../../composables/useCanvas';
 import { useZoomAdjustedValues } from '../../../../composables/useZoomAdjustedValues';
 
 const $style = useCssModule();
 
+const i18n = useI18n();
 const { label, isRequired } = useCanvasNodeHandle();
 const { viewport } = useCanvas();
 const { calculateHandleLightness } = useZoomAdjustedValues(viewport);
@@ -25,10 +27,17 @@ const handleStyles = computed(() => ({
 }));
 
 const handleClasses = 'target';
+
+const localizedLabel = computed(() => {
+	const match = /^Input (\d+)$/.exec(label.value);
+	return match
+		? i18n.baseText('canvas.handle.input', { interpolate: { index: match[1] } })
+		: label.value;
+});
 </script>
 <template>
 	<div :class="classes">
-		<div :class="[$style.label]">{{ label }}</div>
+		<div :class="[$style.label]">{{ localizedLabel }}</div>
 		<CanvasHandleDot :handle-classes="handleClasses" :style="handleStyles" />
 	</div>
 </template>

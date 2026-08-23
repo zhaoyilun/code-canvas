@@ -1,4 +1,5 @@
 import CanvasHandleMainOutput from './CanvasHandleMainOutput.vue';
+import { i18nInstance, setLanguage } from '@n8n/i18n';
 import { createComponentRenderer } from '@/__tests__/render';
 import {
 	createCanvasHandleProvide,
@@ -52,6 +53,26 @@ describe('CanvasHandleMainOutput', () => {
 		expect(container.querySelector('.canvas-node-handle-main-output')).toBeInTheDocument();
 		expect(getByTestId('canvas-handle-plus')).toBeInTheDocument();
 		expect(getByText(label)).toBeInTheDocument();
+	});
+
+	it('should localize boolean branch labels for the teaching workbench', () => {
+		const previousLocale = i18nInstance.global.locale.value;
+		setLanguage('zh-CN');
+
+		try {
+			const { getByText, queryByText } = renderComponent({
+				global: {
+					provide: {
+						...createCanvasHandleProvide({ label: 'true' }),
+					},
+				},
+			});
+
+			expect(getByText('是')).toBeInTheDocument();
+			expect(queryByText('true')).not.toBeInTheDocument();
+		} finally {
+			setLanguage(previousLocale);
+		}
 	});
 
 	it('should not render CanvasHandlePlus when isReadOnly', () => {

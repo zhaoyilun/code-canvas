@@ -1,4 +1,5 @@
 import { createComponentRenderer } from '@/__tests__/render';
+import { i18nInstance, setLanguage } from '@n8n/i18n';
 import { type MockedStore, mockedStore } from '@/__tests__/utils';
 import { VIEWS } from '@/app/constants';
 import {
@@ -109,6 +110,27 @@ describe('CanvasNodeDefault', () => {
 		});
 
 		expect(getByTestId('canvas-default-node')).toMatchSnapshot();
+	});
+
+	it('should localize the merge combine subtitle for the teaching workbench', () => {
+		const previousLocale = i18nInstance.global.locale.value;
+		setLanguage('zh-CN');
+
+		try {
+			const { getByText, queryByText } = renderComponent({
+				global: {
+					stubs,
+					provide: {
+						...createCanvasNodeProvide({ data: { subtitle: 'combine' } }),
+					},
+				},
+			});
+
+			expect(getByText('合并')).toBeInTheDocument();
+			expect(queryByText('combine')).not.toBeInTheDocument();
+		} finally {
+			setLanguage(previousLocale);
+		}
 	});
 
 	describe('private credential', () => {

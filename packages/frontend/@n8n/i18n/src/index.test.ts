@@ -1,11 +1,21 @@
 /* eslint-disable id-denylist */
 import { I18nClass, loadLanguage, i18nInstance } from './index';
+import { chineseBaseText } from './locales/zh-CN';
 import type { LocaleMessages } from './types';
 
 // Store original state for cleanup
 let originalLocale: string;
 let originalHtmlLang: string;
 const testLocales = new Set<string>();
+
+describe('Chinese teaching-workbench locale', () => {
+	it('provides Chinese labels for the primary workflow controls', () => {
+		expect(chineseBaseText['nodeView.runButtonText.executeWorkflow']).toBe('执行工作流');
+		expect(chineseBaseText['nodeSettings.docs']).toBe('文档');
+		expect(chineseBaseText['ndv.input.noOutputData.action']).toBe('执行前置节点');
+		expect(chineseBaseText['logs.overview.header.title']).toBe('运行日志');
+	});
+});
 
 describe(I18nClass, () => {
 	beforeAll(() => {

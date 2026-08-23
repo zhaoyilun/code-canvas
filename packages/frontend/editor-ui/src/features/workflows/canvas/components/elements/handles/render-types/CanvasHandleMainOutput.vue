@@ -60,6 +60,12 @@ const outputLabelClasses = computed(() => ({
 	[$style.outputLabel]: true,
 }));
 
+const localizedLabel = computed(() => {
+	if (label.value === 'true') return i18n.baseText('canvas.handle.true');
+	if (label.value === 'false') return i18n.baseText('canvas.handle.false');
+	return label.value;
+});
+
 const runDataLabelClasses = computed(() => ({
 	[$style.label]: true,
 	[$style.runDataLabel]: true,
@@ -86,7 +92,7 @@ function onClickAdd() {
 </script>
 <template>
 	<div :class="classes">
-		<div v-if="label" :class="outputLabelClasses">{{ label }}</div>
+		<div v-if="label" :class="outputLabelClasses">{{ localizedLabel }}</div>
 		<div v-if="runData" :class="runDataLabelClasses">{{ runDataLabel }}</div>
 		<CanvasHandleDot :handle-classes="handleClasses" :style="handleStyles" />
 		<Transition name="canvas-node-handle-main-output">

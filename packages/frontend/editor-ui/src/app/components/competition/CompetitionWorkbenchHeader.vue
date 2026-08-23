@@ -22,7 +22,7 @@ const props = defineProps<{
 }>();
 const $style = useCssModule();
 
-const taskTitle = computed(() => props.workflowName || 'AI 可解释机器人课程');
+const taskTitle = computed(() => props.workflowName || '人工智能可解释机器人课程');
 const activeStage = computed(() =>
 	resolveCompetitionStage({
 		activeNodeType: props.activeNodeType,
@@ -64,52 +64,62 @@ onBeforeUnmount(() => {
 
 <template>
 	<section
-		:class="$style.workbench"
-		aria-label="RoboTeach Studio AI 代码理解实验室"
+		:class="$style.workbenchShell"
+		aria-label="RoboTeach Studio｜人工智能代码理解实验室"
 		data-test-id="competition-workbench-header"
 	>
-		<div :class="$style.brand">
-			<div :class="$style.brandMark" aria-hidden="true">
-				<N8nIcon icon="sparkles" size="medium" />
+		<div :class="$style.workbench">
+			<div :class="$style.brand">
+				<div :class="$style.brandMark" aria-hidden="true">
+					<N8nIcon icon="sparkles" size="medium" />
+				</div>
+				<div :class="$style.brandCopy">
+					<p :class="$style.eyebrow">RoboTeach Studio</p>
+					<p :class="$style.title">人工智能代码理解实验室</p>
+					<p :class="$style.subtitle">{{ taskTitle }}</p>
+				</div>
 			</div>
-			<div :class="$style.brandCopy">
-				<p :class="$style.eyebrow">RoboTeach Studio</p>
-				<p :class="$style.title">AI 代码理解实验室</p>
-				<p :class="$style.subtitle">{{ taskTitle }}</p>
-			</div>
-		</div>
 
-		<div :class="$style.stageRail" aria-label="课堂任务阶段">
-			<div
-				v-for="stage in COMPETITION_STAGES"
-				:key="stage.id"
-				:class="[$style.stage, $style[`accent-${stage.accent}`], stageClass(stage.id)]"
-			>
-				<span :class="$style.stageIcon" aria-hidden="true">
-					<N8nIcon :icon="stage.icon" size="small" />
-				</span>
-				<span :class="$style.stageLabel">{{ stage.label }}</span>
+			<div :class="$style.stageRail" aria-label="课堂任务阶段">
+				<div
+					v-for="stage in COMPETITION_STAGES"
+					:key="stage.id"
+					:class="[$style.stage, $style[`accent-${stage.accent}`], stageClass(stage.id)]"
+				>
+					<span :class="$style.stageIcon" aria-hidden="true">
+						<N8nIcon :icon="stage.icon" size="small" />
+					</span>
+					<span :class="$style.stageLabel">{{ stage.label }}</span>
+				</div>
 			</div>
-		</div>
 
-		<div :class="$style.statusArea">
-			<div :class="[$style.runStatus, $style[`run-${runStatus.tone}`]]">
-				<N8nIcon :icon="runStatus.icon" size="small" />
-				<span>{{ runStatus.label }}</span>
-			</div>
-			<div :class="$style.capabilities" aria-label="比赛工作流能力">
-				<N8nBadge v-if="teachingNodeCount" theme="tertiary" :show-border="false">
-					{{ teachingNodeCount }} 个 Blockly 逻辑节点
-				</N8nBadge>
-				<N8nBadge v-if="robotNodeCount" theme="tertiary" :show-border="false">
-					{{ robotNodeCount }} 个 RoboFrame 节点
-				</N8nBadge>
+			<div :class="$style.statusArea">
+				<div :class="[$style.runStatus, $style[`run-${runStatus.tone}`]]">
+					<N8nIcon :icon="runStatus.icon" size="small" />
+					<span>{{ runStatus.label }}</span>
+				</div>
+				<div :class="$style.capabilities" aria-label="课堂任务能力">
+					<N8nBadge v-if="teachingNodeCount" theme="tertiary" :show-border="false">
+						{{ teachingNodeCount }} 个可视化逻辑节点
+					</N8nBadge>
+					<N8nBadge v-if="robotNodeCount" theme="tertiary" :show-border="false">
+						{{ robotNodeCount }} 个机器人任务节点
+					</N8nBadge>
+				</div>
 			</div>
 		</div>
 	</section>
 </template>
 
 <style lang="scss" module>
+.workbenchShell {
+	display: block;
+	width: 100%;
+	min-width: 0;
+	container-name: competition-workbench;
+	container-type: inline-size;
+}
+
 .workbench {
 	--n8n--competition-background: light-dark(
 		color-mix(in oklab, var(--color--blue-500) 10%, var(--background--surface)),
@@ -121,7 +131,8 @@ onBeforeUnmount(() => {
 	);
 
 	display: grid;
-	grid-template-columns: minmax(15rem, 1.1fr) minmax(30rem, 2.4fr) minmax(14rem, 1fr);
+	min-width: 0;
+	grid-template-columns: minmax(12.5rem, 17rem) minmax(0, 1fr) minmax(10.5rem, 15rem);
 	align-items: center;
 	gap: var(--spacing--sm);
 	padding: var(--spacing--2xs) var(--spacing--sm);
@@ -201,6 +212,9 @@ onBeforeUnmount(() => {
 }
 
 .stageRail {
+	width: 100%;
+	max-width: 72rem;
+	justify-self: center;
 	justify-content: space-between;
 	gap: var(--spacing--4xs);
 	min-width: 0;
@@ -212,6 +226,7 @@ onBeforeUnmount(() => {
 	position: relative;
 	min-width: 0;
 	flex: 1 1 0;
+	justify-content: center;
 	gap: var(--spacing--5xs);
 	color: var(--text-color--subtler);
 	font-size: var(--font-size--4xs);
@@ -243,6 +258,7 @@ onBeforeUnmount(() => {
 }
 
 .stageLabel {
+	min-width: 0;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
@@ -292,6 +308,8 @@ onBeforeUnmount(() => {
 }
 
 .runStatus {
+	min-width: 0;
+	max-width: 100%;
 	gap: var(--spacing--5xs);
 	padding: var(--spacing--5xs) var(--spacing--2xs);
 	border: var(--border-width) var(--border-style) currentColor;
@@ -300,6 +318,12 @@ onBeforeUnmount(() => {
 	font-weight: var(--font-weight--bold);
 	line-height: var(--line-height--sm);
 	white-space: nowrap;
+}
+
+.runStatus > span {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
 
 .run-ready {
@@ -328,35 +352,71 @@ onBeforeUnmount(() => {
 }
 
 .capabilities {
+	min-width: 0;
 	justify-content: flex-end;
 	gap: var(--spacing--5xs);
 	max-width: 100%;
-	overflow: hidden;
+	flex-wrap: wrap;
 }
 
-@media (max-width: 1200px) {
+@container competition-workbench (max-width: 1180px) {
 	.workbench {
-		grid-template-columns: minmax(14rem, 1fr) minmax(24rem, 2fr);
+		grid-template-columns: minmax(12rem, 0.85fr) minmax(0, 2.15fr);
 	}
 
 	.statusArea {
-		display: none;
+		grid-column: 1 / -1;
+		flex-direction: row;
+		justify-content: space-between;
+		align-items: center;
+	}
+
+	.capabilities {
+		justify-content: flex-end;
 	}
 }
 
-@media (max-width: 900px) {
+@container competition-workbench (max-width: 840px) {
 	.workbench {
 		grid-template-columns: 1fr;
 		gap: var(--spacing--2xs);
 	}
 
 	.stageRail {
+		justify-content: flex-start;
 		overflow-x: auto;
+		overscroll-behavior-x: contain;
+		scrollbar-width: thin;
 		padding-bottom: var(--spacing--5xs);
 	}
 
 	.stage {
 		flex: 0 0 auto;
+		padding-inline: var(--spacing--5xs);
+	}
+
+	.statusArea {
+		grid-column: auto;
+		flex-wrap: wrap;
+		justify-content: flex-start;
+		align-items: flex-start;
+	}
+
+	.capabilities {
+		justify-content: flex-start;
+	}
+}
+
+@container competition-workbench (max-width: 540px) {
+	.workbench {
+		padding-inline: var(--spacing--2xs);
+	}
+
+	.subtitle {
+		white-space: normal;
+		display: -webkit-box;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 2;
 	}
 }
 </style>

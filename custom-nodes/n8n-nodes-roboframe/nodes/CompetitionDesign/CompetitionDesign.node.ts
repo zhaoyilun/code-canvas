@@ -67,40 +67,40 @@ type DesignStage =
 
 export class CompetitionDesign implements INodeType {
 	description: INodeTypeDescription = {
-		displayName: 'Competition Design',
+		displayName: 'AI 课程设计生成',
 		name: 'competitionDesign',
 		icon: { light: 'file:roboframe.svg', dark: 'file:roboframe.dark.svg' },
 		group: ['transform'],
 		version: 1,
-		description: 'Generate an n8n workflow with Blockly Logic and Robot Plan nodes',
-		subtitle: 'AI draft → n8n workflow + node-internal Blockly',
-		defaults: { name: 'Competition Design' },
+		description: '根据 AI 设计草稿生成包含 Blockly 逻辑与机器人计划的 n8n 工作流',
+		subtitle: 'AI 设计草稿 → n8n 工作流 + 节点内 Blockly',
+		defaults: { name: 'AI 课程设计生成' },
 		inputs: [NodeConnectionTypes.Main],
 		outputs: [NodeConnectionTypes.Main],
 		credentials: [{ name: 'robframeBridgeApi', required: true }],
 		parameterPane: 'wide',
 		properties: [
 			{
-				displayName: 'Design Draft',
+				displayName: 'AI 设计草稿',
 				name: 'designDraft',
 				type: 'json',
 				default: DEFAULT_DESIGN_DRAFT,
 				description:
-					'Structured AI design draft for the n8n graph, local Blockly Logic, and Blockly Robot Plan. The live robot catalog remains authoritative.',
+					'用于生成 n8n 编排图、节点内 Blockly 逻辑和 Blockly 机器人计划的结构化 AI 草稿；实时机器人能力目录始终作为依据。',
 			},
 			{
-				displayName: 'Target Credential ID',
+				displayName: '目标凭据 ID',
 				name: 'targetCredentialId',
 				type: 'string',
 				default: TARGET_CREDENTIAL_ID_PLACEHOLDER,
-				description: 'Credential ID embedded in the generated importable n8n workflow',
+				description: '写入生成的可导入 n8n 工作流中的凭据 ID',
 			},
 			{
-				displayName: 'Target Credential Name',
+				displayName: '目标凭据名称',
 				name: 'targetCredentialName',
 				type: 'string',
 				default: TARGET_CREDENTIAL_NAME_PLACEHOLDER,
-				description: 'Credential name embedded in the generated importable n8n workflow',
+				description: '写入生成的可导入 n8n 工作流中的凭据名称',
 			},
 		],
 	};

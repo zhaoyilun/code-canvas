@@ -19,8 +19,6 @@ import { useSettingsStore } from '@n8n/stores/settings.store';
 import LoadingView from '@/app/views/LoadingView.vue';
 import { locale } from '@n8n/design-system';
 import { setLanguage } from '@n8n/i18n';
-// Note: no need to import en.json here; default 'en' is handled via setLanguage
-import { useRootStore } from '@n8n/stores/useRootStore';
 import axios from 'axios';
 import { computed, onMounted, provide, ref, shallowRef, watch } from 'vue';
 import { useRoute } from 'vue-router';
@@ -35,7 +33,6 @@ import type {
 } from '@/app/stores/workflowDocument.store';
 
 const route = useRoute();
-const rootStore = useRootStore();
 const settingsStore = useSettingsStore();
 
 const workflowId = useWorkflowId();
@@ -70,9 +67,16 @@ useBackendStatus();
 useTrialIntroModalAutoOpen();
 
 const loading = ref(true);
-const defaultLocale = computed(() => rootStore.defaultLocale);
 const isDemoMode = computed(() => route.name === VIEWS.DEMO);
 const hasContentFooter = ref(false);
+
+// This fork is delivered as a Chinese teaching workbench. Keep the editor,
+// system labels, and API locale aligned instead of inheriting the server's
+// English-only default setting.
+const workbenchLocale = 'zh-CN';
+setLanguage(workbenchLocale);
+axios.defaults.headers.common['Accept-Language'] = workbenchLocale;
+void locale.use(workbenchLocale);
 
 useTelemetryContext({
 	ndv_source: computed(() =>
@@ -99,18 +103,6 @@ watch(route, (r) => {
 		(matchedRoute) => matchedRoute.components?.footer !== undefined,
 	);
 });
-
-watch(
-	defaultLocale,
-	async (newLocale) => {
-		setLanguage(newLocale);
-
-		axios.defaults.headers.common['Accept-Language'] = newLocale;
-
-		void locale.use(newLocale);
-	},
-	{ immediate: true },
-);
 
 const layoutRef = ref<Element | null>(null);
 
