@@ -43,10 +43,8 @@ export class MissingOperationDiscovery {
 			return false;
 		}
 		const groupKey = `${qualifiedName}\u0000${arity}`;
-		const requestRef = requestRefFor(this.discoveryScopeRef, qualifiedName, arity);
-		const start = call.getStart(this.sourceFile);
 		const observation: OperationCallObservationV1 = {
-			callRef: `operation-call-${createStableId(requestRef, `call:${start}:${call.getEnd()}`)}`,
+			callRef: this.createCallRef(call, qualifiedName),
 			callText,
 			source: sourceSpanForNode(this.sourceFile, this.sourceRef, call),
 			arguments: call.arguments.map((argument, index) =>
@@ -61,6 +59,14 @@ export class MissingOperationDiscovery {
 			group.calls.push(observation);
 		}
 		return true;
+	}
+
+	createCallRef(call: ts.CallExpression, qualifiedName: string): string {
+		const requestRef = requestRefFor(this.discoveryScopeRef, qualifiedName, call.arguments.length);
+		return `operation-call-${createStableId(
+			requestRef,
+			`call:${call.getStart(this.sourceFile)}:${call.getEnd()}`,
+		)}`;
 	}
 
 	createDiagnostics(): DiagnosticV1[] {
@@ -97,12 +103,17 @@ export class MissingOperationDiscovery {
 	}
 }
 
-export function staticQualifiedCallName(expression: ts.LeftHandSideExpression): string | undefined {
+export function staticQualifiedCallName(
+	expression: ts.LeftHandSideExpression,
+	runtimeValueRoots: ReadonlySet<string> = new Set(),
+): string | undefined {
 	if (ts.isIdentifier(expression))
-		return isSafeQualifiedSegment(expression.text) ? expression.text : undefined;
+		return isSafeQualifiedSegment(expression.text) && !runtimeValueRoots.has(expression.text)
+			? expression.text
+			: undefined;
 	if (!ts.isPropertyAccessExpression(expression) || expression.questionDotToken !== undefined)
 		return undefined;
-	const parent = staticQualifiedCallName(expression.expression);
+	const parent = staticQualifiedCallName(expression.expression, runtimeValueRoots);
 	return parent === undefined || !isSafeQualifiedSegment(expression.name.text)
 		? undefined
 		: `${parent}.${expression.name.text}`;

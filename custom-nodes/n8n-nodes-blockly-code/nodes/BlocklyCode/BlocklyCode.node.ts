@@ -4,6 +4,7 @@ import {
 	parseBlocklyDataPayload,
 	serializeBlocklyDataPayload,
 } from '@n8n/blockly-data-transform';
+import type { OperationModuleCatalogV1 } from '@n8n/dual-canvas-operation-runtime';
 import type {
 	IExecuteFunctions,
 	INode,
@@ -14,7 +15,11 @@ import type {
 import { NodeConnectionTypes, NodeOperationError } from 'n8n-workflow';
 
 const CHUNK_SIZE = 1000;
-const DEFAULT_BLOCKLY_PAYLOAD = serializeBlocklyDataPayload(createDefaultWorkspace());
+const EMPTY_OPERATION_CATALOG: OperationModuleCatalogV1 = { apiVersion: 1, modules: [] };
+const DEFAULT_BLOCKLY_PAYLOAD = serializeBlocklyDataPayload(
+	createDefaultWorkspace(),
+	EMPTY_OPERATION_CATALOG,
+);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -95,7 +100,10 @@ export class BlocklyCode implements INodeType {
 			throw createNodeError(node, `Invalid Blockly payload: ${parsedPayload.error}`);
 		}
 
-		const compiledWorkspace = compileBlocklyWorkspace(parsedPayload.payload.workspace);
+		const compiledWorkspace = compileBlocklyWorkspace(
+			parsedPayload.payload.workspace,
+			parsedPayload.payload.operationCatalog,
+		);
 		if (!compiledWorkspace.ok) {
 			throw createNodeError(node, `Invalid Blockly workspace: ${compiledWorkspace.error}`);
 		}

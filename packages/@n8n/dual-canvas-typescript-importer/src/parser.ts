@@ -5,6 +5,10 @@ import type {
 	LogicStatementV1,
 	SourceSpanV1,
 } from '@n8n/dual-canvas-core';
+import type {
+	OperationModuleCatalogV1,
+	OperationModuleSpecV1,
+} from '@n8n/dual-canvas-operation-runtime';
 import ts from 'typescript';
 
 import type { TypeScriptImportRequestV1 } from './contracts';
@@ -24,7 +28,7 @@ export type TeachingProgramParseResult =
 
 export type TeachingProgramParseRequestV1 = Pick<
 	TypeScriptImportRequestV1,
-	'documentRef' | 'revisionRef' | 'entryFunction' | 'source'
+	'documentRef' | 'revisionRef' | 'entryFunction' | 'source' | 'operationCatalog'
 >;
 
 export function parseTeachingProgram(
@@ -95,6 +99,7 @@ export function parseTeachingProgram(
 		parameter.name.text,
 		request.documentRef,
 		request.revisionRef,
+		request.operationCatalog,
 	);
 	const statements = translator.translateStatements(bodyStatements.slice(1, -1));
 	translator.completeDiscovery();
@@ -331,10 +336,49 @@ function outputModeFromDeclaration(
 	return undefined;
 }
 
+type OperationModuleIndexV1 = {
+	resolve(qualifiedName: string, arity: number): OperationModuleSpecV1 | undefined;
+};
+
+function createOperationModuleIndexV1(catalog: OperationModuleCatalogV1): OperationModuleIndexV1 {
+	const modulesByIdentity = new Map<string, OperationModuleSpecV1>();
+	const selectedVersionsBySignature = new Map<string, string>();
+	for (const module of catalog.modules) {
+		const signature = operationSignatureKey(module.qualifiedName, module.arity);
+		modulesByIdentity.set(
+			operationIdentityKey(module.qualifiedName, module.arity, module.version),
+			module,
+		);
+		const selectedVersion = selectedVersionsBySignature.get(signature);
+		if (selectedVersion === undefined || module.version < selectedVersion) {
+			selectedVersionsBySignature.set(signature, module.version);
+		}
+	}
+
+	return {
+		resolve(qualifiedName, arity) {
+			const version = selectedVersionsBySignature.get(operationSignatureKey(qualifiedName, arity));
+			return version === undefined
+				? undefined
+				: modulesByIdentity.get(operationIdentityKey(qualifiedName, arity, version));
+		},
+	};
+}
+
+function operationSignatureKey(qualifiedName: string, arity: number): string {
+	return `${qualifiedName}\u0000${arity}`;
+}
+
+function operationIdentityKey(qualifiedName: string, arity: number, version: string): string {
+	return `${operationSignatureKey(qualifiedName, arity)}\u0000${version}`;
+}
+
 class TeachingAstTranslator {
 	readonly diagnostics: DiagnosticV1[] = [];
 	private readonly stepRefs = new Map<string, number>();
 	private readonly missingOperations: MissingOperationDiscovery;
+	private readonly operationIndex: OperationModuleIndexV1;
+	private readonly runtimeValueRoots: ReadonlySet<string>;
 
 	constructor(
 		private readonly sourceFile: ts.SourceFile,
@@ -342,7 +386,10 @@ class TeachingAstTranslator {
 		private readonly inputName: string,
 		documentRef: string,
 		revisionRef: string,
+		operationCatalog: OperationModuleCatalogV1,
 	) {
+		this.runtimeValueRoots = new Set([inputName, 'output']);
+		this.operationIndex = createOperationModuleIndexV1(operationCatalog);
 		this.missingOperations = new MissingOperationDiscovery(
 			sourceFile,
 			sourceRef,
@@ -514,7 +561,7 @@ class TeachingAstTranslator {
 		if (ts.isConditionalExpression(expression)) return this.translateConditional(expression);
 		if (ts.isArrayLiteralExpression(expression)) return this.translateArray(expression);
 		if (ts.isObjectLiteralExpression(expression)) return this.translateObject(expression);
-		if (ts.isCallExpression(expression)) return this.translateConversion(expression);
+		if (ts.isCallExpression(expression)) return this.translateCall(expression);
 		if (ts.isPropertyAccessExpression(expression) || ts.isElementAccessExpression(expression)) {
 			return this.translateMemberRead(expression);
 		}
@@ -616,7 +663,7 @@ class TeachingAstTranslator {
 			: undefined;
 	}
 
-	private translateConversion(expression: ts.CallExpression): LogicExpressionV1 | undefined {
+	private translateCall(expression: ts.CallExpression): LogicExpressionV1 | undefined {
 		const conversionName = ts.isIdentifier(expression.expression)
 			? expression.expression.text
 			: undefined;
@@ -625,17 +672,35 @@ class TeachingAstTranslator {
 		if (conversion === undefined) {
 			const qualifiedName =
 				expression.questionDotToken === undefined
-					? staticQualifiedCallName(expression.expression)
+					? staticQualifiedCallName(expression.expression, this.runtimeValueRoots)
 					: undefined;
 			if (qualifiedName === undefined) {
 				this.unsupported(
 					expression,
 					'Dynamic, computed, optional, and call-result invocations are outside operation discovery',
 				);
-			} else if (!this.missingOperations.record(expression, qualifiedName)) {
+				this.translateOperationArguments(expression.arguments);
+				return undefined;
+			}
+			const operation = this.operationIndex.resolve(qualifiedName, expression.arguments.length);
+			const argumentsResult = this.translateOperationArguments(expression.arguments);
+			if (operation !== undefined) {
+				if (argumentsResult.values.length !== expression.arguments.length) return undefined;
+				return {
+					kind: 'operationCall',
+					callRef: this.missingOperations.createCallRef(expression, qualifiedName),
+					operationRef: operation.operationRef,
+					implementationRef: operation.implementationRef,
+					qualifiedName: operation.qualifiedName,
+					version: operation.version,
+					arguments: argumentsResult.values,
+					source: sourceSpanForNode(this.sourceFile, this.sourceRef, expression),
+				};
+			}
+			if (argumentsResult.hasDiagnostics) return undefined;
+			if (!this.missingOperations.record(expression, qualifiedName)) {
 				this.unsupported(expression, 'Static operation call exceeds discovery contract limits');
 			}
-			this.discoverNestedOperationCalls(expression.arguments);
 			return undefined;
 		}
 		if (expression.arguments.length !== 1) {
@@ -655,38 +720,17 @@ class TeachingAstTranslator {
 		return value === undefined ? undefined : { kind: 'convert', to: conversion, value };
 	}
 
-	private discoverNestedOperationCalls(nodes: readonly ts.Node[]): void {
-		for (const node of nodes) this.discoverNestedOperationCallsInNode(node);
-	}
-
-	private discoverNestedOperationCallsInNode(node: ts.Node): void {
-		if (ts.isCallExpression(node)) {
-			const conversionName = ts.isIdentifier(node.expression) ? node.expression.text : undefined;
-			if (conversionName !== undefined && conversionFunctions.has(conversionName)) {
-				if (node.arguments.length !== 1) {
-					this.unsupported(node, 'Number, String, and Boolean conversions require one argument');
-					return;
-				}
-				this.discoverNestedOperationCalls(node.arguments);
-				return;
-			}
-
-			const qualifiedName =
-				node.questionDotToken === undefined ? staticQualifiedCallName(node.expression) : undefined;
-			if (qualifiedName === undefined) {
-				this.unsupported(
-					node,
-					'Dynamic, computed, optional, and call-result invocations are outside operation discovery',
-				);
-				return;
-			}
-			if (!this.missingOperations.record(node, qualifiedName)) {
-				this.unsupported(node, 'Static operation call exceeds discovery contract limits');
-			}
-			this.discoverNestedOperationCalls(node.arguments);
-			return;
+	private translateOperationArguments(argumentsV1: readonly ts.Expression[]): {
+		values: LogicExpressionV1[];
+		hasDiagnostics: boolean;
+	} {
+		const diagnosticCount = this.diagnostics.length;
+		const values: LogicExpressionV1[] = [];
+		for (const argument of argumentsV1) {
+			const translated = this.translateExpression(argument);
+			if (translated !== undefined) values.push(translated);
 		}
-		ts.forEachChild(node, (child) => this.discoverNestedOperationCallsInNode(child));
+		return { values, hasDiagnostics: this.diagnostics.length > diagnosticCount };
 	}
 
 	private translateMemberRead(

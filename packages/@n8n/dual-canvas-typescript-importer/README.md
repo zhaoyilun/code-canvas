@@ -6,7 +6,7 @@ runtime result is equivalent to the generated `@n8n/blockly-data-transform` prog
 
 - `VisualProgramIRV1`;
 - a generic Blockly Logic workspace and canonical payload;
-- source-span mappings for the outer workflow node and every statement block;
+- source-span mappings for the outer workflow node, every statement block, and every registered call;
 - a minimal n8n workflow fragment containing a manual trigger followed by a Blockly Code node;
 - a linked `DualCanvasDocumentV1`.
 
@@ -64,11 +64,18 @@ UI component DSL syntax is reported at its source location. Source import parses
 execute the submitted program. Accepted artifacts record
 `source-semantics.blockly-data-transform-equivalent.v1` in metadata.
 
-## Calls without an admitted operation
+## Registered and missing operations
 
-A static identifier or property call that is not one of the built-in `Number`, `String`, and
-`Boolean` conversions produces `OPERATION_MODULE_MISSING`. Calls with the same qualified name and
-arity are aggregated into one `ModuleScaffoldRequestV1` in `diagnostic.details`:
+Every import request carries an explicit `OperationModuleCatalogV1`. A static identifier or
+property call is resolved by exact qualified name and arity. A match becomes a persistent
+`operationCall` expression and one dynamic Blockly value block; the block and payload retain the
+logical operation reference, immutable implementation reference, and exact version for deterministic
+recompilation. Nested registered calls remain
+nested operation blocks.
+
+A call with no exact match (including a known name with the wrong arity) produces
+`OPERATION_MODULE_MISSING`. Calls with the same qualified name and arity are aggregated into one
+`ModuleScaffoldRequestV1` in `diagnostic.details`:
 
 ```ts
 output.low = clamp(-2, 0, 10);
@@ -88,8 +95,9 @@ JSON shell for AI or human generation. That shell is only generation input. Admi
 strict `OperationModuleAdmissionV1` envelope pairing the request with an `OperationModuleSpecV1`,
 including a bounded declarative expression and at least three test vectors. Async work,
 network/device access, and other effects route to a capability/plugin package. Operation
-registration, an `operationCall` IR node, and dynamic Blockly block creation belong to the next
-implementation slice.
+registration uses `createOperationModuleCatalogV1({ apiVersion: 1, modules: [spec] })`; it validates
+the strict specs, executes every test vector, rejects identity conflicts, and returns the canonical
+catalog supplied to the next import.
 
 See [`examples/score-normalizer.ts`](examples/score-normalizer.ts) for a domain-independent input.
 
@@ -105,6 +113,7 @@ const result = importTypeScriptSource({
 	title: 'Score normalizer',
 	profileRef: 'teaching.data-transform',
 	entryFunction: 'transform',
+	operationCatalog: { apiVersion: 1, modules: [] },
 	source: {
 		apiVersion: 1,
 		sourceRef: 'source.main',
@@ -130,8 +139,8 @@ const result = importTypeScriptSource({
 `importTypeScriptSource` returns the complete document, workflow, canvas, and IR artifact. The
 package also exports a core-compatible `SourceImporterV1` implementation; its `importSource` method
 returns only `VisualProgramIRV1` as required by the generic contract. Core import options contain
-only the source entry name and display title; installed node bindings, workflow layout, and canvas
-adapter selection belong to the later assembly API:
+the source entry name, display title, and pure-operation catalog; installed node bindings, workflow
+layout, and canvas adapter selection belong to the later assembly API:
 
 ```ts
 import { typescriptSourceImporterV1 } from '@n8n/dual-canvas-typescript-importer';
@@ -151,6 +160,7 @@ const programResult = typescriptSourceImporterV1.importSource({
 		apiVersion: 1,
 		title: 'Score normalizer',
 		entryFunction: 'transform',
+		operationCatalog: { apiVersion: 1, modules: [] },
 	},
 });
 ```

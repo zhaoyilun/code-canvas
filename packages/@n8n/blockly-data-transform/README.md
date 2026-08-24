@@ -14,15 +14,18 @@ recompiles the workspace before execution.
 
 ```ts
 type BlocklyDataPayload = {
-	schemaVersion: 2;
+	schemaVersion: 3;
+	operationCatalog: OperationModuleCatalogV1;
 	workspace: Record<string, unknown>;
 	javascript: string;
 };
 ```
 
-Use `serializeBlocklyDataPayload(workspace)` to produce a canonical payload and
-`parseBlocklyDataPayload(value)` to parse and canonicalize one. Schema version 2
-is strict; other versions are rejected.
+Use `serializeBlocklyDataPayload(workspace, operationCatalog)` to produce a
+canonical payload and `parseBlocklyDataPayload(value)` to parse and canonicalize
+one. Schema version 3 is strict; other versions are rejected. The catalog is
+admitted before compilation, including duplicate checks and execution of every
+declared test vector.
 
 ## Workspace grammar
 
@@ -57,6 +60,13 @@ The existing Blockly literal, text, math, comparison, boolean, and ternary
 blocks remain valid value expressions. Array mapping and filtering are bounded
 operations over one existing JSON array; the grammar has no general-purpose
 loop or variable block.
+
+An admitted pure operation adds one deterministic value-block type derived from
+its `operationRef` and version. The compiler validates the block identity and
+its exact `ARG0..ARGn` inputs, then compiles the declarative operation expression
+with the same type, null-policy, and finite-number checks as the operation
+runtime. No operation contributes JavaScript source or executable generator
+code.
 
 Input and output paths are 1–128 characters and use dot-separated object
 segments. Set and delete follow the same nested-path semantics as reads, using

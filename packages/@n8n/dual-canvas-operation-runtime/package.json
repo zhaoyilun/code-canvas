@@ -1,7 +1,7 @@
 {
-	"name": "@n8n/dual-canvas-core",
+	"name": "@n8n/dual-canvas-operation-runtime",
 	"version": "0.1.0",
-	"description": "Domain-independent contracts and deterministic generation for linked workflow and Blockly canvases",
+	"description": "Deterministic contracts, catalog, evaluator, and Blockly descriptors for pure dual-canvas operations",
 	"main": "dist/index.js",
 	"module": "dist/index.js",
 	"types": "dist/index.d.ts",
@@ -15,22 +15,21 @@
 	"files": [
 		"dist/**/*.d.ts",
 		"dist/**/*.js",
-		"dist/**/*.js.map"
+		"dist/**/*.js.map",
+		"README.md"
 	],
 	"sideEffects": false,
 	"scripts": {
 		"clean": "rimraf dist .turbo",
 		"typecheck": "tsc --noEmit",
 		"build": "tsc -p tsconfig.build.json",
-		"format": "biome format --write .",
-		"format:check": "biome ci .",
+		"format": "biome format --write src README.md package.json eslint.config.mjs tsconfig.json tsconfig.build.json vitest.config.ts",
+		"format:check": "biome ci src README.md package.json eslint.config.mjs tsconfig.json tsconfig.build.json vitest.config.ts",
 		"lint": "eslint . --quiet",
 		"test": "vitest run",
 		"test:unit": "vitest run"
 	},
 	"dependencies": {
-		"@n8n/blockly-data-transform": "workspace:*",
-		"@n8n/dual-canvas-operation-runtime": "workspace:*",
 		"uuid": "catalog:",
 		"zod": "catalog:"
 	},

@@ -1,4 +1,6 @@
 import type * as Blockly from 'blockly';
+import { createOperationModuleCatalogV1 } from '@n8n/dual-canvas-operation-runtime';
+import type { OperationModuleCatalogV1 } from '@n8n/dual-canvas-operation-runtime';
 
 import { createToolbox, registerN8nBlocks } from './blockly';
 import {
@@ -21,7 +23,14 @@ import {
 
 export type BlocklyRuntime = Pick<
 	typeof Blockly,
-	'Blocks' | 'FieldDropdown' | 'FieldTextInput' | 'serialization' | 'Theme' | 'Themes'
+	| 'Blocks'
+	| 'FieldDropdown'
+	| 'FieldTextInput'
+	| 'serialization'
+	| 'defineBlocksWithJsonArray'
+	| 'Extensions'
+	| 'Theme'
+	| 'Themes'
 >;
 export type BlocklyWorkspaceState = Record<string, unknown>;
 export type BlocklyEditorProfileId = string;
@@ -78,6 +87,7 @@ const LOGIC_TOOLBOX_LABELS = {
 	arrays: '数组操作',
 	objects: '对象操作',
 	types: '类型转换',
+	operations: '函数模块',
 };
 
 const LOGIC_BLOCK_LABELS = {
@@ -210,21 +220,27 @@ registerBlocklyEditorProfile({
 });
 
 function createDataTransformAdapter(): BlocklyEditorAdapter {
+	let operationCatalog: OperationModuleCatalogV1 = createOperationModuleCatalogV1({
+		apiVersion: 1,
+		modules: [],
+	});
 	return {
-		registerBlocks: (blockly) => registerN8nBlocks(blockly, LOGIC_BLOCK_LABELS),
-		createToolbox: () => createToolbox(LOGIC_TOOLBOX_LABELS),
+		registerBlocks: (blockly) => registerN8nBlocks(blockly, LOGIC_BLOCK_LABELS, operationCatalog),
+		createToolbox: () => createToolbox(LOGIC_TOOLBOX_LABELS, operationCatalog),
 		parsePayload: (value) => {
 			const result = parseBlocklyDataPayload(value);
-			return result.ok ? { ok: true, workspace: result.payload.workspace } : result;
+			if (!result.ok) return result;
+			operationCatalog = result.payload.operationCatalog;
+			return { ok: true, workspace: result.payload.workspace };
 		},
 		createDefaultWorkspace,
 		compileWorkspace: (workspace) => {
-			const result = compileBlocklyWorkspace(workspace);
+			const result = compileBlocklyWorkspace(workspace, operationCatalog);
 			return result.ok ? { ok: true, preview: result.javascript } : result;
 		},
-		serializePayload: serializeBlocklyDataPayload,
+		serializePayload: (workspace) => serializeBlocklyDataPayload(workspace, operationCatalog),
 		workspaceLoadError: (workspace) => {
-			const result = compileBlocklyWorkspace(workspace);
+			const result = compileBlocklyWorkspace(workspace, operationCatalog);
 			return result.ok ? WORKSPACE_LOAD_ERROR : result.error;
 		},
 	};

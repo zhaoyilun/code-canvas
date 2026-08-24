@@ -31,6 +31,8 @@ try {
 	const output = await readFile(bundled, 'utf8');
 	if (/require\(["']@n8n\/blockly-data-transform["']\)/.test(output))
 		throw new Error('Shared Blockly compiler was not bundled');
+	if (/require\(["']@n8n\/dual-canvas-operation-runtime["']\)/.test(output))
+		throw new Error('Operation module runtime was not bundled');
 
 	await copyFile(bundled, target);
 	await copyFile(`${bundled}.map`, `${target}.map`);

@@ -5,6 +5,7 @@ import {
 } from './capabilityPlan';
 import {
 	createDefaultWorkspace,
+	createOperationModuleCatalogV1,
 	parseBlocklyDataPayload,
 	serializeBlocklyDataPayload,
 } from './payload';
@@ -30,6 +31,8 @@ const catalog = {
 		},
 	],
 } as const;
+
+const EMPTY_OPERATION_CATALOG = createOperationModuleCatalogV1({ apiVersion: 1, modules: [] });
 
 const executionPlan = {
 	apiVersion: 1,
@@ -59,12 +62,15 @@ describe('Blockly editor profile registry', () => {
 	it('keeps the data-transform payload contract behind its adapter', () => {
 		const workspace = createDefaultWorkspace();
 		const adapter = createBlocklyEditorAdapter('data-transform');
-		const parsed = adapter.parsePayload(serializeBlocklyDataPayload(workspace));
+		const parsed = adapter.parsePayload(
+			serializeBlocklyDataPayload(workspace, EMPTY_OPERATION_CATALOG),
+		);
 
 		expect(parsed).toEqual({ ok: true, workspace });
 		const serialized = adapter.serializePayload(workspace);
 		const reparsed = parseBlocklyDataPayload(serialized);
 		expect(reparsed.ok && reparsed.payload.workspace).toEqual(workspace);
+		expect(reparsed.ok && reparsed.payload.operationCatalog).toEqual(EMPTY_OPERATION_CATALOG);
 	});
 
 	it('preserves the catalog, plan reference, metadata, and edited workspace on reload', () => {

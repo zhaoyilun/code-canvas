@@ -10,6 +10,10 @@ import {
 	type VisualProgramIRV1,
 	type WorkflowFragmentV1,
 } from '@n8n/dual-canvas-core';
+import {
+	createOperationModuleCatalogV1,
+	operationModuleCatalogV1Schema,
+} from '@n8n/dual-canvas-operation-runtime';
 import { z } from 'zod';
 
 export const BLOCKLY_DATA_PAYLOAD_MEDIA_TYPE = 'application/vnd.n8n.blockly-data+json';
@@ -34,11 +38,26 @@ const supportedSourceSnapshotV1Schema = sourceSnapshotV1Schema
 	.extend({ language: typeScriptSourceLanguageV1Schema })
 	.strict();
 
+const admittedOperationModuleCatalogV1Schema = operationModuleCatalogV1Schema.transform(
+	(catalog, context) => {
+		try {
+			return createOperationModuleCatalogV1(catalog);
+		} catch (error) {
+			context.addIssue({
+				code: 'custom',
+				message: error instanceof Error ? error.message : String(error),
+			});
+			return z.NEVER;
+		}
+	},
+);
+
 export const typeScriptSourceImporterOptionsV1Schema = z
 	.object({
 		apiVersion: z.literal(1),
 		title: z.string().trim().min(1).max(128),
 		entryFunction: entryFunctionSchema,
+		operationCatalog: admittedOperationModuleCatalogV1Schema,
 	})
 	.strict();
 
@@ -55,6 +74,7 @@ export const typeScriptImportRequestV1Schema = z
 		profileRef: stableReferenceSchema,
 		entryFunction: entryFunctionSchema,
 		source: supportedSourceSnapshotV1Schema,
+		operationCatalog: admittedOperationModuleCatalogV1Schema,
 		bindings: nodeTypeBindingsV1Schema,
 		workflow: z
 			.object({

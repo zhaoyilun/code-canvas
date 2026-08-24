@@ -67,7 +67,10 @@ export function generateNumericRuntimeArtifacts() {
 	);
 	assert.equal(parsedPayload.ok, true, parsedPayload.error);
 	assert.deepEqual(parsedPayload.payload.workspace, workspace);
-	const compiled = dataTransform.compileBlocklyWorkspace(workspace);
+	const compiled = dataTransform.compileBlocklyWorkspace(
+		workspace,
+		parsedPayload.payload.operationCatalog,
+	);
 	assert.equal(compiled.ok, true, compiled.error);
 	assert.equal(compiled.javascript, first.value.generatedCanvas.javascript);
 

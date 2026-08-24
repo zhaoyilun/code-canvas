@@ -12,6 +12,16 @@ It provides:
 - source import and editable dual-canvas document contracts;
 - a declarative plugin manifest and generator SDK.
 
+`LogicExpressionV1` can persist a pure registered function call as `operationCall`. The node keeps
+the call, logical `operationRef`, immutable `implementationRef`, qualified-name, version, arguments,
+and source-span identities instead of
+expanding the function away. `generateLogicCanvas(draft, documentRef, operationCatalog)` requires
+an explicit `OperationModuleCatalogV1`; use `{ apiVersion: 1, modules: [] }` when a generic lesson
+has no generated operations. Registered calls become one deterministic dynamic Blockly value
+block each, while the generated payload carries the same catalog needed for runtime recompilation.
+Every call also receives its own source-to-block mapping in addition to the surrounding statement
+mapping.
+
 Installed node type names enter generation only through `NodeTypeBindingsV1`. A plugin owns its
 capability vocabulary and workflow fragment while the core remains usable without that plugin.
 `editorProfile` selects a built-in canvas adapter, while the optional `workbenchProfile` describes

@@ -1,7 +1,15 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import {
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	readdirSync,
+	rmSync,
+	utimesSync,
+	writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
@@ -10,9 +18,12 @@ import {
 	createFixtureEnvironment,
 	createRuntimeEnvironment,
 	extractExecutionJson,
-	formatMissingBuildOutputs,
+	findNewestProductionInput,
+	formatBuildOutputProblems,
+	getBuildOutputProblems,
 	parseArguments,
 	runWorkflowAcceptance,
+	runtimeBuildRequirements,
 	selectBrokerPort,
 	validateWorkflowFixture,
 	verifyTaskRunnerLog,
@@ -157,17 +168,98 @@ test('fixture verification always uses the repository compiler', () => {
 	assert.equal(environment.N8N_BLOCKLY_COMPILER_MODULE, undefined);
 });
 
-test('missing build output guidance includes an executable redirected command', () => {
-	const message = formatMissingBuildOutputs([
+test('build output guidance includes ordered executable commands', () => {
+	const message = formatBuildOutputProblems([
 		{
 			path: '/repo/dist/file.js',
 			command: 'pnpm --filter package build',
-			logName: 'package-build.log',
+			reason: 'missing',
 		},
 	]);
 	assert.match(message, /\/repo\/dist\/file\.js/);
-	assert.match(
-		message,
-		/pnpm --filter package build > scripts\/blockly-v1\/\.runtime\/package-build\.log 2>&1/,
+	assert.match(message, /pnpm --filter package build/);
+});
+
+test('freshness gate tracks production source and manifests, ignores tests, and propagates upstream staleness', () => {
+	const directory = mkdtempSync(join(tmpdir(), 'blockly-build-freshness-'));
+	try {
+		const sourceDirectory = join(directory, 'src');
+		const outputDirectory = join(directory, 'dist');
+		mkdirSync(sourceDirectory);
+		mkdirSync(outputDirectory);
+		const productionSource = join(sourceDirectory, 'index.ts');
+		const testSource = join(sourceDirectory, 'index.test.ts');
+		const manifest = join(directory, 'package.json');
+		const upstreamOutput = join(outputDirectory, 'index.js');
+		const upstreamBuildMarker = join(outputDirectory, 'build.tsbuildinfo');
+		const downstreamOutput = join(outputDirectory, 'consumer.js');
+		for (const path of [
+			productionSource,
+			testSource,
+			manifest,
+			upstreamOutput,
+			upstreamBuildMarker,
+			downstreamOutput,
+		]) {
+			writeFileSync(path, path, 'utf8');
+		}
+
+		const at = (seconds) => new Date(seconds * 1000);
+		utimesSync(productionSource, at(100), at(100));
+		utimesSync(manifest, at(100), at(100));
+		utimesSync(upstreamOutput, at(150), at(150));
+		utimesSync(upstreamBuildMarker, at(200), at(200));
+		utimesSync(downstreamOutput, at(300), at(300));
+		utimesSync(testSource, at(400), at(400));
+
+		const requirements = [
+			{
+				path: upstreamOutput,
+				freshnessMarker: upstreamBuildMarker,
+				inputs: [sourceDirectory, manifest],
+				command: 'pnpm --filter upstream build',
+			},
+			{
+				path: downstreamOutput,
+				inputs: [upstreamBuildMarker],
+				command: 'pnpm --filter downstream build',
+			},
+		];
+		assert.equal(findNewestProductionInput(sourceDirectory)?.path, productionSource);
+		assert.deepEqual(getBuildOutputProblems(requirements), []);
+
+		utimesSync(manifest, at(500), at(500));
+		assert.deepEqual(
+			getBuildOutputProblems(requirements).map(({ reason, path, inputPath }) => ({
+				reason,
+				path,
+				inputPath,
+			})),
+			[
+				{ reason: 'stale', path: upstreamOutput, inputPath: manifest },
+				{ reason: 'upstream-stale', path: downstreamOutput, inputPath: upstreamBuildMarker },
+			],
+		);
+	} finally {
+		rmSync(directory, { force: true, recursive: true });
+	}
+});
+
+test('runtime package gate binds the packed community node to sources and bundled runtimes', () => {
+	const communityNode = runtimeBuildRequirements.find(
+		({ command }) => command === 'pnpm --filter n8n-nodes-blockly-code build',
+	);
+	assert.ok(communityNode);
+	assert.ok(communityNode.inputs.some((path) => path.endsWith('package.json')));
+	assert.ok(communityNode.inputs.some((path) => path.endsWith('nodes')));
+	assert.ok(
+		communityNode.inputs.some((path) =>
+			path.endsWith(join('dual-canvas-operation-runtime', 'dist', 'build.tsbuildinfo')),
+		),
+	);
+	assert.ok(
+		communityNode.inputs.some((path) =>
+			path.endsWith(join('blockly-data-transform', 'dist', 'build.tsbuildinfo')),
+		),
 	);
 });

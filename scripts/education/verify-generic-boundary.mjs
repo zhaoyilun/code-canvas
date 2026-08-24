@@ -40,6 +40,8 @@ const productionEntries = [
 	'packages/@n8n/blockly-data-transform/src',
 	'packages/@n8n/blockly-capability-plan/src',
 	'packages/@n8n/dual-canvas-core/src',
+	'packages/@n8n/dual-canvas-operation-runtime/src',
+	'packages/@n8n/dual-canvas-operation-sdk/src',
 	'packages/@n8n/dual-canvas-typescript-importer/src',
 	'packages/frontend/editor-ui/src/app/components/MainHeader/MainHeader.vue',
 	'packages/frontend/editor-ui/src/app/components/workbench',
@@ -69,6 +71,8 @@ const fixtureEntries = [
 	'packages/@n8n/blockly-data-transform/examples',
 	'packages/@n8n/blockly-capability-plan/examples',
 	'packages/@n8n/dual-canvas-core/examples',
+	'packages/@n8n/dual-canvas-operation-runtime/examples',
+	'packages/@n8n/dual-canvas-operation-sdk/examples',
 	'packages/@n8n/dual-canvas-typescript-importer/examples',
 	'packages/@n8n/dual-canvas-typescript-importer/fixtures',
 ];

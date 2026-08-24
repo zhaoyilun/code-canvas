@@ -9,7 +9,12 @@ import {
 	parseCapabilityPlanPayload,
 	serializeCapabilityPlanPayload,
 } from './capabilityPlan';
-import { createDefaultWorkspace, serializeBlocklyDataPayload } from './payload';
+import {
+	createDefaultWorkspace,
+	createOperationModuleCatalogV1,
+	finalizeOperationModuleSpecV1,
+	serializeBlocklyDataPayload,
+} from './payload';
 
 type ChangeListener = (event: { isUiEvent: boolean }) => void;
 
@@ -49,6 +54,35 @@ const capabilityExecutionPlan = {
 	],
 } as const;
 
+const EMPTY_OPERATION_CATALOG = createOperationModuleCatalogV1({ apiVersion: 1, modules: [] });
+const BOOLEAN_OPERATION_CATALOG = createOperationModuleCatalogV1({
+	apiVersion: 1,
+	modules: [
+		finalizeOperationModuleSpecV1({
+			apiVersion: 1,
+			requestRef: 'request.always-ready',
+			operationRef: 'operation.always-ready',
+			implementationRef: null,
+			qualifiedName: 'alwaysReady',
+			arity: 0,
+			version: '1.0.0',
+			behaviorSummary: 'Return true.',
+			execution: 'synchronous',
+			determinism: 'deterministic',
+			effects: 'none',
+			dataFlow: 'json-to-json',
+			parameters: [],
+			output: { type: 'boolean', nullPolicy: 'reject' },
+			expression: { kind: 'literal', value: true },
+			testVectors: [
+				{ name: 'first', arguments: [], expected: true },
+				{ name: 'second', arguments: [], expected: true },
+				{ name: 'third', arguments: [], expected: true },
+			],
+		}),
+	],
+});
+
 const events = {
 	disabled: false,
 	disable: vi.fn(() => {
@@ -75,6 +109,7 @@ const workspace = {
 		changeListener = undefined;
 	}),
 	clear: vi.fn(notifyProgrammaticChange),
+	updateToolbox: vi.fn(),
 	dispose: vi.fn(),
 };
 
@@ -100,6 +135,7 @@ const blockly = {
 			return undefined;
 		}
 	},
+	defineBlocksWithJsonArray: vi.fn(),
 	getSelected: vi.fn(() => (selectedBlockData === undefined ? null : { data: selectedBlockData })),
 	inject: vi.fn(() => workspace),
 	svgResize: vi.fn(),
@@ -224,7 +260,7 @@ describe('BlocklyEditor.vue', () => {
 		{
 			name: 'logic',
 			props: {
-				modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()),
+				modelValue: serializeBlocklyDataPayload(createDefaultWorkspace(), EMPTY_OPERATION_CATALOG),
 				profileId: 'data-transform' as const,
 			},
 			title: '逻辑积木工作台',
@@ -256,7 +292,7 @@ describe('BlocklyEditor.vue', () => {
 	it('uses Chinese Blockly messages, toolbox categories, and custom block labels', async () => {
 		const wrapper = mount(BlocklyEditor, {
 			props: {
-				modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()),
+				modelValue: serializeBlocklyDataPayload(createDefaultWorkspace(), EMPTY_OPERATION_CATALOG),
 				profileId: 'data-transform',
 			},
 		});
@@ -266,15 +302,19 @@ describe('BlocklyEditor.vue', () => {
 		expect(blockly.setLocale).toHaveBeenCalledWith(
 			expect.objectContaining({ LOGIC_BOOLEAN_TRUE: '真' }),
 		);
-		expect(createToolbox).toHaveBeenCalledWith({
-			transform: '数据处理',
-			logic: '条件判断',
-			math: '数值运算',
-			text: '文本处理',
-			arrays: '数组操作',
-			objects: '对象操作',
-			types: '类型转换',
-		});
+		expect(createToolbox).toHaveBeenCalledWith(
+			{
+				transform: '数据处理',
+				logic: '条件判断',
+				math: '数值运算',
+				text: '文本处理',
+				arrays: '数组操作',
+				objects: '对象操作',
+				types: '类型转换',
+				operations: '函数模块',
+			},
+			EMPTY_OPERATION_CATALOG,
+		);
 		expect(registerN8nBlocks).toHaveBeenCalledWith(
 			blockly,
 			expect.objectContaining({
@@ -282,7 +322,32 @@ describe('BlocklyEditor.vue', () => {
 				setField: '设置字段',
 				filterArrayPath: '筛选数组路径',
 			}),
+			EMPTY_OPERATION_CATALOG,
 		);
+		wrapper.unmount();
+	});
+
+	it('refreshes dynamic operation blocks and the toolbox when the payload catalog changes', async () => {
+		const workspaceState = createDefaultWorkspace();
+		const wrapper = mount(BlocklyEditor, {
+			props: {
+				modelValue: serializeBlocklyDataPayload(workspaceState, EMPTY_OPERATION_CATALOG),
+				profileId: 'data-transform',
+			},
+		});
+		await flushPromises();
+
+		await wrapper.setProps({
+			modelValue: serializeBlocklyDataPayload(workspaceState, BOOLEAN_OPERATION_CATALOG),
+		});
+		await flushPromises();
+
+		expect(registerN8nBlocks).toHaveBeenLastCalledWith(
+			blockly,
+			expect.any(Object),
+			BOOLEAN_OPERATION_CATALOG,
+		);
+		expect(workspace.updateToolbox).toHaveBeenCalledWith({ contents: [] });
 		wrapper.unmount();
 	});
 
@@ -318,7 +383,7 @@ describe('BlocklyEditor.vue', () => {
 	it.each([
 		{
 			profileId: 'data-transform' as const,
-			modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()),
+			modelValue: serializeBlocklyDataPayload(createDefaultWorkspace(), EMPTY_OPERATION_CATALOG),
 			themeName: 'n8n-teaching-logic',
 		},
 		{
@@ -349,7 +414,7 @@ describe('BlocklyEditor.vue', () => {
 		const wrapper = mount(BlocklyEditor, {
 			props: {
 				profileId: 'data-transform',
-				modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()),
+				modelValue: serializeBlocklyDataPayload(createDefaultWorkspace(), EMPTY_OPERATION_CATALOG),
 			},
 		});
 		await flushPromises();
@@ -377,7 +442,7 @@ describe('BlocklyEditor.vue', () => {
 	it('shows the AI teaching annotation for the selected generated block', async () => {
 		const wrapper = mount(BlocklyEditor, {
 			props: {
-				modelValue: serializeBlocklyDataPayload(createDefaultWorkspace()),
+				modelValue: serializeBlocklyDataPayload(createDefaultWorkspace(), EMPTY_OPERATION_CATALOG),
 				profileId: 'data-transform',
 			},
 		});
@@ -421,8 +486,8 @@ describe('BlocklyEditor.vue', () => {
 			'{"schemaVersion":1,"workspace":{},"javascript":""}',
 		],
 		[
-			'an initial schema 2 payload that loads the workspace',
-			serializeBlocklyDataPayload(createDefaultWorkspace()),
+			'an initial schema 3 payload that loads the workspace',
+			serializeBlocklyDataPayload(createDefaultWorkspace(), EMPTY_OPERATION_CATALOG),
 		],
 	])('does not emit while loading %s', async (_name, modelValue) => {
 		const wrapper = mount(BlocklyEditor, {

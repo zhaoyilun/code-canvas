@@ -25,6 +25,7 @@
   },
   "devDependencies": {
     "@n8n/blockly-data-transform": "workspace:*",
+    "@n8n/dual-canvas-operation-runtime": "workspace:*",
     "@n8n/node-cli": "^0.44.3",
     "esbuild": "catalog:",
     "n8n-workflow": "workspace:*",

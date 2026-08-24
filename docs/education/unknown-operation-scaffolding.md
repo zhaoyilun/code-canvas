@@ -1,86 +1,101 @@
-# Unknown operation discovery and scaffolding
+# Unknown operation generation and registration
 
 ## Purpose
 
-The first dual-canvas importer supports a deliberately small, source-equivalent transformation
-language. A real lesson will eventually call a pure helper that the repository does not yet know.
-This slice makes that gap auditable without guessing what the helper does:
+The generic dual-canvas importer keeps a deliberately small built-in grammar while allowing a
+lesson to introduce a new pure helper without adding handwritten TypeScript or JavaScript code:
 
 ```text
 static unknown call
   -> OPERATION_MODULE_MISSING
   -> ModuleScaffoldRequestV1 (AST evidence)
   -> OperationModuleTemplateV1 (fixed generation shell)
-  -> AI or human completes decisions
-  -> OperationModuleSpecV1 schema + test admission
+  -> AI or human completes strict OperationModuleDraftSpecV1 JSON (implementationRef: null)
+  -> host finalizeOperationModuleSpecV1 derives immutable implementationRef
+  -> expression and test-vector admission
+  -> OperationModuleCatalogV1
+  -> registered re-import
+  -> operationCall IR
+  -> dynamic Blockly value block
+  -> canonical JavaScript compiled from workspace + catalog
 ```
 
-It does not register or execute the generated operation in this slice.
+The generator fills a bounded declarative JSON specification. It never supplies executable source,
+a Blockly generator, or a frontend component. The host owns validation, block definition, toolbox
+metadata, code generation, and execution.
 
-## Example: `clamp`
+## Example: `clampScore`
 
 ```ts
 function transform(input) {
 	const output = {};
-	output.low = clamp(-2, 0, 10);
-	output.high = clamp(12, 0, 10);
+	output.score = clampScore(input?.score ?? null, 0, 100);
 	return output;
 }
 ```
 
-Both calls have the key `clamp/3`, so the importer emits one diagnostic. Its `details` value is a
-complete `ModuleScaffoldRequestV1`. Each call has a deterministic `callRef`, exact `callText` and
-source span, and three independently spanned arguments. Request and call references are scoped by
-document, revision, and source, so a repeated import is stable while a new revision receives new
-references. Numeric literals are recorded as evidence; the behavior of `clamp` is not inferred from
-its name.
+The first import emits one `OPERATION_MODULE_MISSING` diagnostic whose `details` value is a complete
+`ModuleScaffoldRequestV1`. The call has a deterministic `callRef`, exact `callText`, source span, and
+three independently spanned arguments. Request and call references are scoped by document,
+revision, and source. Repeating the import produces byte-identical evidence.
 
-The request explicitly leaves these decisions to the generator and reviewer:
+`createOperationModuleTemplateV1(request)` then produces the fixed logical identity and parameter
+slots, while leaving `implementationRef` as `null`. A completed draft declares names, JSON types,
+null handling, output type, a bounded expression tree, and three to 32 test vectors. The host calls
+`finalizeOperationModuleSpecV1(draft)` to derive the immutable implementation identity from the
+canonical semantic fields. For this example the expression is equivalent to:
 
-1. behavior;
-2. effect classification;
-3. parameter names;
-4. input types;
-5. null handling;
-6. output type;
-7. at least three test vectors.
+```text
+value === null ? null : value < minimum ? minimum : value > maximum ? maximum : value
+```
 
-`createOperationModuleTemplateV1(request)` deterministically produces parameter placeholders and a
-fixed JSON envelope. The template states the target constraints—synchronous, deterministic,
-side-effect-free JSON-to-JSON—and leaves semantic fields empty. If the observed source call actually
-needs async work, network access, device access, or another side effect, it routes to a
-capability/plugin instead of becoming an operation expression.
+The admitted vectors cover below-range, in-range, above-range, and null input.
 
-## Admission boundary
+## Admission and registry boundary
 
-`OperationModuleSpecV1` is the completed module artifact, not the generated template. The strict
-`OperationModuleAdmissionV1` envelope is the admission artifact: it binds the spec to its request by
-request reference, qualified name, and arity. Its schemas:
+The operation runtime is a domain-independent leaf package. It:
 
-- is strict at every object boundary;
-- accepts only a bounded declarative expression tree, with no source code or runtime evaluation;
-- performs iterative size/depth/cycle preflights at every recursive public schema entry before Zod
-  parses untrusted JSON;
-- validates every expression parameter reference against the declared parameters;
-- requires the declared parameter count to equal the operation arity;
+- parses strict expression, module, catalog, and block-descriptor schemas;
 - caps expression depth at 16 and expression nodes at 128;
-- requires three to 32 JSON input/output test vectors and validates vector arity;
-- fixes execution to synchronous, deterministic, effect-free JSON-to-JSON behavior.
+- checks parameter references, arity, JSON types, and null policies;
+- evaluates every declared test vector before catalog admission;
+- canonically sorts modules;
+- derives and rechecks `implementationRef` from the complete execution and Blockly ABI semantics;
+- rejects duplicate logical identity, implementation identity, signature/version, and generated block type;
+- derives a stable Blockly type from `operationRef + implementationRef + version`;
+- evaluates only the declarative expression tree.
 
-Schema validation proves shape and structural limits. The supplied test vectors are the semantic
-acceptance evidence and must be run by the later registry slice before an operation is exposed to a
-lesson.
+`OperationModuleAdmissionV1` additionally binds a spec to its discovery request by `requestRef`,
+`qualifiedName`, `arity`, deterministic logical identity, parameter slots, and the host-derived
+implementation identity. Changing expression, parameter ABI, output contract, or execution
+semantics creates a different `implementationRef` and Blockly type; changing request evidence,
+behavior prose, or test vectors alone keeps the implementation identity stable. Side effects,
+asynchronous work, network/device access, and other capabilities stay on the plugin route.
 
-## Deliberate completion boundary
+## Persistent visual model
 
-This slice ends at discovery, deterministic scaffolding, and schema-level admission. The following
-pieces are kept together for the next end-to-end slice:
+After catalog registration, the same source imports as an `operationCall` expression. The Blockly
+workspace stores one named dynamic value block per call, with `ARG0..ARGn` inputs and exact logical
+operation, implementation, and version fields. It does not expand the function into anonymous
+primitive blocks, so the lesson keeps module identity and each call keeps its own source mapping.
 
-- operation registry and duplicate/version policy;
-- an `operationCall` expression in the shared visual IR;
-- deterministic Blockly block definitions and toolbox registration;
-- execution of admitted expressions and their test vectors;
-- regeneration of both canvases with source mappings.
+Blockly payload schema 3 carries the catalog beside the workspace. The editor derives JSON block
+definitions and a **Function modules** toolbox category from that catalog. The production community
+node ignores the saved JavaScript preview and recompiles the workspace against the same catalog,
+so editing preview text does not change execution.
 
-RoboFrame remains an independent plugin. Nothing in these contracts embeds a robot, device, or
-competition capability.
+## Acceptance
+
+```bash
+node scripts/education/unknown-operation-runtime-acceptance.mjs --check
+node --test scripts/education/unknown-operation-runtime-acceptance.test.mjs
+node scripts/education/unknown-operation-runtime-acceptance.mjs
+```
+
+The quick gate checks discovery, template/spec admission, test vectors, registry, registered
+re-import, call-level mapping, dynamic workspace, payload round-trip, and `node:vm` equivalence. The
+full gate additionally installs the packed community node into an isolated real n8n runtime and
+requires `{ score: 100, pairedItem: 0 }` for input `{ score: 125 }`.
+
+RoboFrame remains an independent plugin. The operation runtime, SDK, importer, data-transform
+compiler, and acceptance sample contain no robot, device, GPIO, or competition dependency.

@@ -65,6 +65,10 @@ export function createGenericImportRequest(source) {
 			},
 		},
 		canvasAdapterRef: 'blockly.data-transform.v1',
+		operationCatalog: {
+			apiVersion: 1,
+			modules: [],
+		},
 	};
 }
 
@@ -158,7 +162,10 @@ export function validateGenericDualCanvasExample(example) {
 	assert.equal(canvas.preview, example.generatedLogicCanvas.javascript);
 	const parsedPayload = dataTransform.parseBlocklyDataPayload(canvas.payload);
 	assert.equal(parsedPayload.ok, true, parsedPayload.error);
-	const compiled = dataTransform.compileBlocklyWorkspace(parsedPayload.payload.workspace);
+	const compiled = dataTransform.compileBlocklyWorkspace(
+		parsedPayload.payload.workspace,
+		parsedPayload.payload.operationCatalog,
+	);
 	assert.equal(compiled.ok, true, compiled.error);
 	assert.equal(compiled.javascript, example.generatedLogicCanvas.javascript);
 	assert.deepEqual(parsedPayload.payload.workspace, example.generatedLogicCanvas.workspace);
@@ -184,6 +191,7 @@ export function verifyRuntimeDependencyBoundary() {
 		readManifest('packages/@n8n/dual-canvas-typescript-importer/package.json'),
 		readManifest('packages/@n8n/dual-canvas-core/package.json'),
 		readManifest('packages/@n8n/dual-canvas-operation-sdk/package.json'),
+		readManifest('packages/@n8n/dual-canvas-operation-runtime/package.json'),
 		readManifest('packages/@n8n/blockly-data-transform/package.json'),
 	];
 	const workspaceRuntimeDependencies = [
@@ -196,6 +204,7 @@ export function verifyRuntimeDependencyBoundary() {
 	assert.deepEqual(workspaceRuntimeDependencies, [
 		'@n8n/blockly-data-transform',
 		'@n8n/dual-canvas-core',
+		'@n8n/dual-canvas-operation-runtime',
 		'@n8n/dual-canvas-operation-sdk',
 	]);
 	return { workspaceRuntimeDependencies };

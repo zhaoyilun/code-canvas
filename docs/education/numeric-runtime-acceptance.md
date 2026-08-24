@@ -105,4 +105,5 @@ scripts/education/.runtime/numeric-acceptance/<run-id>/evidence/
 workspace 与 Blockly payload，再由 assembly 插入固定 Set 输入并装配成正式 n8n workflow
 后，可以由真实 n8n secure Task Runner 执行。其中 Blockly payload 字符串值与 importer
 产物逐字符一致，未经重编译或改写；输入、输出、源码映射和 item 配对均有独立证据。
-未知函数的模块生成与 RoboFrame 插件接入属于后续独立验收门。
+未知函数的模块生成由 `unknown-operation-runtime-acceptance.md` 单独验收；RoboFrame 仍由
+独立插件门验收。

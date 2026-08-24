@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
 	createOperationModuleTemplateV1,
+	finalizeOperationModuleSpecV1,
 	moduleScaffoldRequestV1Schema,
 	operationArgumentObservationV1Schema,
 	operationExpressionV1Schema,
@@ -82,10 +83,12 @@ const request: ModuleScaffoldRequestV1 = {
 };
 
 function validSpec(expression: OperationExpressionV1 = clampExpression()) {
-	return {
+	const template = createOperationModuleTemplateV1(request);
+	return finalizeOperationModuleSpecV1({
 		apiVersion: 1,
 		requestRef: 'module-request.1',
-		operationRef: 'operation.clamp.v1',
+		operationRef: template.identity.operationRef,
+		implementationRef: null,
 		qualifiedName: 'clamp',
 		arity: 3,
 		version: '1.0.0',
@@ -106,7 +109,7 @@ function validSpec(expression: OperationExpressionV1 = clampExpression()) {
 			{ name: 'inside', arguments: [5, 0, 10], expected: 5 },
 			{ name: 'above', arguments: [12, 0, 10], expected: 10 },
 		],
-	};
+	});
 }
 
 function clampExpression(): OperationExpressionV1 {
@@ -148,7 +151,12 @@ describe('operation module contracts', () => {
 		expect(second).toEqual(first);
 		expect(operationModuleTemplateV1Schema.safeParse(first).success).toBe(true);
 		expect(first).toMatchObject({
-			identity: { qualifiedName: 'clamp', arity: 3, version: '1.0.0' },
+			identity: {
+				qualifiedName: 'clamp',
+				arity: 3,
+				version: '1.0.0',
+				implementationRef: null,
+			},
 			parameters: [
 				{ parameterRef: 'arg.0', type: null, nullPolicy: null },
 				{ parameterRef: 'arg.1', type: null, nullPolicy: null },
@@ -185,12 +193,54 @@ describe('operation module contracts', () => {
 				spec: { ...validSpec(), requestRef: 'module-request.other' },
 			}).success,
 		).toBe(false);
+		expect(
+			operationModuleAdmissionV1Schema.safeParse({
+				request,
+				spec: { ...validSpec(), operationRef: 'operation.unstable' },
+			}).success,
+		).toBe(false);
+		expect(
+			operationModuleAdmissionV1Schema.safeParse({
+				request,
+				spec: {
+					...validSpec(),
+					implementationRef: 'implementation-00000000-0000-0000-0000-000000000000',
+				},
+			}).success,
+		).toBe(false);
+		const changedSlot = validSpec({ kind: 'literal', value: 5 });
+		changedSlot.parameters[0] = { ...changedSlot.parameters[0], parameterRef: 'arg.changed' };
+		changedSlot.testVectors = changedSlot.testVectors.map((vector) => ({ ...vector, expected: 5 }));
+		const changedSlotAdmission = operationModuleAdmissionV1Schema.safeParse({
+			request,
+			spec: changedSlot,
+		});
+		expect(changedSlotAdmission.success).toBe(false);
+		if (!changedSlotAdmission.success) {
+			expect(
+				changedSlotAdmission.error.issues.some((issue) =>
+					issue.message.includes('deterministic template slot'),
+				),
+			).toBe(true);
+		}
+	});
+
+	it('executes declared vectors at the admission boundary', () => {
+		const incorrect = validSpec();
+		incorrect.testVectors[2] = { name: 'above', arguments: [12, 0, 10], expected: 9 };
+		const result = operationModuleAdmissionV1Schema.safeParse({ request, spec: incorrect });
+
+		expect(result.success).toBe(false);
+		if (!result.success) {
+			expect(result.error.issues.some((issue) => issue.message.includes('produced 10'))).toBe(true);
+		}
 	});
 
 	it('rejects undeclared parameter references and wrong vector arity', () => {
-		const undeclared = operationModuleSpecV1Schema.safeParse(
-			validSpec({ kind: 'parameter', parameterRef: 'arg.99' }),
-		);
+		const undeclared = operationModuleSpecV1Schema.safeParse({
+			...validSpec(),
+			expression: { kind: 'parameter', parameterRef: 'arg.99' },
+		});
 		expect(undeclared.success).toBe(false);
 		if (!undeclared.success) {
 			expect(
@@ -222,9 +272,12 @@ describe('operation module contracts', () => {
 				{ key: 'value', value: { kind: 'literal', value: 2 } },
 			],
 		};
-		expect(operationModuleSpecV1Schema.safeParse(validSpec(duplicateObjectKeys)).success).toBe(
-			false,
-		);
+		expect(
+			operationModuleSpecV1Schema.safeParse({
+				...validSpec(),
+				expression: duplicateObjectKeys,
+			}).success,
+		).toBe(false);
 	});
 
 	it('enforces expression depth and node-count limits', () => {
@@ -232,7 +285,9 @@ describe('operation module contracts', () => {
 		for (let index = 0; index < 17; index += 1) {
 			deep = { kind: 'unary', operator: 'negate', value: deep };
 		}
-		expect(operationModuleSpecV1Schema.safeParse(validSpec(deep)).success).toBe(false);
+		expect(
+			operationModuleSpecV1Schema.safeParse({ ...validSpec(), expression: deep }).success,
+		).toBe(false);
 
 		const wide: OperationExpressionV1 = {
 			kind: 'array',
@@ -243,7 +298,9 @@ describe('operation module contracts', () => {
 				right: { kind: 'literal' as const, value: 2 },
 			})),
 		};
-		expect(operationModuleSpecV1Schema.safeParse(validSpec(wide)).success).toBe(false);
+		expect(
+			operationModuleSpecV1Schema.safeParse({ ...validSpec(), expression: wide }).success,
+		).toBe(false);
 	});
 
 	it('rejects extremely deep untrusted JSON without overflowing the parser stack', () => {

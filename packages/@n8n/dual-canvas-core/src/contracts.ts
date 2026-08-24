@@ -2,8 +2,12 @@ import { z } from 'zod';
 
 import { workflowFragmentV1Schema } from './data-plane';
 import type { ResultV1 } from './diagnostics';
-import { createLogicStatementBlockRef } from './logic-block-refs';
-import { flattenLogicStatements, logicNodeDraftV1Schema } from './logic-ir';
+import { createLogicExpressionBlockRef, createLogicStatementBlockRef } from './logic-block-refs';
+import {
+	flattenLogicOperationCalls,
+	flattenLogicStatements,
+	logicNodeDraftV1Schema,
+} from './logic-ir';
 import { sourceMapEntryV1Schema, type SourceMapEntryV1 } from './mapping';
 import { canvasArtifactV1Schema } from './plugin-sdk';
 import {
@@ -114,18 +118,38 @@ export const visualProgramIRV1Schema = z
 		const logicNodeRefs = new Set(
 			program.nodes.filter((node) => node.logic !== undefined).map((node) => node.nodeRef),
 		);
-		const logicStepRefsByNode = new Map(
+		const logicSemanticBlockRefsByNode = new Map(
 			program.nodes.flatMap((node) =>
 				node.logic === undefined
 					? []
 					: [
 							[
 								node.nodeRef,
-								new Set(
-									flattenLogicStatements(node.logic.statements).map(
-										(statement) => statement.stepRef,
+								new Map([
+									...flattenLogicStatements(node.logic.statements).map(
+										(statement) =>
+											[
+												statement.stepRef,
+												createLogicStatementBlockRef(
+													program.documentRef,
+													node.nodeRef,
+													statement.stepRef,
+												),
+											] as const,
 									),
-								),
+									...flattenLogicOperationCalls(node.logic.statements).map(
+										({ expression, stepRef, path }) =>
+											[
+												expression.callRef,
+												createLogicExpressionBlockRef(
+													program.documentRef,
+													node.nodeRef,
+													stepRef,
+													path,
+												),
+											] as const,
+									),
+								]),
 							] as const,
 						],
 			),
@@ -135,8 +159,7 @@ export const visualProgramIRV1Schema = z
 			workflowNodeRefs: nodeRefs,
 			canvasRefs,
 			logicNodeRefs,
-			logicStepRefsByNode,
-			logicDocumentRef: program.documentRef,
+			logicSemanticBlockRefsByNode,
 		});
 		for (const [index, edge] of program.edges.entries()) {
 			if (!nodeRefs.has(edge.from.nodeRef)) {
@@ -265,8 +288,7 @@ type SourceMapReferenceSets = {
 	canvasRefs: Set<string>;
 	canvasBlockRefs?: Set<string>;
 	logicNodeRefs?: Set<string>;
-	logicStepRefsByNode?: Map<string, Set<string>>;
-	logicDocumentRef?: string;
+	logicSemanticBlockRefsByNode?: Map<string, Map<string, string>>;
 };
 
 function validateSourceMapReferences(
@@ -303,7 +325,7 @@ function validateSourceMapReferences(
 				if (refs.canvasBlockRefs !== undefined && !refs.canvasBlockRefs.has(entry.artifact.ref)) {
 					addUnknownArtifactIssue(context, entryPath, entry);
 				}
-				if (refs.logicStepRefsByNode === undefined) break;
+				if (refs.logicSemanticBlockRefsByNode === undefined) break;
 				if (
 					typeof contextNodeRef !== 'string' ||
 					!(refs.logicNodeRefs?.has(contextNodeRef) ?? false)
@@ -315,27 +337,23 @@ function validateSourceMapReferences(
 					});
 					break;
 				}
-				if (!refs.logicStepRefsByNode.get(contextNodeRef)?.has(entry.semanticRef)) {
+				const expectedBlockRef = refs.logicSemanticBlockRefsByNode
+					.get(contextNodeRef)
+					?.get(entry.semanticRef);
+				if (expectedBlockRef === undefined) {
 					context.addIssue({
 						code: 'custom',
 						path: [...entryPath, 'semanticRef'],
-						message: `unknown logic step "${entry.semanticRef}" for owner "${contextNodeRef}"`,
+						message: `unknown logic semantic reference "${entry.semanticRef}" for owner "${contextNodeRef}"`,
 					});
 					break;
 				}
-				if (refs.logicDocumentRef !== undefined) {
-					const expectedBlockRef = createLogicStatementBlockRef(
-						refs.logicDocumentRef,
-						contextNodeRef,
-						entry.semanticRef,
-					);
-					if (entry.artifact.ref !== expectedBlockRef) {
-						context.addIssue({
-							code: 'custom',
-							path: [...entryPath, 'artifact', 'ref'],
-							message: `canvasBlock artifact must be "${expectedBlockRef}" for its logic owner and step`,
-						});
-					}
+				if (entry.artifact.ref !== expectedBlockRef) {
+					context.addIssue({
+						code: 'custom',
+						path: [...entryPath, 'artifact', 'ref'],
+						message: `canvasBlock artifact must be "${expectedBlockRef}" for its logic semantic reference`,
+					});
 				}
 				break;
 			}

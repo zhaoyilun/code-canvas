@@ -1,13 +1,37 @@
+import {
+	createOperationBlockDescriptorV1,
+	createOperationModuleCatalogV1,
+	evaluateOperationModuleV1,
+	finalizeOperationModuleSpecV1,
+	OPERATION_JSON_MAX_DEPTH,
+	OPERATION_JSON_MAX_KEY_LENGTH,
+	OPERATION_JSON_MAX_STRING_LENGTH,
+	OperationModuleRuntimeError,
+	type OperationModuleCatalogV1,
+	type OperationModuleSpecV1,
+} from '@n8n/dual-canvas-operation-runtime';
 import { runInNewContext } from 'node:vm';
 import { describe, expect, it } from 'vitest';
 
 import {
 	BLOCKLY_DATA_SCHEMA_VERSION,
-	compileBlocklyWorkspace,
+	compileBlocklyWorkspace as compileSharedBlocklyWorkspace,
 	createDefaultWorkspace,
 	parseBlocklyDataPayload,
-	serializeBlocklyDataPayload,
+	serializeBlocklyDataPayload as serializeSharedBlocklyDataPayload,
 } from './index';
+
+const EMPTY_OPERATION_CATALOG = createOperationModuleCatalogV1({ apiVersion: 1, modules: [] });
+
+const compileBlocklyWorkspace = (
+	workspaceState: unknown,
+	operationCatalog: OperationModuleCatalogV1 = EMPTY_OPERATION_CATALOG,
+) => compileSharedBlocklyWorkspace(workspaceState, operationCatalog);
+
+const serializeBlocklyDataPayload = (
+	workspaceState: Record<string, unknown>,
+	operationCatalog: OperationModuleCatalogV1 = EMPTY_OPERATION_CATALOG,
+) => serializeSharedBlocklyDataPayload(workspaceState, operationCatalog);
 
 const value = (block: Record<string, unknown>) => ({ block });
 
@@ -70,7 +94,7 @@ describe('Blockly Logic compiler', () => {
 		const defaultWorkspace = createDefaultWorkspace();
 		const result = compileBlocklyWorkspace(defaultWorkspace);
 
-		expect(BLOCKLY_DATA_SCHEMA_VERSION).toBe(2);
+		expect(BLOCKLY_DATA_SCHEMA_VERSION).toBe(3);
 		expect(result).toEqual({
 			ok: true,
 			blockCount: 3,
@@ -80,7 +104,8 @@ describe('Blockly Logic compiler', () => {
 		const serialized = serializeBlocklyDataPayload(defaultWorkspace);
 		expect(serialized).toBe(serializeBlocklyDataPayload(defaultWorkspace));
 		expect(parseJson(serialized)).toEqual({
-			schemaVersion: 2,
+			schemaVersion: 3,
+			operationCatalog: EMPTY_OPERATION_CATALOG,
 			workspace: defaultWorkspace,
 			javascript:
 				'const output = { ...$json };\noutput["processed"] = true;\nreturn { json: output };\n',
@@ -346,6 +371,211 @@ describe('Blockly Logic compiler', () => {
 		});
 	});
 
+	it('compiles an admitted operation block from catalog data and executes its expression', () => {
+		const catalog = createOperationModuleCatalogV1({ apiVersion: 1, modules: [clampScoreModule] });
+		const result = compileBlocklyWorkspace(
+			workspace(root(setField('score', clampScoreBlock(field('score'))))),
+			catalog,
+		);
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.javascript).toContain('((operationArg0, operationArg1, operationArg2) =>');
+		expect(result.javascript).not.toContain('clampScore(');
+		const execution = runInNewContext(`(() => { ${result.javascript} })()`, {
+			$json: { score: 125 },
+		}) as { json: Record<string, unknown> };
+		expect(execution.json).toEqual({ score: 100 });
+	});
+
+	it('compiles two implementations of one logical operation under distinct block types', () => {
+		const originalDescriptor = createOperationBlockDescriptorV1(clampScoreModule);
+		const changedDescriptor = createOperationBlockDescriptorV1(fixedScoreModule);
+		const originalCatalog = createOperationModuleCatalogV1({
+			apiVersion: 1,
+			modules: [clampScoreModule],
+		});
+		const changedCatalog = createOperationModuleCatalogV1({
+			apiVersion: 1,
+			modules: [fixedScoreModule],
+		});
+
+		expect(changedDescriptor.operationRef).toBe(originalDescriptor.operationRef);
+		expect(changedDescriptor.version).toBe(originalDescriptor.version);
+		expect(changedDescriptor.implementationRef).not.toBe(originalDescriptor.implementationRef);
+		expect(changedDescriptor.blockType).not.toBe(originalDescriptor.blockType);
+
+		const original = compileBlocklyWorkspace(
+			workspace(root(setField('score', scoreOperationBlock(clampScoreModule, field('score'))))),
+			originalCatalog,
+		);
+		const changed = compileBlocklyWorkspace(
+			workspace(root(setField('score', scoreOperationBlock(fixedScoreModule, field('score'))))),
+			changedCatalog,
+		);
+
+		expect(original.ok).toBe(true);
+		expect(changed.ok).toBe(true);
+	});
+
+	it('rejects an old workspace when the catalog contains a newer implementation identity', () => {
+		const oldWorkspace = workspace(
+			root(setField('score', scoreOperationBlock(clampScoreModule, field('score')))),
+		);
+		const newCatalog = createOperationModuleCatalogV1({
+			apiVersion: 1,
+			modules: [fixedScoreModule],
+		});
+
+		const result = compileBlocklyWorkspace(oldWorkspace, newCatalog);
+
+		expect(result).toMatchObject({ ok: false });
+		if (!result.ok) {
+			expect(result.error).toContain('OPERATION_BLOCK_IDENTITY_MISMATCH');
+			expect(result.error).toContain('IMPLEMENTATION_REF');
+		}
+	});
+
+	it('round-trips the exact operation implementation identity in a schema 3 payload', () => {
+		const catalog = createOperationModuleCatalogV1({ apiVersion: 1, modules: [clampScoreModule] });
+		const operationWorkspace = workspace(
+			root(setField('score', scoreOperationBlock(clampScoreModule, field('score')))),
+		);
+
+		const parsed = parseBlocklyDataPayload(
+			serializeBlocklyDataPayload(operationWorkspace, catalog),
+		);
+
+		expect(parsed.ok).toBe(true);
+		if (!parsed.ok) return;
+		expect(parsed.payload.workspace).toEqual(operationWorkspace);
+		expect(parsed.payload.operationCatalog.modules[0]?.implementationRef).toBe(
+			clampScoreModule.implementationRef,
+		);
+		expect(JSON.stringify(parsed.payload.workspace)).toContain(clampScoreModule.implementationRef);
+	});
+
+	it('compiles the standard null literal', () => {
+		expect(
+			compileBlocklyWorkspace(workspace(root(setField('optional', { type: 'logic_null' })))).ok,
+		).toBe(true);
+	});
+
+	it.each([
+		{
+			name: 'rejects null arguments',
+			module: 'rejectNumber',
+			arguments: [null],
+		},
+		{
+			name: 'rejects arguments of the wrong type',
+			module: 'rejectNumber',
+			arguments: ['12'],
+		},
+		{
+			name: 'propagates null without evaluating the expression',
+			module: 'propagateNumber',
+			arguments: [null],
+		},
+		{
+			name: 'rejects a branch with the wrong output type',
+			module: 'conditionalString',
+			arguments: [false],
+		},
+		{
+			name: 'rejects division by zero',
+			module: 'finiteDivision',
+			arguments: [10, 0],
+		},
+		{
+			name: 'rejects numeric overflow',
+			module: 'finiteDivision',
+			arguments: [1e308, 1e-308],
+		},
+		{
+			name: 'coerces objects independently of an own toString property',
+			module: 'objectStringAdd',
+			arguments: [],
+		},
+	] as const)(
+		'matches the operation runtime when it $name',
+		({ module, arguments: argumentValues }) => {
+			const operationModule = operationModules[module];
+			const runtimeResult = captureRuntimeEvaluation(operationModule, [...argumentValues]);
+			const generatedResult = captureGeneratedEvaluation(operationModule, [...argumentValues]);
+
+			expect(generatedResult).toEqual(runtimeResult);
+		},
+	);
+
+	it('matches runtime JSON bounds for deep, cyclic, reserved-key, and long arguments', () => {
+		const tooDeep: Record<string, unknown> = {};
+		let cursor = tooDeep;
+		for (let depth = 0; depth < OPERATION_JSON_MAX_DEPTH; depth += 1) {
+			const child: Record<string, unknown> = {};
+			cursor.value = child;
+			cursor = child;
+		}
+		const cyclic: Record<string, unknown> = {};
+		cyclic.self = cyclic;
+		const shared = { value: 1 };
+		const withOwnProto = Object.create(null) as Record<string, unknown>;
+		Object.defineProperty(withOwnProto, '__proto__', { enumerable: true, value: 1 });
+		const values = [
+			tooDeep,
+			cyclic,
+			{ left: shared, right: shared },
+			withOwnProto,
+			{ ['x'.repeat(OPERATION_JSON_MAX_KEY_LENGTH + 1)]: 1 },
+			'x'.repeat(OPERATION_JSON_MAX_STRING_LENGTH + 1),
+		];
+
+		for (const value of values) {
+			expect(captureGeneratedFieldEvaluation(operationModules.jsonIdentity, value)).toEqual(
+				captureRuntimeEvaluation(operationModules.jsonIdentity, [value]),
+			);
+		}
+	});
+
+	it.each([
+		{
+			name: 'module is absent from the catalog',
+			catalog: EMPTY_OPERATION_CATALOG,
+			block: clampScoreBlock(field('score')),
+			code: 'OPERATION_MODULE_MISSING',
+		},
+		{
+			name: 'operation identity is tampered',
+			catalog: createOperationModuleCatalogV1({ apiVersion: 1, modules: [clampScoreModule] }),
+			block: clampScoreBlock(field('score'), { VERSION: '9.9.9' }),
+			code: 'OPERATION_BLOCK_IDENTITY_MISMATCH',
+		},
+		{
+			name: 'operation argument is missing',
+			catalog: createOperationModuleCatalogV1({ apiVersion: 1, modules: [clampScoreModule] }),
+			block: clampScoreBlock(field('score'), undefined, 2),
+			code: 'OPERATION_ARGUMENTS_INVALID',
+		},
+	])('rejects an operation block when $name', ({ catalog, block, code }) => {
+		const result = compileBlocklyWorkspace(workspace(root(setField('score', block))), catalog);
+		expect(result).toMatchObject({ ok: false });
+		if (!result.ok) expect(result.error).toContain(code);
+	});
+
+	it('rejects a duplicate catalog before inspecting its workspace', () => {
+		const duplicateCatalog = {
+			apiVersion: 1,
+			modules: [
+				clampScoreModule,
+				{ ...structuredClone(clampScoreModule), requestRef: 'request.clamp.copy' },
+			],
+		} as OperationModuleCatalogV1;
+		const result = compileBlocklyWorkspace(createDefaultWorkspace(), duplicateCatalog);
+
+		expect(result).toMatchObject({ ok: false });
+		if (!result.ok) expect(result.error).toContain('OPERATION_CATALOG_DUPLICATE');
+	});
+
 	it.each([
 		[
 			'array input gaps',
@@ -462,7 +692,8 @@ describe('Blockly Logic compiler', () => {
 		expect(
 			parseBlocklyDataPayload(
 				JSON.stringify({
-					schemaVersion: 2,
+					schemaVersion: 3,
+					operationCatalog: EMPTY_OPERATION_CATALOG,
 					workspace: createDefaultWorkspace(),
 					javascript: '',
 					hiddenCode: 'ignored field',
@@ -470,11 +701,12 @@ describe('Blockly Logic compiler', () => {
 			),
 		).toEqual({
 			ok: false,
-			error: 'Payload must contain only schemaVersion, workspace, and javascript',
+			error: 'Payload must contain only schemaVersion, operationCatalog, workspace, and javascript',
 		});
 		const parsed = parseBlocklyDataPayload(
 			JSON.stringify({
-				schemaVersion: 2,
+				schemaVersion: 3,
+				operationCatalog: EMPTY_OPERATION_CATALOG,
 				workspace: createDefaultWorkspace(),
 				javascript: 'untrusted stale preview',
 			}),
@@ -488,19 +720,21 @@ describe('Blockly Logic compiler', () => {
 		});
 	});
 
-	it('preserves an invalid schema 2 workspace with an empty preview', () => {
+	it('preserves an invalid schema 3 workspace with an empty preview', () => {
 		const invalidWorkspace = workspace(root(setField('value', { type: 'controls_repeat_ext' })));
 		const serialized = serializeBlocklyDataPayload(invalidWorkspace);
 
 		expect(parseJson(serialized)).toEqual({
-			schemaVersion: 2,
+			schemaVersion: 3,
+			operationCatalog: EMPTY_OPERATION_CATALOG,
 			workspace: invalidWorkspace,
 			javascript: '',
 		});
 		expect(parseBlocklyDataPayload(serialized)).toEqual({
 			ok: true,
 			payload: {
-				schemaVersion: 2,
+				schemaVersion: 3,
+				operationCatalog: EMPTY_OPERATION_CATALOG,
 				workspace: invalidWorkspace,
 				javascript: '',
 			},
@@ -537,4 +771,340 @@ function parseJson(value: string): unknown {
 	} catch {
 		throw new Error('Expected serialized payload to be valid JSON');
 	}
+}
+
+const clampScoreModule = finalizeTestModule({
+	apiVersion: 1,
+	requestRef: 'request.clamp-score',
+	operationRef: 'operation.clamp-score',
+	qualifiedName: 'clampScore',
+	arity: 3,
+	version: '1.0.0',
+	behaviorSummary: 'Keep a numeric score between the configured minimum and maximum.',
+	execution: 'synchronous',
+	determinism: 'deterministic',
+	effects: 'none',
+	dataFlow: 'json-to-json',
+	parameters: [
+		{ parameterRef: 'arg.value', name: 'value', type: 'number', nullPolicy: 'allow' },
+		{ parameterRef: 'arg.minimum', name: 'minimum', type: 'number', nullPolicy: 'reject' },
+		{ parameterRef: 'arg.maximum', name: 'maximum', type: 'number', nullPolicy: 'reject' },
+	],
+	output: { type: 'number', nullPolicy: 'allow' },
+	expression: {
+		kind: 'conditional',
+		condition: {
+			kind: 'binary',
+			operator: 'lt',
+			left: { kind: 'parameter', parameterRef: 'arg.value' },
+			right: { kind: 'parameter', parameterRef: 'arg.minimum' },
+		},
+		whenTrue: { kind: 'parameter', parameterRef: 'arg.minimum' },
+		whenFalse: {
+			kind: 'conditional',
+			condition: {
+				kind: 'binary',
+				operator: 'gt',
+				left: { kind: 'parameter', parameterRef: 'arg.value' },
+				right: { kind: 'parameter', parameterRef: 'arg.maximum' },
+			},
+			whenTrue: { kind: 'parameter', parameterRef: 'arg.maximum' },
+			whenFalse: { kind: 'parameter', parameterRef: 'arg.value' },
+		},
+	},
+	testVectors: [
+		{ name: 'below', arguments: [-5, 0, 100], expected: 0 },
+		{ name: 'inside', arguments: [68, 0, 100], expected: 68 },
+		{ name: 'above', arguments: [125, 0, 100], expected: 100 },
+	],
+});
+
+const fixedScoreModule = finalizeTestModule({
+	...clampScoreModule,
+	requestRef: 'request.clamp-score.fixed',
+	behaviorSummary: 'Return the admitted fixed score implementation.',
+	expression: { kind: 'literal', value: 50 },
+	testVectors: [
+		{ name: 'below', arguments: [-5, 0, 100], expected: 50 },
+		{ name: 'inside', arguments: [68, 0, 100], expected: 50 },
+		{ name: 'above', arguments: [125, 0, 100], expected: 50 },
+	],
+});
+
+const operationModules = {
+	rejectNumber: createUnaryNumberModule(
+		'operation.reject-number',
+		'rejectNumber',
+		'reject',
+		'reject',
+	),
+	propagateNumber: createUnaryNumberModule(
+		'operation.propagate-number',
+		'propagateNumber',
+		'propagate',
+		'allow',
+	),
+	conditionalString: finalizeTestModule({
+		apiVersion: 1,
+		requestRef: 'request.conditional-string',
+		operationRef: 'operation.conditional-string',
+		qualifiedName: 'conditionalString',
+		arity: 1,
+		version: '1.0.0',
+		behaviorSummary: 'Return text for the admitted branch.',
+		execution: 'synchronous',
+		determinism: 'deterministic',
+		effects: 'none',
+		dataFlow: 'json-to-json',
+		parameters: [{ parameterRef: 'arg.flag', name: 'flag', type: 'boolean', nullPolicy: 'reject' }],
+		output: { type: 'string', nullPolicy: 'reject' },
+		expression: {
+			kind: 'conditional',
+			condition: { kind: 'parameter', parameterRef: 'arg.flag' },
+			whenTrue: { kind: 'literal', value: 'ready' },
+			whenFalse: { kind: 'literal', value: 0 },
+		},
+		testVectors: [
+			{ name: 'true one', arguments: [true], expected: 'ready' },
+			{ name: 'true two', arguments: [true], expected: 'ready' },
+			{ name: 'true three', arguments: [true], expected: 'ready' },
+		],
+	}),
+	finiteDivision: finalizeTestModule({
+		apiVersion: 1,
+		requestRef: 'request.finite-division',
+		operationRef: 'operation.finite-division',
+		qualifiedName: 'finiteDivision',
+		arity: 2,
+		version: '1.0.0',
+		behaviorSummary: 'Divide two numbers and require a finite result.',
+		execution: 'synchronous',
+		determinism: 'deterministic',
+		effects: 'none',
+		dataFlow: 'json-to-json',
+		parameters: [
+			{ parameterRef: 'arg.left', name: 'left', type: 'number', nullPolicy: 'reject' },
+			{ parameterRef: 'arg.right', name: 'right', type: 'number', nullPolicy: 'reject' },
+		],
+		output: { type: 'number', nullPolicy: 'reject' },
+		expression: {
+			kind: 'binary',
+			operator: 'divide',
+			left: { kind: 'parameter', parameterRef: 'arg.left' },
+			right: { kind: 'parameter', parameterRef: 'arg.right' },
+		},
+		testVectors: [
+			{ name: 'six by two', arguments: [6, 2], expected: 3 },
+			{ name: 'nine by three', arguments: [9, 3], expected: 3 },
+			{ name: 'zero by four', arguments: [0, 4], expected: 0 },
+		],
+	}),
+	objectStringAdd: finalizeTestModule({
+		apiVersion: 1,
+		requestRef: 'request.object-string-add',
+		operationRef: 'operation.object-string-add',
+		qualifiedName: 'objectStringAdd',
+		arity: 0,
+		version: '1.0.0',
+		behaviorSummary: 'Coerce a JSON object to its deterministic string representation.',
+		execution: 'synchronous',
+		determinism: 'deterministic',
+		effects: 'none',
+		dataFlow: 'json-to-json',
+		parameters: [],
+		output: { type: 'string', nullPolicy: 'reject' },
+		expression: {
+			kind: 'binary',
+			operator: 'add',
+			left: {
+				kind: 'object',
+				properties: [{ key: 'toString', value: { kind: 'literal', value: 'x' } }],
+			},
+			right: { kind: 'literal', value: '' },
+		},
+		testVectors: [
+			{ name: 'first', arguments: [], expected: '[object Object]' },
+			{ name: 'second', arguments: [], expected: '[object Object]' },
+			{ name: 'third', arguments: [], expected: '[object Object]' },
+		],
+	}),
+	jsonIdentity: finalizeTestModule({
+		apiVersion: 1,
+		requestRef: 'request.json-identity',
+		operationRef: 'operation.json-identity',
+		qualifiedName: 'jsonIdentity',
+		arity: 1,
+		version: '1.0.0',
+		behaviorSummary: 'Return one bounded JSON value unchanged.',
+		execution: 'synchronous',
+		determinism: 'deterministic',
+		effects: 'none',
+		dataFlow: 'json-to-json',
+		parameters: [{ parameterRef: 'arg.value', name: 'value', type: 'json', nullPolicy: 'allow' }],
+		output: { type: 'json', nullPolicy: 'allow' },
+		expression: { kind: 'parameter', parameterRef: 'arg.value' },
+		testVectors: [
+			{ name: 'number', arguments: [1], expected: 1 },
+			{ name: 'text', arguments: ['value'], expected: 'value' },
+			{ name: 'null', arguments: [null], expected: null },
+		],
+	}),
+};
+
+function createUnaryNumberModule(
+	operationRef: string,
+	qualifiedName: string,
+	parameterNullPolicy: 'reject' | 'propagate',
+	outputNullPolicy: 'reject' | 'allow',
+): OperationModuleSpecV1 {
+	return finalizeTestModule({
+		apiVersion: 1,
+		requestRef: `request.${qualifiedName}`,
+		operationRef,
+		qualifiedName,
+		arity: 1,
+		version: '1.0.0',
+		behaviorSummary: 'Return the numeric input according to its null contract.',
+		execution: 'synchronous',
+		determinism: 'deterministic',
+		effects: 'none',
+		dataFlow: 'json-to-json',
+		parameters: [
+			{
+				parameterRef: 'arg.value',
+				name: 'value',
+				type: 'number',
+				nullPolicy: parameterNullPolicy,
+			},
+		],
+		output: { type: 'number', nullPolicy: outputNullPolicy },
+		expression: { kind: 'parameter', parameterRef: 'arg.value' },
+		testVectors:
+			parameterNullPolicy === 'propagate'
+				? [
+						{ name: 'null', arguments: [null], expected: null },
+						{ name: 'positive', arguments: [2], expected: 2 },
+						{ name: 'negative', arguments: [-1], expected: -1 },
+					]
+				: [
+						{ name: 'one', arguments: [1], expected: 1 },
+						{ name: 'two', arguments: [2], expected: 2 },
+						{ name: 'three', arguments: [3], expected: 3 },
+					],
+	});
+}
+
+function finalizeTestModule(module: Record<string, unknown>): OperationModuleSpecV1 {
+	return finalizeOperationModuleSpecV1({ ...module, implementationRef: null });
+}
+
+function captureRuntimeEvaluation(module: OperationModuleSpecV1, argumentValues: unknown[]) {
+	try {
+		return { ok: true as const, value: evaluateOperationModuleV1(module, argumentValues) };
+	} catch (error) {
+		if (!(error instanceof OperationModuleRuntimeError)) throw error;
+		return { ok: false as const, name: error.name, code: error.code };
+	}
+}
+
+function captureGeneratedEvaluation(module: OperationModuleSpecV1, argumentValues: unknown[]) {
+	const catalog = createOperationModuleCatalogV1({ apiVersion: 1, modules: [module] });
+	const descriptor = createOperationBlockDescriptorV1(module);
+	const argumentInputs = Object.fromEntries(
+		argumentValues.map((argument, index) => [`ARG${index}`, value(literalBlock(argument))]),
+	);
+	const operationBlock = {
+		type: descriptor.blockType,
+		fields: {
+			OPERATION_REF: descriptor.operationRef,
+			IMPLEMENTATION_REF: descriptor.implementationRef,
+			VERSION: descriptor.version,
+			QUALIFIED_NAME: descriptor.qualifiedName,
+		},
+		inputs: argumentInputs,
+	};
+	const compiled = compileBlocklyWorkspace(
+		workspace(root(setField('result', operationBlock), 'EMPTY')),
+		catalog,
+	);
+	if (!compiled.ok) throw new Error(compiled.error);
+	try {
+		const execution = runInNewContext(`(() => { ${compiled.javascript} })()`, { $json: {} }) as {
+			json: Record<string, unknown>;
+		};
+		return { ok: true as const, value: execution.json.result };
+	} catch (error) {
+		const record = error as { name?: unknown; code?: unknown };
+		return { ok: false as const, name: record.name, code: record.code };
+	}
+}
+
+function captureGeneratedFieldEvaluation(module: OperationModuleSpecV1, fieldValue: unknown) {
+	const catalog = createOperationModuleCatalogV1({ apiVersion: 1, modules: [module] });
+	const descriptor = createOperationBlockDescriptorV1(module);
+	const operationBlock = {
+		type: descriptor.blockType,
+		fields: {
+			OPERATION_REF: descriptor.operationRef,
+			IMPLEMENTATION_REF: descriptor.implementationRef,
+			VERSION: descriptor.version,
+			QUALIFIED_NAME: descriptor.qualifiedName,
+		},
+		inputs: { ARG0: value(field('value')) },
+	};
+	const compiled = compileBlocklyWorkspace(
+		workspace(root(setField('result', operationBlock), 'EMPTY')),
+		catalog,
+	);
+	if (!compiled.ok) throw new Error(compiled.error);
+	try {
+		const execution = runInNewContext(`(() => { ${compiled.javascript} })()`, {
+			$json: { value: fieldValue },
+		}) as { json: Record<string, unknown> };
+		return { ok: true as const, value: execution.json.result };
+	} catch (error) {
+		const record = error as { name?: unknown; code?: unknown };
+		return { ok: false as const, name: record.name, code: record.code };
+	}
+}
+
+function literalBlock(value: unknown): Record<string, unknown> {
+	if (value === null) return { type: 'logic_null' };
+	if (typeof value === 'number') return numberBlock(value);
+	if (typeof value === 'string') return text(value);
+	if (typeof value === 'boolean') return booleanBlock(value);
+	throw new Error('Synthetic operation argument must be a primitive JSON value');
+}
+
+function clampScoreBlock(
+	score: Record<string, unknown>,
+	fieldOverrides?: Record<string, string>,
+	argumentCount = 3,
+): Record<string, unknown> {
+	return scoreOperationBlock(clampScoreModule, score, fieldOverrides, argumentCount);
+}
+
+function scoreOperationBlock(
+	module: OperationModuleSpecV1,
+	score: Record<string, unknown>,
+	fieldOverrides?: Record<string, string>,
+	argumentCount = 3,
+): Record<string, unknown> {
+	const descriptor = createOperationBlockDescriptorV1(module);
+	const argumentsByName: Record<string, unknown> = {
+		ARG0: value(score),
+		ARG1: value(numberBlock(0)),
+		ARG2: value(numberBlock(100)),
+	};
+	return {
+		type: descriptor.blockType,
+		fields: {
+			OPERATION_REF: descriptor.operationRef,
+			IMPLEMENTATION_REF: descriptor.implementationRef,
+			VERSION: descriptor.version,
+			QUALIFIED_NAME: descriptor.qualifiedName,
+			...fieldOverrides,
+		},
+		inputs: Object.fromEntries(Object.entries(argumentsByName).slice(0, argumentCount)),
+	};
 }

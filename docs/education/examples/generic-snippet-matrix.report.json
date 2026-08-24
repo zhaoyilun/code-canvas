@@ -27,7 +27,7 @@
       "sourceMapCount": 5,
       "blockCount": 4,
       "executionCount": 1,
-      "artifactSha256": "89A13CF2F9E11ACB3549930D71365E92F4862228B11533A237BFBE742F7413B0"
+      "artifactSha256": "DA0D0D3D9255AA3FAD9CA9E64F3C59A0733771F494F1FE9521EEC9DC6A763607"
     },
     {
       "caseRef": "numeric-calculation",
@@ -41,7 +41,7 @@
       "sourceMapCount": 4,
       "blockCount": 7,
       "executionCount": 1,
-      "artifactSha256": "D8C830FCFD8389F2E0AE43B2ABBC43588D4EBDFAAA2E2B6F9CE4EC748B018226"
+      "artifactSha256": "8AA73174DD0C6D7066EBC9A7FECD796EE9F11515BE4AC5DEBC5B45A65FEE38FD"
     },
     {
       "caseRef": "scalar-conversion",
@@ -57,7 +57,7 @@
       "sourceMapCount": 6,
       "blockCount": 10,
       "executionCount": 1,
-      "artifactSha256": "13AA595BD24A812E4F19164D1558D8AE5FDAD07C393568B9A7305A77FCA56FBE"
+      "artifactSha256": "D6B7E20CA7DEA02B7570FD49BD72AFBE56BF8DEF3B510633B3CAA6B2BE8E04EA"
     },
     {
       "caseRef": "conditional-branch",
@@ -71,7 +71,7 @@
       "sourceMapCount": 6,
       "blockCount": 12,
       "executionCount": 2,
-      "artifactSha256": "CCE1ABB584F61BAB84DC2037EAA7CB06CB1203B593D0FA82BEC2ABD3F28BC271"
+      "artifactSha256": "EC153F82E1DD27F0ADC5AF09D172E241B53AFD89917C8D410C0A0D11B68E0502"
     },
     {
       "caseRef": "array-object-construction",
@@ -86,7 +86,7 @@
       "sourceMapCount": 4,
       "blockCount": 10,
       "executionCount": 1,
-      "artifactSha256": "81C7DF05617667D66CF787B8B3EF8BB584ACE4D9793F337B82B90E7E49170DC8"
+      "artifactSha256": "02B03A6B2CB2BD3242E7B69FEAE78BE82F56022CF1E21EE8E291D71D2E37856C"
     },
     {
       "caseRef": "field-delete",
@@ -100,7 +100,7 @@
       "sourceMapCount": 4,
       "blockCount": 2,
       "executionCount": 1,
-      "artifactSha256": "087805DC656CB45A5C0DC374A0E1C1735A23CF31CF7B06875DB96921FABE7EC1"
+      "artifactSha256": "88470E2C43AD84F6109512BF07DF3A3F29825774F2E16B40303BE9A4B3A6B429"
     },
     {
       "caseRef": "throwing-assertion",
@@ -114,7 +114,7 @@
       "sourceMapCount": 5,
       "blockCount": 12,
       "executionCount": 2,
-      "artifactSha256": "94AC903E8B34364737171EC6B750E8AE0E74F4D87D588CF86A98D40A5371333B"
+      "artifactSha256": "7E6C769DF528E97E3627410E96383CE64E0D1F020F868C413A2F6364D1C8FC8D"
     }
   ],
   "negativeCases": [

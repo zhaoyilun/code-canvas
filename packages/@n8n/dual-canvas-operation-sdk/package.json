@@ -30,12 +30,14 @@
 	},
 	"dependencies": {
 		"@n8n/dual-canvas-core": "workspace:*",
+		"@n8n/dual-canvas-operation-runtime": "workspace:*",
 		"zod": "catalog:"
 	},
 	"devDependencies": {
 		"@n8n/eslint-config": "workspace:*",
 		"@n8n/typescript-config": "workspace:*",
 		"@n8n/vitest-config": "workspace:*",
+		"eslint": "catalog:",
 		"typescript": "catalog:typescript",
 		"vite": "catalog:",
 		"vitest": "catalog:"

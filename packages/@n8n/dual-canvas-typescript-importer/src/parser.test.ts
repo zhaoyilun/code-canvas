@@ -1,12 +1,26 @@
 import { flattenLogicStatements } from '@n8n/dual-canvas-core';
 import {
+	createOperationModuleCatalogV1,
+	finalizeOperationModuleSpecV1,
+} from '@n8n/dual-canvas-operation-runtime';
+import {
 	createOperationModuleTemplateV1,
 	moduleScaffoldRequestV1Schema,
 } from '@n8n/dual-canvas-operation-sdk';
 import { describe, expect, it } from 'vitest';
 
 import { parseTeachingProgram } from './parser';
-import { createTestRequest } from './test-support';
+import { createTestRequest, scoreOperationCatalog } from './test-support';
+
+const clampScoreOperation = scoreOperationCatalog.modules.find(
+	(module) => module.qualifiedName === 'clampScore',
+);
+const doubleScoreOperation = scoreOperationCatalog.modules.find(
+	(module) => module.qualifiedName === 'doubleScore',
+);
+if (clampScoreOperation === undefined || doubleScoreOperation === undefined) {
+	throw new Error('score operation fixtures are incomplete');
+}
 
 const fullSource = `function transform(input) {
 	const output = { ...input };
@@ -172,6 +186,174 @@ describe('teaching-subset parser', () => {
 		}
 	});
 
+	it('resolves an exact qualified-name and arity match into a persistent operation call', () => {
+		const source = `function transform(input) {
+	const output = {};
+	output.score = clampScore(input?.score ?? null, 0, 100);
+	return output;
+}`;
+		const result = parseTeachingProgram(
+			{ ...createTestRequest(source), operationCatalog: scoreOperationCatalog },
+			'node.logic',
+		);
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.parsed.logic.statements[0]).toMatchObject({
+			kind: 'set',
+			value: {
+				kind: 'operationCall',
+				operationRef: 'operation.clamp-score.v1',
+				implementationRef: clampScoreOperation.implementationRef,
+				qualifiedName: 'clampScore',
+				version: '1.0.0',
+				arguments: [
+					{ kind: 'input', path: 'score' },
+					{ kind: 'number', value: 0 },
+					{ kind: 'number', value: 100 },
+				],
+				source: { start: { offset: source.indexOf('clampScore(') } },
+			},
+		});
+		const statement = result.parsed.logic.statements[0];
+		if (statement?.kind !== 'set' || statement.value.kind !== 'operationCall') return;
+		expect(statement.value.callRef).toMatch(/^operation-call-/);
+	});
+
+	it('indexes the admitted catalog once and resolves the exact canonical identity', () => {
+		const versionOneModule = finalizeOperationModuleSpecV1({
+			apiVersion: 1 as const,
+			requestRef: 'module-request.versioned-v1',
+			operationRef: 'operation.versioned.v1',
+			implementationRef: null,
+			qualifiedName: 'versioned',
+			arity: 0,
+			version: '1.0.0',
+			behaviorSummary: 'Returns the canonical version marker.',
+			execution: 'synchronous' as const,
+			determinism: 'deterministic' as const,
+			effects: 'none' as const,
+			dataFlow: 'json-to-json' as const,
+			parameters: [],
+			output: { type: 'number' as const, nullPolicy: 'reject' as const },
+			expression: { kind: 'literal' as const, value: 1 },
+			testVectors: [
+				{ name: 'first', arguments: [], expected: 1 },
+				{ name: 'second', arguments: [], expected: 1 },
+				{ name: 'third', arguments: [], expected: 1 },
+			],
+		});
+		const catalog = createOperationModuleCatalogV1({
+			apiVersion: 1,
+			modules: [versionOneModule],
+		});
+		let moduleReads = 0;
+		const observedCatalog = {
+			apiVersion: catalog.apiVersion,
+			get modules() {
+				moduleReads += 1;
+				return catalog.modules;
+			},
+		};
+		const source = `function transform(input) {
+	const output = {};
+	output.first = versioned();
+	output.second = versioned();
+	return output;
+}`;
+		const result = parseTeachingProgram(
+			{ ...createTestRequest(source), operationCatalog: observedCatalog },
+			'node.logic',
+		);
+
+		expect(result.ok).toBe(true);
+		expect(moduleReads).toBe(1);
+		if (!result.ok) return;
+		for (const statement of result.parsed.logic.statements) {
+			if (statement.kind !== 'set' || statement.value.kind !== 'operationCall') {
+				throw new Error('expected an operation call');
+			}
+			expect(statement.value).toMatchObject({
+				operationRef: 'operation.versioned.v1',
+				implementationRef: versionOneModule.implementationRef,
+				qualifiedName: 'versioned',
+				version: '1.0.0',
+			});
+		}
+	});
+
+	it('keeps exact operation identity through nested registered calls', () => {
+		const source = `function transform(input) {
+	const output = {};
+	output.score = clampScore(doubleScore(input?.score ?? null), 0, 100);
+	return output;
+}`;
+		const result = parseTeachingProgram(
+			{ ...createTestRequest(source), operationCatalog: scoreOperationCatalog },
+			'node.logic',
+		);
+
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+		expect(result.parsed.logic.statements[0]).toMatchObject({
+			value: {
+				kind: 'operationCall',
+				qualifiedName: 'clampScore',
+				arguments: [
+					{
+						kind: 'operationCall',
+						operationRef: 'operation.double-score.v1',
+						implementationRef: doubleScoreOperation.implementationRef,
+						qualifiedName: 'doubleScore',
+						arguments: [{ kind: 'input', path: 'score' }],
+					},
+					{ kind: 'number', value: 0 },
+					{ kind: 'number', value: 100 },
+				],
+			},
+		});
+	});
+
+	it('routes a wrong arity and a missing nested call through scaffold discovery', () => {
+		const wrongAritySource = `function transform(input) {
+	const output = {};
+	output.score = clampScore(10, 0);
+	return output;
+}`;
+		const wrongArity = parseTeachingProgram(
+			{ ...createTestRequest(wrongAritySource), operationCatalog: scoreOperationCatalog },
+			'node.logic',
+		);
+		expect(wrongArity).toMatchObject({
+			ok: false,
+			diagnostics: [
+				{
+					code: 'OPERATION_MODULE_MISSING',
+					details: { qualifiedName: 'clampScore', arity: 2 },
+				},
+			],
+		});
+
+		const nestedMissingSource = `function transform(input) {
+	const output = {};
+	output.score = clampScore(missingScore(10), 0, 100);
+	return output;
+}`;
+		const nestedMissing = parseTeachingProgram(
+			{ ...createTestRequest(nestedMissingSource), operationCatalog: scoreOperationCatalog },
+			'node.logic',
+		);
+		expect(nestedMissing).toMatchObject({
+			ok: false,
+			diagnostics: [
+				{
+					code: 'OPERATION_MODULE_MISSING',
+					details: { qualifiedName: 'missingScore', arity: 1 },
+				},
+			],
+		});
+	});
+
 	it('scopes stable request and call references to document revisions', () => {
 		const source = `function transform(input) {
 	const output = {};
@@ -209,6 +391,8 @@ describe('teaching-subset parser', () => {
 		'factory()(1)',
 		'tools?.clamp(1)',
 		'clamp(...values)',
+		'input.name.trim()',
+		'output.name.trim()',
 	])('keeps dynamic or optional calls as located syntax diagnostics: %s', (call) => {
 		const source = `function transform(input) {
 	const output = {};
@@ -219,6 +403,96 @@ describe('teaching-subset parser', () => {
 		expect(result).toMatchObject({
 			ok: false,
 			diagnostics: [{ code: 'UNSUPPORTED_SYNTAX', details: { line: 3 } }],
+		});
+		if (!result.ok) {
+			expect(
+				result.diagnostics.some((diagnostic) => diagnostic.code === 'OPERATION_MODULE_MISSING'),
+			).toBe(false);
+		}
+	});
+
+	it('never resolves a runtime value method as a zero-argument operation module', () => {
+		const source = `function transform(input) {
+	const output = {};
+	output.value = input.name.trim();
+	return output;
+}`;
+		const runtimeMethodCatalog = createOperationModuleCatalogV1({
+			apiVersion: 1,
+			modules: [
+				finalizeOperationModuleSpecV1({
+					apiVersion: 1,
+					requestRef: 'module-request.input-name-trim',
+					operationRef: 'operation.input-name-trim.v1',
+					implementationRef: null,
+					qualifiedName: 'input.name.trim',
+					arity: 0,
+					version: '1.0.0',
+					behaviorSummary: 'Returns a fixed value to expose accidental receiver loss.',
+					execution: 'synchronous',
+					determinism: 'deterministic',
+					effects: 'none',
+					dataFlow: 'json-to-json',
+					parameters: [],
+					output: { type: 'string', nullPolicy: 'reject' },
+					expression: { kind: 'literal', value: 'constant' },
+					testVectors: [
+						{ name: 'constant-a', arguments: [], expected: 'constant' },
+						{ name: 'constant-b', arguments: [], expected: 'constant' },
+						{ name: 'constant-c', arguments: [], expected: 'constant' },
+					],
+				}),
+			],
+		});
+		const result = parseTeachingProgram(
+			{ ...createTestRequest(source), operationCatalog: runtimeMethodCatalog },
+			'node.logic',
+		);
+
+		expect(result).toMatchObject({ ok: false, diagnostics: [{ code: 'UNSUPPORTED_SYNTAX' }] });
+		if (!result.ok) {
+			expect(
+				result.diagnostics.some((diagnostic) => diagnostic.code === 'OPERATION_MODULE_MISSING'),
+			).toBe(false);
+		}
+	});
+
+	it('does not scaffold an unknown operation whose argument is outside LogicExpression', () => {
+		const source = `function transform(input) {
+	const output = {};
+	output.value = outer(input.name.trim());
+	return output;
+}`;
+		const result = parseTeachingProgram(createTestRequest(source), 'node.logic');
+
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		const missingNames = result.diagnostics
+			.filter((diagnostic) => diagnostic.code === 'OPERATION_MODULE_MISSING')
+			.map((diagnostic) => moduleScaffoldRequestV1Schema.parse(diagnostic.details).qualifiedName);
+		expect(missingNames).toEqual([]);
+		expect(result.diagnostics.some((diagnostic) => diagnostic.code === 'UNSUPPORTED_SYNTAX')).toBe(
+			true,
+		);
+	});
+
+	it('reports an unsupported arrow-function argument without emitting a misleading scaffold', () => {
+		const source = `function transform(input) {
+	const output = {};
+	output.value = fn(() => 1);
+	return output;
+}`;
+		const result = parseTeachingProgram(createTestRequest(source), 'node.logic');
+
+		expect(result).toMatchObject({
+			ok: false,
+			diagnostics: [
+				{
+					code: 'UNSUPPORTED_SYNTAX',
+					path: 'source.3.19',
+					details: { line: 3, column: 19, startOffset: source.indexOf('() => 1') },
+				},
+			],
 		});
 		if (!result.ok) {
 			expect(

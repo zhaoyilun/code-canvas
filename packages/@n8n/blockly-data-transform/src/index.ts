@@ -1,4 +1,16 @@
-export const BLOCKLY_DATA_SCHEMA_VERSION = 2;
+import {
+	createOperationBlockDescriptorV1,
+	createOperationModuleCatalogV1,
+	OPERATION_JSON_MAX_DEPTH,
+	OPERATION_JSON_MAX_KEY_LENGTH,
+	OPERATION_JSON_MAX_NODES,
+	OPERATION_JSON_MAX_STRING_LENGTH,
+	type OperationExpressionV1,
+	type OperationModuleCatalogV1,
+	type OperationModuleSpecV1,
+} from '@n8n/dual-canvas-operation-runtime';
+
+export const BLOCKLY_DATA_SCHEMA_VERSION = 3;
 
 const MAX_PAYLOAD_BYTES = 256 * 1024;
 const MAX_BLOCKS = 200;
@@ -29,6 +41,7 @@ const supportedTypes = new Set([
 	'text',
 	'text_join',
 	'logic_boolean',
+	'logic_null',
 	'logic_compare',
 	'logic_operation',
 	'logic_negate',
@@ -56,6 +69,7 @@ const allowedInputs: Record<string, readonly string[]> = {
 	text: [],
 	text_join: [],
 	logic_boolean: [],
+	logic_null: [],
 	logic_compare: ['A', 'B'],
 	logic_operation: ['A', 'B'],
 	logic_negate: ['BOOL'],
@@ -70,8 +84,46 @@ type Block = JsonRecord & { type: string };
 
 type Expression = { code: string };
 
+const operationBinaryOperators: Record<
+	Extract<OperationExpressionV1, { kind: 'binary' }>['operator'],
+	string
+> = {
+	add: '+',
+	subtract: '-',
+	multiply: '*',
+	divide: '/',
+	power: '**',
+	eq: '===',
+	neq: '!==',
+	lt: '<',
+	lte: '<=',
+	gt: '>',
+	gte: '>=',
+	and: '&&',
+	or: '||',
+};
+
+const operationFiniteOperatorNames: Partial<
+	Record<Extract<OperationExpressionV1, { kind: 'binary' }>['operator'], string>
+> = {
+	subtract: 'subtraction',
+	multiply: 'multiplication',
+	divide: 'division',
+	power: 'power',
+};
+
+const operationTypeConditions = new Map<string, (value: string) => string>([
+	['json', () => 'true'],
+	['number', (value) => `typeof ${value} === "number" && Number.isFinite(${value})`],
+	['string', (value) => `typeof ${value} === "string"`],
+	['boolean', (value) => `typeof ${value} === "boolean"`],
+	['array', (value) => `Array.isArray(${value})`],
+	['object', (value) => `typeof ${value} === "object" && !Array.isArray(${value})`],
+]);
+
 export type BlocklyDataPayload = {
-	schemaVersion: 2;
+	schemaVersion: 3;
+	operationCatalog: OperationModuleCatalogV1;
 	workspace: Record<string, unknown>;
 	javascript: string;
 };
@@ -107,14 +159,18 @@ export function createDefaultWorkspace(): Record<string, unknown> {
 	};
 }
 
-export function compileBlocklyWorkspace(workspace: unknown): CompileResult {
+export function compileBlocklyWorkspace(
+	workspace: unknown,
+	operationCatalog: OperationModuleCatalogV1,
+): CompileResult {
 	try {
-		const compiler = new WorkspaceCompiler(workspace);
+		const catalog = createOperationModuleCatalogV1(operationCatalog);
+		const compiler = new WorkspaceCompiler(workspace, catalog);
 		return compiler.compile();
 	} catch (error: unknown) {
 		return {
 			ok: false,
-			error: error instanceof Error ? error.message : 'Invalid Blockly workspace',
+			error: errorMessage(error, 'Invalid Blockly workspace'),
 		};
 	}
 }
@@ -133,32 +189,50 @@ export function parseBlocklyDataPayload(
 	if (!isRecord(parsed)) return failure('Payload must be an object');
 	const payloadKeys = Object.keys(parsed);
 	if (
-		payloadKeys.length !== 3 ||
+		payloadKeys.length !== 4 ||
 		payloadKeys.some(
-			(key) => key !== 'schemaVersion' && key !== 'workspace' && key !== 'javascript',
+			(key) =>
+				key !== 'schemaVersion' &&
+				key !== 'operationCatalog' &&
+				key !== 'workspace' &&
+				key !== 'javascript',
 		)
 	)
-		return failure('Payload must contain only schemaVersion, workspace, and javascript');
+		return failure(
+			'Payload must contain only schemaVersion, operationCatalog, workspace, and javascript',
+		);
 	if (parsed.schemaVersion !== BLOCKLY_DATA_SCHEMA_VERSION)
 		return failure('Unsupported payload schema version');
 	if (!isRecord(parsed.workspace)) return failure('Payload workspace must be an object');
 	if (typeof parsed.javascript !== 'string') return failure('Payload javascript must be a string');
+	let operationCatalog: OperationModuleCatalogV1;
+	try {
+		operationCatalog = createOperationModuleCatalogV1(parsed.operationCatalog);
+	} catch (error: unknown) {
+		return failure(`Invalid operation catalog: ${errorMessage(error)}`);
+	}
 
-	const result = compileBlocklyWorkspace(parsed.workspace);
+	const result = compileBlocklyWorkspace(parsed.workspace, operationCatalog);
 	return {
 		ok: true,
 		payload: {
 			schemaVersion: BLOCKLY_DATA_SCHEMA_VERSION,
+			operationCatalog,
 			workspace: parsed.workspace,
 			javascript: result.ok ? result.javascript : '',
 		},
 	};
 }
 
-export function serializeBlocklyDataPayload(workspace: Record<string, unknown>): string {
-	const result = compileBlocklyWorkspace(workspace);
+export function serializeBlocklyDataPayload(
+	workspace: Record<string, unknown>,
+	operationCatalog: OperationModuleCatalogV1,
+): string {
+	const catalog = createOperationModuleCatalogV1(operationCatalog);
+	const result = compileBlocklyWorkspace(workspace, catalog);
 	const payload: BlocklyDataPayload = {
 		schemaVersion: BLOCKLY_DATA_SCHEMA_VERSION,
+		operationCatalog: catalog,
 		workspace,
 		javascript: result.ok ? result.javascript : '',
 	};
@@ -170,8 +244,26 @@ export function serializeBlocklyDataPayload(workspace: Record<string, unknown>):
 class WorkspaceCompiler {
 	private blockCount = 0;
 	private readonly visited = new Set<object>();
+	private readonly operationsByBlockType = new Map<
+		string,
+		{ module: OperationModuleSpecV1; allowedInputs: readonly string[] }
+	>();
+	private readonly operationsByLogicalIdentity = new Map<string, OperationModuleSpecV1>();
 
-	constructor(private readonly workspace: unknown) {}
+	constructor(
+		private readonly workspace: unknown,
+		operationCatalog: OperationModuleCatalogV1,
+	) {
+		for (const module of operationCatalog.modules) {
+			const descriptor = createOperationBlockDescriptorV1(module);
+			this.operationsByBlockType.set(descriptor.blockType, {
+				module,
+				allowedInputs: descriptor.inputs.map(({ inputName }) => inputName),
+			});
+			const logicalIdentity = this.operationLogicalIdentity(module.operationRef, module.version);
+			this.operationsByLogicalIdentity.set(logicalIdentity, module);
+		}
+	}
 
 	compile(): CompileResult {
 		const root = this.parseRoot();
@@ -247,6 +339,8 @@ class WorkspaceCompiler {
 
 	private expression(block: Block, depth: number): Expression {
 		if (depth > MAX_DEPTH) this.fail('Block depth exceeds 40');
+		const operation = this.operationsByBlockType.get(block.type);
+		if (operation) return this.operationCall(block, operation.module, depth);
 		switch (block.type) {
 			case 'n8n_get_field': {
 				const path = this.safePath(this.stringField(block, 'PATH'), 'Field path');
@@ -296,6 +390,8 @@ class WorkspaceCompiler {
 					this.fail('logic_boolean BOOL must be TRUE or FALSE');
 				return { code: value === 'TRUE' ? 'true' : 'false' };
 			}
+			case 'logic_null':
+				return { code: 'null' };
 			case 'math_arithmetic':
 				return this.binary(block, depth, 'A', 'B', {
 					ADD: '+',
@@ -326,6 +422,192 @@ class WorkspaceCompiler {
 			default:
 				this.fail(`Unsupported value block: ${block.type}`);
 		}
+	}
+
+	private operationCall(block: Block, module: OperationModuleSpecV1, depth: number): Expression {
+		const fields = this.operationFields(block);
+		if (fields.OPERATION_REF !== module.operationRef)
+			this.fail(
+				`OPERATION_BLOCK_IDENTITY_MISMATCH: ${block.type} OPERATION_REF does not match its catalog module`,
+			);
+		if (fields.VERSION !== module.version)
+			this.fail(
+				`OPERATION_BLOCK_IDENTITY_MISMATCH: ${block.type} VERSION does not match its catalog module`,
+			);
+		if (fields.IMPLEMENTATION_REF !== module.implementationRef)
+			this.fail(
+				`OPERATION_BLOCK_IDENTITY_MISMATCH: ${block.type} IMPLEMENTATION_REF does not match its catalog module`,
+			);
+		if (fields.QUALIFIED_NAME !== module.qualifiedName)
+			this.fail(
+				`OPERATION_BLOCK_IDENTITY_MISMATCH: ${block.type} QUALIFIED_NAME does not match its catalog module`,
+			);
+
+		const argumentCodes = module.parameters.map(
+			(_parameter, index) =>
+				this.expression(this.requiredChild(block, `ARG${index}`), depth + 1).code,
+		);
+		const parameterNames = module.parameters.map((_parameter, index) => `operationArg${index}`);
+		const parameterByRef = new Map(
+			module.parameters.map((parameter, index) => [parameter.parameterRef, parameterNames[index]]),
+		);
+		const expression = this.operationExpression(module.expression, parameterByRef, 1);
+		const statements = [
+			'const operationFail = (code, message) => { const error = new Error(code + ": " + message); error.name = "OperationModuleRuntimeError"; error.code = code; throw error; };',
+			`const operationIsJson = (root) => { const stack = [{ value: root, depth: 1 }]; const ancestors = new Set(); let nodes = 0; while (stack.length > 0) { const current = stack.pop(); if (current.exit) { ancestors.delete(current.value); continue; } nodes += 1; if (current.depth > ${OPERATION_JSON_MAX_DEPTH} || nodes > ${OPERATION_JSON_MAX_NODES}) return false; const value = current.value; if (value === null || typeof value === "boolean") continue; if (typeof value === "string") { if (value.length > ${OPERATION_JSON_MAX_STRING_LENGTH}) return false; continue; } if (typeof value === "number") { if (!Number.isFinite(value)) return false; continue; } if (typeof value !== "object" || ancestors.has(value)) return false; ancestors.add(value); stack.push({ value, depth: current.depth, exit: true }); if (Array.isArray(value)) { for (const item of value) stack.push({ value: item, depth: current.depth + 1 }); } else { for (const key of Object.keys(value)) { if (key.length > ${OPERATION_JSON_MAX_KEY_LENGTH} || key === "__proto__" || key === "prototype" || key === "constructor") return false; stack.push({ value: value[key], depth: current.depth + 1 }); } } } return true; };`,
+			'const operationCloneJson = (value) => Array.isArray(value) ? value.map(operationCloneJson) : value !== null && typeof value === "object" ? Object.fromEntries(Object.entries(value).map(([key, item]) => [key, operationCloneJson(item)])) : value;',
+			'const operationFinite = (value, operation) => { if (!Number.isFinite(value)) operationFail("OPERATION_EXPRESSION_RESULT_INVALID", operation + " produced a non-finite number"); return value; };',
+			'const operationArrayElementString = (value) => value === null ? "" : Array.isArray(value) ? value.map(operationArrayElementString).join(",") : typeof value === "object" ? "[object Object]" : String(value);',
+			'const operationToPrimitive = (value) => Array.isArray(value) ? value.map(operationArrayElementString).join(",") : value !== null && typeof value === "object" ? "[object Object]" : value;',
+			'const operationToNumber = (value) => Number(operationToPrimitive(value));',
+			'const operationAdd = (left, right) => { const leftPrimitive = operationToPrimitive(left); const rightPrimitive = operationToPrimitive(right); if (typeof leftPrimitive === "string" || typeof rightPrimitive === "string") return String(leftPrimitive) + String(rightPrimitive); return operationFinite(Number(leftPrimitive) + Number(rightPrimitive), "addition"); };',
+			'const operationRelational = (left, right, operator) => { const leftPrimitive = operationToPrimitive(left); const rightPrimitive = operationToPrimitive(right); if (typeof leftPrimitive === "string" && typeof rightPrimitive === "string") { if (operator === "lt") return leftPrimitive < rightPrimitive; if (operator === "lte") return leftPrimitive <= rightPrimitive; if (operator === "gt") return leftPrimitive > rightPrimitive; return leftPrimitive >= rightPrimitive; } const leftNumber = Number(leftPrimitive); const rightNumber = Number(rightPrimitive); if (operator === "lt") return leftNumber < rightNumber; if (operator === "lte") return leftNumber <= rightNumber; if (operator === "gt") return leftNumber > rightNumber; return leftNumber >= rightNumber; };',
+		];
+		for (const [index, parameter] of module.parameters.entries()) {
+			const parameterName = parameterNames[index];
+			statements.push(
+				`if (!operationIsJson(${parameterName})) operationFail("OPERATION_ARGUMENT_COUNT_INVALID", ${JSON.stringify(`${module.qualifiedName}/${module.arity} requires exactly ${module.parameters.length} arguments`)});`,
+			);
+			statements.push(
+				...this.operationContractChecks(
+					parameterName,
+					parameter,
+					`argument ${index} (${parameter.name})`,
+					'OPERATION_ARGUMENT_TYPE_INVALID',
+				),
+			);
+			statements.push(`${parameterName} = operationCloneJson(${parameterName});`);
+		}
+		const propagateCondition = module.parameters
+			.map((parameter, index) =>
+				parameter.nullPolicy === 'propagate' ? `${parameterNames[index]} === null` : undefined,
+			)
+			.filter((condition): condition is string => condition !== undefined)
+			.join(' || ');
+		statements.push(
+			`const operationResult = ${propagateCondition === '' ? expression : `(${propagateCondition}) ? null : ${expression}`};`,
+		);
+		statements.push(
+			'if (!operationIsJson(operationResult)) operationFail("OPERATION_EXPRESSION_RESULT_INVALID", "operation expression produced a non-JSON value");',
+		);
+		statements.push(
+			...this.operationContractChecks(
+				'operationResult',
+				module.output,
+				'operation output',
+				'OPERATION_OUTPUT_TYPE_INVALID',
+			),
+		);
+		statements.push('return operationResult;');
+		return {
+			code: `((${parameterNames.join(', ')}) => { ${statements.join(' ')} })(${argumentCodes.join(', ')})`,
+		};
+	}
+
+	private operationContractChecks(
+		value: string,
+		contract: { type: string; nullPolicy: string },
+		location: string,
+		errorCode: 'OPERATION_ARGUMENT_TYPE_INVALID' | 'OPERATION_OUTPUT_TYPE_INVALID',
+	): string[] {
+		const checks: string[] = [];
+		if (contract.nullPolicy === 'reject') {
+			checks.push(
+				`if (${value} === null) operationFail(${JSON.stringify(errorCode)}, ${JSON.stringify(`${location} rejects null`)});`,
+			);
+		}
+		const condition = operationTypeConditions.get(contract.type);
+		if (!condition)
+			this.fail(`OPERATION_CONTRACT_INVALID: unsupported value type ${contract.type}`);
+		if (contract.type !== 'json') {
+			checks.push(
+				`if (${value} !== null && !(${condition(value)})) operationFail(${JSON.stringify(errorCode)}, ${JSON.stringify(`${location} must have type ${contract.type}`)});`,
+			);
+		}
+		return checks;
+	}
+
+	private operationExpression(
+		expression: OperationExpressionV1,
+		parameterByRef: ReadonlyMap<string, string>,
+		depth: number,
+	): string {
+		if (depth > 16) this.fail('OPERATION_EXPRESSION_INVALID: expression depth exceeds 16');
+		switch (expression.kind) {
+			case 'literal':
+				return JSON.stringify(expression.value);
+			case 'parameter': {
+				const parameterName = parameterByRef.get(expression.parameterRef);
+				if (!parameterName)
+					this.fail(
+						`OPERATION_EXPRESSION_INVALID: undeclared parameter ${expression.parameterRef}`,
+					);
+				return parameterName;
+			}
+			case 'unary': {
+				const value = this.operationExpression(expression.value, parameterByRef, depth + 1);
+				return expression.operator === 'not'
+					? `(!${value})`
+					: `operationFinite(-operationToNumber(${value}), "unary negate")`;
+			}
+			case 'binary': {
+				const operator = operationBinaryOperators[expression.operator];
+				const left = this.operationExpression(expression.left, parameterByRef, depth + 1);
+				const right = this.operationExpression(expression.right, parameterByRef, depth + 1);
+				if (expression.operator === 'add') {
+					return `operationAdd(${left}, ${right})`;
+				}
+				const finiteOperation = operationFiniteOperatorNames[expression.operator];
+				if (finiteOperation) {
+					return `operationFinite((operationToNumber(${left}) ${operator} operationToNumber(${right})), ${JSON.stringify(finiteOperation)})`;
+				}
+				if (
+					expression.operator === 'lt' ||
+					expression.operator === 'lte' ||
+					expression.operator === 'gt' ||
+					expression.operator === 'gte'
+				) {
+					return `operationRelational(${left}, ${right}, ${JSON.stringify(expression.operator)})`;
+				}
+				return `(${left} ${operator} ${right})`;
+			}
+			case 'conditional':
+				return `(${this.operationExpression(expression.condition, parameterByRef, depth + 1)} ? ${this.operationExpression(expression.whenTrue, parameterByRef, depth + 1)} : ${this.operationExpression(expression.whenFalse, parameterByRef, depth + 1)})`;
+			case 'array':
+				return `[${expression.values
+					.map((value) => this.operationExpression(value, parameterByRef, depth + 1))
+					.join(', ')}]`;
+			case 'object':
+				return `{ ${expression.properties
+					.map(
+						({ key, value }) =>
+							`[${JSON.stringify(key)}]: ${this.operationExpression(value, parameterByRef, depth + 1)}`,
+					)
+					.join(', ')} }`;
+		}
+	}
+
+	private operationFields(block: Block): {
+		OPERATION_REF: string;
+		IMPLEMENTATION_REF: string;
+		VERSION: string;
+		QUALIFIED_NAME: string;
+	} {
+		if (!isRecord(block.fields))
+			this.fail(`OPERATION_BLOCK_MALFORMED: ${block.type} requires operation identity fields`);
+		const allowed = new Set(['OPERATION_REF', 'IMPLEMENTATION_REF', 'VERSION', 'QUALIFIED_NAME']);
+		if (Object.keys(block.fields).some((key) => !allowed.has(key)))
+			this.fail(`OPERATION_BLOCK_MALFORMED: ${block.type} contains an unsupported field`);
+		return {
+			OPERATION_REF: this.stringField(block, 'OPERATION_REF'),
+			IMPLEMENTATION_REF: this.stringField(block, 'IMPLEMENTATION_REF'),
+			VERSION: this.stringField(block, 'VERSION'),
+			QUALIFIED_NAME: this.stringField(block, 'QUALIFIED_NAME'),
+		};
+	}
+
+	private operationLogicalIdentity(operationRef: string, version: string): string {
+		return `${operationRef}@${version}`;
 	}
 
 	private binary(
@@ -547,15 +829,43 @@ class WorkspaceCompiler {
 	private block(value: unknown, depth: number): Block {
 		if (depth > MAX_DEPTH) this.fail('Block depth exceeds 40');
 		if (!isBlock(value)) this.fail('Block is malformed');
-		if (!supportedTypes.has(value.type)) this.fail(`Unsupported block type: ${value.type}`);
+		const operation = this.operationsByBlockType.get(value.type);
+		if (!supportedTypes.has(value.type) && !operation) {
+			if (value.type.startsWith('n8n_operation_')) {
+				const fields = this.operationFields(value);
+				const logicalIdentity = this.operationLogicalIdentity(fields.OPERATION_REF, fields.VERSION);
+				const logicalOperation = this.operationsByLogicalIdentity.get(logicalIdentity);
+				if (logicalOperation !== undefined) {
+					this.fail(
+						logicalOperation.implementationRef !== fields.IMPLEMENTATION_REF
+							? `OPERATION_BLOCK_IDENTITY_MISMATCH: ${value.type} IMPLEMENTATION_REF does not match any catalog module for ${logicalIdentity}`
+							: `OPERATION_BLOCK_IDENTITY_MISMATCH: ${value.type} block type does not match its exact catalog identity`,
+					);
+				}
+				this.fail(`OPERATION_MODULE_MISSING: no catalog module matches block type ${value.type}`);
+			}
+			this.fail(`Unsupported block type: ${value.type}`);
+		}
 		if (this.visited.has(value))
 			this.fail('Workspace contains a block cycle or duplicate reference');
 		this.visited.add(value);
 		this.blockCount += 1;
 		if (this.blockCount > MAX_BLOCKS) this.fail('Workspace exceeds 200 blocks');
 		const inputs = this.inputs(value);
-		const permittedInputs = allowedInputs[value.type];
-		if (value.type === 'text_join' || value.type === 'lists_create_with') {
+		const permittedInputs = operation?.allowedInputs ?? allowedInputs[value.type];
+		if (operation) {
+			const inputKeys = Object.keys(inputs).sort();
+			const expectedInputKeys = [...permittedInputs].sort();
+			if (
+				inputKeys.length !== expectedInputKeys.length ||
+				inputKeys.some((key, index) => key !== expectedInputKeys[index])
+			) {
+				this.fail(
+					`OPERATION_ARGUMENTS_INVALID: ${value.type} requires exactly ${expectedInputKeys.join(', ') || 'zero arguments'}`,
+				);
+			}
+			this.operationFields(value);
+		} else if (value.type === 'text_join' || value.type === 'lists_create_with') {
 			if (Object.keys(inputs).some((key) => !/^ADD\d+$/.test(key)))
 				this.fail(`${value.type} inputs are malformed`);
 		} else if (Object.keys(inputs).some((key) => !permittedInputs.includes(key))) {
@@ -662,4 +972,13 @@ function byteLength(value: string): number {
 
 function failure(error: string): { ok: false; error: string } {
 	return { ok: false, error };
+}
+
+function errorMessage(
+	error: unknown,
+	defaultMessage = 'Operation catalog validation failed',
+): string {
+	if (!(error instanceof Error)) return defaultMessage;
+	const code = (error as Error & { code?: unknown }).code;
+	return typeof code === 'string' ? `${code}: ${error.message}` : error.message;
 }

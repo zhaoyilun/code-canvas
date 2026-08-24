@@ -13,6 +13,7 @@ vi.mock('@n8n/blockly-data-transform', () => compiler);
 import { BlocklyCode } from './BlocklyCode.node';
 
 const workspace = { blocks: { blocks: [] } };
+const operationCatalog = { apiVersion: 1, modules: [] };
 const compiledCode = 'return { json: { processed: true } };';
 
 function runnerItem(item: number, json: Record<string, unknown> = {}) {
@@ -29,7 +30,9 @@ function createContext(inputCount: number, runnerResults: unknown[] = []) {
 	return {
 		context: {
 			getNode: vi.fn().mockReturnValue(node),
-			getNodeParameter: vi.fn().mockReturnValue(JSON.stringify({ schemaVersion: 2, workspace })),
+			getNodeParameter: vi
+				.fn()
+				.mockReturnValue(JSON.stringify({ schemaVersion: 3, operationCatalog, workspace })),
 			getInputData: vi
 				.fn()
 				.mockReturnValue(
@@ -46,11 +49,16 @@ function createContext(inputCount: number, runnerResults: unknown[] = []) {
 beforeEach(() => {
 	compiler.createDefaultWorkspace.mockReturnValue(workspace);
 	compiler.serializeBlocklyDataPayload.mockReturnValue(
-		JSON.stringify({ schemaVersion: 2, workspace }),
+		JSON.stringify({ schemaVersion: 3, operationCatalog, workspace }),
 	);
 	compiler.parseBlocklyDataPayload.mockReturnValue({
 		ok: true,
-		payload: { schemaVersion: 2, workspace, javascript: 'return { json: { tampered: true } };' },
+		payload: {
+			schemaVersion: 3,
+			operationCatalog,
+			workspace,
+			javascript: 'return { json: { tampered: true } };',
+		},
 	});
 	compiler.compileBlocklyWorkspace.mockReturnValue({
 		ok: true,
@@ -84,14 +92,18 @@ describe('BlocklyCode', () => {
 		const { context, startJob } = createContext(3, [
 			{
 				ok: true,
-				result: [runnerItem(0, { item: 1 }), runnerItem(1, { item: 2 }), runnerItem(2, { item: 3 })],
+				result: [
+					runnerItem(0, { item: 1 }),
+					runnerItem(1, { item: 2 }),
+					runnerItem(2, { item: 3 }),
+				],
 			},
 		]);
 		const node = new BlocklyCode();
 
 		const result = await node.execute.call(context);
 
-		expect(compiler.compileBlocklyWorkspace).toHaveBeenCalledWith(workspace);
+		expect(compiler.compileBlocklyWorkspace).toHaveBeenCalledWith(workspace, operationCatalog);
 		expect(startJob).toHaveBeenCalledWith(
 			'javascript',
 			{
@@ -145,9 +157,7 @@ describe('BlocklyCode', () => {
 	});
 
 	it('wraps task runner failures without exposing the compiled code', async () => {
-		const { context } = createContext(1, [
-			{ ok: false, error: { message: 'Runner timed out' } },
-		]);
+		const { context } = createContext(1, [{ ok: false, error: { message: 'Runner timed out' } }]);
 		const node = new BlocklyCode();
 
 		await expect(node.execute.call(context)).rejects.toThrow(

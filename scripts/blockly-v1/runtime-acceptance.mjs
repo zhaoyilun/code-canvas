@@ -8,6 +8,7 @@ import {
 	mkdirSync,
 	readFileSync,
 	readdirSync,
+	statSync,
 	writeFileSync,
 } from 'node:fs';
 import { createServer } from 'node:net';
@@ -32,14 +33,49 @@ const RUNTIME_ENVIRONMENT_PREFIXES = [
 ];
 const RUNTIME_ENVIRONMENT_KEYS = new Set(['OFFLOAD_MANUAL_EXECUTIONS_TO_WORKERS']);
 
-const BUILD_OUTPUTS = [
+const OPERATION_RUNTIME_DIR = join(ROOT_DIR, 'packages', '@n8n', 'dual-canvas-operation-runtime');
+const OPERATION_RUNTIME_OUTPUT = join(OPERATION_RUNTIME_DIR, 'dist', 'index.js');
+const OPERATION_RUNTIME_BUILD_MARKER = join(OPERATION_RUNTIME_DIR, 'dist', 'build.tsbuildinfo');
+const DATA_TRANSFORM_DIR = join(ROOT_DIR, 'packages', '@n8n', 'blockly-data-transform');
+const DATA_TRANSFORM_OUTPUT = join(DATA_TRANSFORM_DIR, 'dist', 'index.js');
+const DATA_TRANSFORM_BUILD_MARKER = join(DATA_TRANSFORM_DIR, 'dist', 'build.tsbuildinfo');
+const COMMUNITY_NODE_OUTPUT = join(
+	PACKAGE_DIR,
+	'dist',
+	'nodes',
+	'BlocklyCode',
+	'BlocklyCode.node.js',
+);
+
+export const runtimeBuildRequirements = [
 	{
-		path: join(ROOT_DIR, 'packages', '@n8n', 'blockly-data-transform', 'dist', 'index.js'),
-		command: 'pnpm --filter @n8n/blockly-data-transform build',
+		path: OPERATION_RUNTIME_OUTPUT,
+		freshnessMarker: OPERATION_RUNTIME_BUILD_MARKER,
+		inputs: [join(OPERATION_RUNTIME_DIR, 'src'), join(OPERATION_RUNTIME_DIR, 'package.json')],
+		command:
+			'pnpm --filter @n8n/dual-canvas-operation-runtime exec tsc -b tsconfig.build.json --force',
+		logName: 'operation-runtime-build.log',
+	},
+	{
+		path: DATA_TRANSFORM_OUTPUT,
+		freshnessMarker: DATA_TRANSFORM_BUILD_MARKER,
+		inputs: [
+			join(DATA_TRANSFORM_DIR, 'src'),
+			join(DATA_TRANSFORM_DIR, 'package.json'),
+			OPERATION_RUNTIME_BUILD_MARKER,
+		],
+		command: 'pnpm --filter @n8n/blockly-data-transform exec tsc -b tsconfig.build.json --force',
 		logName: 'shared-compiler-build.log',
 	},
 	{
-		path: join(PACKAGE_DIR, 'dist', 'nodes', 'BlocklyCode', 'BlocklyCode.node.js'),
+		path: COMMUNITY_NODE_OUTPUT,
+		inputs: [
+			join(PACKAGE_DIR, 'nodes'),
+			join(PACKAGE_DIR, 'package.json'),
+			join(PACKAGE_DIR, 'scripts', 'bundle-runtime.mjs'),
+			OPERATION_RUNTIME_BUILD_MARKER,
+			DATA_TRANSFORM_BUILD_MARKER,
+		],
 		command: 'pnpm --filter n8n-nodes-blockly-code build',
 		logName: 'community-node-build.log',
 	},
@@ -55,26 +91,107 @@ const BUILD_OUTPUTS = [
 		),
 		command: 'pnpm --filter n8n-nodes-base build',
 		logName: 'nodes-base-build.log',
+		inputs: [],
 	},
 	{
 		path: join(ROOT_DIR, 'packages', 'nodes-base', 'dist', 'nodes', 'Set', 'Set.node.js'),
 		command: 'pnpm --filter n8n-nodes-base build',
 		logName: 'nodes-base-build.log',
+		inputs: [],
 	},
 	{
 		path: join(ROOT_DIR, 'packages', '@n8n', 'task-runner', 'dist', 'start.js'),
 		command: 'pnpm --filter @n8n/task-runner build',
 		logName: 'task-runner-build.log',
+		inputs: [],
 	},
 	{
 		path: join(ROOT_DIR, 'packages', 'cli', 'dist', 'command-registry.js'),
 		command: 'pnpm --filter n8n build',
 		logName: 'cli-build.log',
+		inputs: [],
 	},
 ];
 
-export function getMissingBuildOutputs() {
-	return BUILD_OUTPUTS.filter(({ path }) => !existsSync(path));
+export function getBuildOutputProblems(requirements = runtimeBuildRequirements) {
+	const problemsByOutput = new Map();
+
+	for (const requirement of requirements) {
+		const outputPath = resolve(requirement.path);
+		if (!existsSync(outputPath)) {
+			problemsByOutput.set(outputPath, { ...requirement, reason: 'missing' });
+			continue;
+		}
+		const freshnessMarker = resolve(requirement.freshnessMarker ?? outputPath);
+		if (!existsSync(freshnessMarker)) {
+			problemsByOutput.set(outputPath, {
+				...requirement,
+				reason: 'build-marker-missing',
+				inputPath: freshnessMarker,
+			});
+			continue;
+		}
+
+		const outputMtime = statSync(freshnessMarker).mtimeMs;
+		for (const input of requirement.inputs ?? []) {
+			const inputPath = resolve(input);
+			if (!existsSync(inputPath)) {
+				problemsByOutput.set(outputPath, {
+					...requirement,
+					reason: 'input-missing',
+					inputPath,
+				});
+				break;
+			}
+			const newestInput = findNewestProductionInput(inputPath);
+			if (newestInput && newestInput.mtimeMs > outputMtime) {
+				problemsByOutput.set(outputPath, {
+					...requirement,
+					reason: 'stale',
+					inputPath: newestInput.path,
+				});
+				break;
+			}
+		}
+	}
+
+	let propagated = true;
+	while (propagated) {
+		propagated = false;
+		const invalidInputs = new Map();
+		for (const requirement of requirements) {
+			const outputPath = resolve(requirement.path);
+			if (!problemsByOutput.has(outputPath)) continue;
+			invalidInputs.set(outputPath, problemsByOutput.get(outputPath));
+			invalidInputs.set(
+				resolve(requirement.freshnessMarker ?? outputPath),
+				problemsByOutput.get(outputPath),
+			);
+		}
+		for (const requirement of requirements) {
+			const outputPath = resolve(requirement.path);
+			if (problemsByOutput.has(outputPath)) continue;
+			const invalidInput = (requirement.inputs ?? [])
+				.map((input) => resolve(input))
+				.find((inputPath) => invalidInputs.has(inputPath));
+			if (!invalidInput) continue;
+			problemsByOutput.set(outputPath, {
+				...requirement,
+				reason: 'upstream-stale',
+				inputPath: invalidInput,
+			});
+			propagated = true;
+		}
+	}
+
+	return requirements
+		.map((requirement) => problemsByOutput.get(resolve(requirement.path)))
+		.filter(Boolean);
+}
+
+export function assertFreshBuildOutputs(requirements = runtimeBuildRequirements) {
+	const problems = getBuildOutputProblems(requirements);
+	if (problems.length > 0) throw new Error(formatBuildOutputProblems(problems));
 }
 
 export function validateWorkflowFixture(workflow) {
@@ -188,10 +305,7 @@ export async function runWorkflowAcceptance({
 	const resolvedExecutionPath = resolve(executionPath ?? join(evidenceDir, 'execution.json'));
 	const resolvedLogDirectory = resolve(logDirectory ?? evidenceDir);
 	validateRuntimeStagingDirectory(resolvedRuntimeDir);
-	const missingOutputs = getMissingBuildOutputs();
-	if (missingOutputs.length > 0) {
-		throw new Error(formatMissingBuildOutputs(missingOutputs));
-	}
+	assertFreshBuildOutputs();
 	for (const directory of [
 		evidenceDir,
 		packageOutputDir,
@@ -335,10 +449,7 @@ async function main() {
 	const options = parseArguments(process.argv.slice(2));
 	const workflow = JSON.parse(readFileSync(FIXTURE_PATH, 'utf8'));
 	const fixture = validateWorkflowFixture(workflow);
-	const missingOutputs = getMissingBuildOutputs();
-	if (missingOutputs.length > 0) {
-		throw new Error(formatMissingBuildOutputs(missingOutputs));
-	}
+	assertFreshBuildOutputs();
 
 	if (options.checkOnly) {
 		runFixtureCheck();
@@ -530,12 +641,40 @@ function validateRuntimeStagingDirectory(runtimeDir) {
 	}
 }
 
-export function formatMissingBuildOutputs(missingOutputs) {
-	const paths = missingOutputs.map(({ path }) => `- ${path}`).join('\n');
-	const commands = missingOutputs
-		.map(({ command, logName }) => `  ${command} > scripts/blockly-v1/.runtime/${logName} 2>&1`)
+export function formatBuildOutputProblems(problems) {
+	const paths = problems
+		.map(({ path, reason, inputPath }) => {
+			const detail = inputPath ? `\n  input: ${inputPath}` : '';
+			return `- [${reason}] ${path}${detail}`;
+		})
 		.join('\n');
-	return `Required build outputs are missing:\n${paths}\nBuild them from ${ROOT_DIR}:\n  node -e "require('node:fs').mkdirSync('scripts/blockly-v1/.runtime',{recursive:true})"\n${commands}`;
+	const commands = [...new Set(problems.map(({ command }) => command).filter((command) => command))]
+		.map((command) => `  ${command}`)
+		.join('\n');
+	return `Required build outputs are missing or stale:\n${paths}\nBuild them from ${ROOT_DIR} in this order:\n${commands}`;
+}
+
+export function findNewestProductionInput(path) {
+	if (!existsSync(path)) return undefined;
+	const stats = statSync(path);
+	if (!stats.isDirectory()) return { path, mtimeMs: stats.mtimeMs };
+
+	let newest;
+	for (const name of readdirSync(path).sort()) {
+		if (isNonProductionEntry(name)) continue;
+		const candidate = findNewestProductionInput(join(path, name));
+		if (candidate && (!newest || candidate.mtimeMs > newest.mtimeMs)) newest = candidate;
+	}
+	return newest;
+}
+
+function isNonProductionEntry(name) {
+	return (
+		name.includes('.test.') ||
+		name.includes('.spec.') ||
+		name === '__tests__' ||
+		name === '__fixtures__'
+	);
 }
 
 function runtimeName() {

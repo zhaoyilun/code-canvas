@@ -9,6 +9,7 @@ import {
 	visualProgramIRV1Schema,
 	workflowFragmentV1Schema,
 } from '@n8n/dual-canvas-core';
+import { createOperationBlockTypeV1 } from '@n8n/dual-canvas-operation-runtime';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -20,7 +21,12 @@ import {
 	importTypeScriptSource,
 	typescriptSourceImporterV1,
 } from './importer';
-import { createTestRequest } from './test-support';
+import { createTestRequest, scoreOperationCatalog } from './test-support';
+
+const clampScoreOperation = scoreOperationCatalog.modules.find(
+	(module) => module.qualifiedName === 'clampScore',
+);
+if (clampScoreOperation === undefined) throw new Error('clamp operation fixture is missing');
 
 const exampleSource = readFileSync(resolve(__dirname, '../examples/score-normalizer.ts'), 'utf8');
 
@@ -86,6 +92,7 @@ describe('TypeScript source importer', () => {
 				apiVersion: 1,
 				title: request.title,
 				entryFunction: request.entryFunction,
+				operationCatalog: request.operationCatalog,
 			},
 		});
 
@@ -110,6 +117,64 @@ describe('TypeScript source importer', () => {
 		expect(JSON.stringify(result.value)).not.toContain('example.nodes');
 	});
 
+	it('imports a registered pure operation as one dynamic Blockly block and recompiles it', () => {
+		const source = `function transform(input) {
+	const output = {};
+	output.score = clampScore(input?.score ?? null, 0, 100);
+	return output;
+}`;
+		const result = importTypeScriptSource({
+			...createTestRequest(source),
+			operationCatalog: scoreOperationCatalog,
+		});
+
+		if (!result.ok) throw new Error(JSON.stringify(result.diagnostics, null, 2));
+		expect(result.value.logic.statements[0]).toMatchObject({
+			kind: 'set',
+			value: {
+				kind: 'operationCall',
+				operationRef: 'operation.clamp-score.v1',
+				implementationRef: clampScoreOperation.implementationRef,
+				qualifiedName: 'clampScore',
+			},
+		});
+		const parsedPayload = parseBlocklyDataPayload(result.value.generatedCanvas.blocklyPayload);
+		expect(parsedPayload.ok).toBe(true);
+		if (!parsedPayload.ok) return;
+		expect(parsedPayload.payload.operationCatalog).toEqual(scoreOperationCatalog);
+		const workspaceJson = JSON.stringify(parsedPayload.payload.workspace);
+		expect(workspaceJson).toContain(
+			createOperationBlockTypeV1(
+				'operation.clamp-score.v1',
+				clampScoreOperation.implementationRef,
+				'1.0.0',
+			),
+		);
+		expect(workspaceJson).toContain(
+			`"IMPLEMENTATION_REF":"${clampScoreOperation.implementationRef}"`,
+		);
+		expect(workspaceJson).toContain('"QUALIFIED_NAME":"clampScore"');
+		const operationMapping = result.value.generatedCanvas.sourceMap.find(
+			(mapping) => mapping.context?.expressionKind === 'operationCall',
+		);
+		expect(operationMapping).toMatchObject({
+			artifact: { kind: 'canvasBlock' },
+			source: { sourceRef: 'source.main', start: { offset: source.indexOf('clampScore(') } },
+			context: {
+				operationRef: 'operation.clamp-score.v1',
+				implementationRef: clampScoreOperation.implementationRef,
+			},
+		});
+		const compiled = compileBlocklyWorkspace(
+			parsedPayload.payload.workspace,
+			parsedPayload.payload.operationCatalog,
+		);
+		expect(compiled).toMatchObject({
+			ok: true,
+			javascript: result.value.generatedCanvas.javascript,
+		});
+	});
+
 	it('keeps workflow bindings and canvas configuration out of core importer options', () => {
 		const request = createTestRequest(exampleSource);
 		const result = typescriptSourceImporterV1.importSource({
@@ -122,6 +187,7 @@ describe('TypeScript source importer', () => {
 				apiVersion: 1,
 				title: request.title,
 				entryFunction: request.entryFunction,
+				operationCatalog: request.operationCatalog,
 				bindings: request.bindings,
 			},
 		});
@@ -156,10 +222,13 @@ describe('TypeScript source importer', () => {
 		const parsed = parseBlocklyDataPayload(result.value.generatedCanvas.blocklyPayload);
 		expect(parsed.ok).toBe(true);
 		if (!parsed.ok) return;
-		expect(serializeBlocklyDataPayload(parsed.payload.workspace)).toBe(
-			result.value.generatedCanvas.blocklyPayload,
+		expect(
+			serializeBlocklyDataPayload(parsed.payload.workspace, parsed.payload.operationCatalog),
+		).toBe(result.value.generatedCanvas.blocklyPayload);
+		const compiled = compileBlocklyWorkspace(
+			parsed.payload.workspace,
+			parsed.payload.operationCatalog,
 		);
-		const compiled = compileBlocklyWorkspace(parsed.payload.workspace);
 		expect(compiled).toMatchObject({
 			ok: true,
 			javascript: result.value.generatedCanvas.javascript,

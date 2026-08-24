@@ -67,3 +67,22 @@ node scripts/education/numeric-runtime-acceptance.mjs
 运行使用隔离的 `N8N_USER_FOLDER`、n8n `5678` 端口以及自动选择且排除 `8080` 的
 Task Broker 端口。完整契约和证据文件说明见
 `docs/education/numeric-runtime-acceptance.md`。
+
+## 未知函数到生成模块
+
+`unknown-operation-runtime-acceptance.mjs` 使用 `clampScore/3` 验证完整的模块生成闭环：
+首次导入产生 AST 证据和 scaffold request，生成端填写 `implementationRef: null` 的严格 draft，
+宿主通过 `finalizeOperationModuleSpecV1` 派生不可变实现身份，再经表达式解释器与测试向量准入
+后进入目录。同一源码带目录重导入为携带 `operationRef + implementationRef` 的 `operationCall`
+和动态 Blockly 积木，
+最后由正式社区节点重新编译并执行：
+
+```bash
+node scripts/education/unknown-operation-runtime-acceptance.mjs --check
+node --test scripts/education/unknown-operation-runtime-acceptance.test.mjs
+node scripts/education/unknown-operation-runtime-acceptance.mjs
+```
+
+快速门同时对照 ModuleSpec 解释器、注入函数后的原源码和 Blockly 编译结果；完整门复用
+隔离 n8n Runtime，固定使用 `5678`，Task Broker 动态选端口并排除 `8080`。详细契约与证据
+清单见 `docs/education/unknown-operation-runtime-acceptance.md`。

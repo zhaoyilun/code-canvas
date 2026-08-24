@@ -10,3 +10,14 @@ export function createLogicStatementBlockRef(
 	stableReferenceSchema.parse(stepRef);
 	return `logic-${createStableId(documentRef, `${nodeRef}:statement:${stepRef}`)}`;
 }
+
+export function createLogicExpressionBlockRef(
+	documentRef: string,
+	nodeRef: string,
+	stepRef: string,
+	path: string,
+): string {
+	stableReferenceSchema.parse(nodeRef);
+	stableReferenceSchema.parse(stepRef);
+	return `logic-${createStableId(documentRef, `${nodeRef}:${stepRef}:${path}`)}`;
+}

@@ -1,3 +1,8 @@
+import {
+	operationImplementationReferenceV1Schema,
+	operationModuleVersionV1Schema,
+	operationQualifiedNameSchema,
+} from '@n8n/dual-canvas-operation-runtime';
 import { z } from 'zod';
 
 import { sourceSpanV1Schema } from './mapping';
@@ -62,6 +67,16 @@ export type LogicExpressionV1 =
 	| { kind: 'number'; value: number }
 	| { kind: 'text'; value: string }
 	| { kind: 'boolean'; value: boolean }
+	| {
+			kind: 'operationCall';
+			callRef: string;
+			operationRef: string;
+			implementationRef: string;
+			qualifiedName: string;
+			version: '1.0.0';
+			arguments: LogicExpressionV1[];
+			source: z.infer<typeof sourceSpanV1Schema>;
+	  }
 	| {
 			kind: 'arithmetic';
 			op: 'add' | 'subtract' | 'multiply' | 'divide' | 'power';
@@ -140,6 +155,18 @@ export const logicExpressionV1Schema: z.ZodType<LogicExpressionV1> = z.lazy(() =
 		z.object({ kind: z.literal('number'), value: z.number().finite() }).strict(),
 		z.object({ kind: z.literal('text'), value: z.string().max(1000) }).strict(),
 		z.object({ kind: z.literal('boolean'), value: z.boolean() }).strict(),
+		z
+			.object({
+				kind: z.literal('operationCall'),
+				callRef: stableReferenceSchema,
+				operationRef: stableReferenceSchema,
+				implementationRef: operationImplementationReferenceV1Schema,
+				qualifiedName: operationQualifiedNameSchema,
+				version: operationModuleVersionV1Schema,
+				arguments: z.array(logicExpressionV1Schema).max(16),
+				source: sourceSpanV1Schema,
+			})
+			.strict(),
 		z
 			.object({
 				kind: z.literal('arithmetic'),
@@ -276,6 +303,17 @@ export const logicNodeDraftV1Schema = z
 				validateObjectKeys(expression, context, ['statements', index]);
 			}
 		}
+		const operationCallRefs = new Set<string>();
+		for (const [index, { expression }] of flattenLogicOperationCalls(node.statements).entries()) {
+			if (operationCallRefs.has(expression.callRef) || stepRefs.has(expression.callRef)) {
+				context.addIssue({
+					code: 'custom',
+					path: ['statements', index, 'callRef'],
+					message: `duplicate logic semantic reference "${expression.callRef}"`,
+				});
+			}
+			operationCallRefs.add(expression.callRef);
+		}
 	});
 
 export type LogicNodeDraftV1 = z.infer<typeof logicNodeDraftV1Schema>;
@@ -290,6 +328,107 @@ export function flattenLogicStatements(statements: LogicStatementV1[]): LogicSta
 				]
 			: [statement],
 	);
+}
+
+export type LogicOperationCallV1 = Extract<LogicExpressionV1, { kind: 'operationCall' }>;
+
+export type LogicOperationCallLocationV1 = {
+	expression: LogicOperationCallV1;
+	stepRef: string;
+	path: string;
+};
+
+export function flattenLogicOperationCalls(
+	statements: LogicStatementV1[],
+): LogicOperationCallLocationV1[] {
+	return flattenLogicStatements(statements).flatMap((statement) => {
+		switch (statement.kind) {
+			case 'set':
+				return operationCallLocations(statement.value, statement.stepRef, 'value');
+			case 'delete':
+				return [];
+			case 'if':
+				return operationCallLocations(statement.condition, statement.stepRef, 'condition');
+			case 'assert':
+				return [
+					...operationCallLocations(statement.condition, statement.stepRef, 'condition'),
+					...operationCallLocations(statement.message, statement.stepRef, 'message'),
+				];
+		}
+	});
+}
+
+function operationCallLocations(
+	expression: LogicExpressionV1,
+	stepRef: string,
+	path: string,
+): LogicOperationCallLocationV1[] {
+	const current: LogicOperationCallLocationV1[] =
+		expression.kind === 'operationCall' ? [{ expression, stepRef, path }] : [];
+	return [
+		...current,
+		...expressionChildrenWithPaths(expression).flatMap(({ expression: child, path: childPath }) =>
+			operationCallLocations(child, stepRef, `${path}:${childPath}`),
+		),
+	];
+}
+
+function expressionChildrenWithPaths(
+	expression: LogicExpressionV1,
+): Array<{ expression: LogicExpressionV1; path: string }> {
+	switch (expression.kind) {
+		case 'input':
+		case 'number':
+		case 'text':
+		case 'boolean':
+			return [];
+		case 'getPath':
+		case 'convert':
+		case 'not':
+			return [{ expression: expression.value, path: 'value' }];
+		case 'array':
+		case 'join':
+			return expression.values.map((value, index) => ({
+				expression: value,
+				path: `values:${index}`,
+			}));
+		case 'arrayLength':
+		case 'arrayMapPath':
+			return [{ expression: expression.array, path: 'array' }];
+		case 'arrayAt':
+			return [
+				{ expression: expression.array, path: 'array' },
+				{ expression: expression.index, path: 'index' },
+			];
+		case 'arrayFilterPath':
+			return [
+				{ expression: expression.array, path: 'array' },
+				{ expression: expression.value, path: 'value' },
+			];
+		case 'object':
+			return expression.properties.map((property) => ({
+				expression: property.value,
+				path: `properties:${property.key}:value`,
+			}));
+		case 'operationCall':
+			return expression.arguments.map((argument, index) => ({
+				expression: argument,
+				path: `arguments:${index}`,
+			}));
+		case 'arithmetic':
+		case 'compare':
+		case 'booleanOperation':
+			return [
+				{ expression: expression.left, path: 'left' },
+				{ expression: expression.right, path: 'right' },
+			];
+		case 'conditional':
+			return [
+				{ expression: expression.condition, path: 'condition' },
+				{ expression: expression.whenTrue, path: 'whenTrue' },
+				{ expression: expression.whenFalse, path: 'whenFalse' },
+			];
+	}
 }
 
 function logicStatementExpressions(statement: LogicStatementV1): LogicExpressionV1[] {
@@ -335,6 +474,8 @@ function childExpressions(expression: LogicExpressionV1): LogicExpressionV1[] {
 		case 'text':
 		case 'boolean':
 			return [];
+		case 'operationCall':
+			return expression.arguments;
 		case 'getPath':
 		case 'convert':
 		case 'not':

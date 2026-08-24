@@ -949,6 +949,9 @@ importers:
       '@n8n/blockly-data-transform':
         specifier: workspace:*
         version: link:../../packages/@n8n/blockly-data-transform
+      '@n8n/dual-canvas-operation-runtime':
+        specifier: workspace:*
+        version: link:../../packages/@n8n/dual-canvas-operation-runtime
       '@n8n/node-cli':
         specifier: ^0.44.3
         version: link:../../packages/@n8n/node-cli
@@ -1754,6 +1757,10 @@ importers:
         version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@20.19.41)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(jsdom@26.1.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(vite@8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3))
 
   packages/@n8n/blockly-data-transform:
+    dependencies:
+      '@n8n/dual-canvas-operation-runtime':
+        specifier: workspace:*
+        version: link:../dual-canvas-operation-runtime
     devDependencies:
       '@n8n/eslint-config':
         specifier: workspace:*
@@ -2320,6 +2327,9 @@ importers:
       '@n8n/blockly-data-transform':
         specifier: workspace:*
         version: link:../blockly-data-transform
+      '@n8n/dual-canvas-operation-runtime':
+        specifier: workspace:*
+        version: link:../dual-canvas-operation-runtime
       uuid:
         specifier: 'catalog:'
         version: 11.1.1
@@ -2336,6 +2346,40 @@ importers:
       '@n8n/vitest-config':
         specifier: workspace:*
         version: link:../vitest-config
+      eslint:
+        specifier: 'catalog:'
+        version: 9.29.0(jiti@2.6.1)
+      typescript:
+        specifier: catalog:typescript
+        version: 7.0.2
+      vite:
+        specifier: 'catalog:'
+        version: 8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3)
+      vitest:
+        specifier: 'catalog:'
+        version: 4.1.9(@opentelemetry/api@1.9.1)(@types/node@20.19.41)(@vitest/browser-playwright@4.1.9)(@vitest/coverage-v8@4.1.9)(jsdom@26.1.0(bufferutil@4.0.9)(utf-8-validate@5.0.10))(vite@8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3))
+
+  packages/@n8n/dual-canvas-operation-runtime:
+    dependencies:
+      uuid:
+        specifier: 'catalog:'
+        version: 11.1.1
+      zod:
+        specifier: 3.25.76
+        version: 3.25.76
+    devDependencies:
+      '@n8n/eslint-config':
+        specifier: workspace:*
+        version: link:../eslint-config
+      '@n8n/typescript-config':
+        specifier: workspace:*
+        version: link:../typescript-config
+      '@n8n/vitest-config':
+        specifier: workspace:*
+        version: link:../vitest-config
+      eslint:
+        specifier: 'catalog:'
+        version: 9.29.0(jiti@2.6.1)
       typescript:
         specifier: catalog:typescript
         version: 7.0.2
@@ -2351,6 +2395,9 @@ importers:
       '@n8n/dual-canvas-core':
         specifier: workspace:*
         version: link:../dual-canvas-core
+      '@n8n/dual-canvas-operation-runtime':
+        specifier: workspace:*
+        version: link:../dual-canvas-operation-runtime
       zod:
         specifier: 3.25.76
         version: 3.25.76
@@ -2364,6 +2411,9 @@ importers:
       '@n8n/vitest-config':
         specifier: workspace:*
         version: link:../vitest-config
+      eslint:
+        specifier: 'catalog:'
+        version: 9.29.0(jiti@2.6.1)
       typescript:
         specifier: catalog:typescript
         version: 7.0.2
@@ -2379,6 +2429,9 @@ importers:
       '@n8n/dual-canvas-core':
         specifier: workspace:*
         version: link:../dual-canvas-core
+      '@n8n/dual-canvas-operation-runtime':
+        specifier: workspace:*
+        version: link:../dual-canvas-operation-runtime
       '@n8n/dual-canvas-operation-sdk':
         specifier: workspace:*
         version: link:../dual-canvas-operation-sdk
@@ -2401,6 +2454,9 @@ importers:
       '@n8n/vitest-config':
         specifier: workspace:*
         version: link:../vitest-config
+      eslint:
+        specifier: 'catalog:'
+        version: 9.29.0(jiti@2.6.1)
       vite:
         specifier: 'catalog:'
         version: 8.0.2(@emnapi/core@1.11.1)(@emnapi/runtime@1.11.1)(@types/node@20.19.41)(esbuild@0.28.1)(jiti@2.6.1)(sass-embedded@1.98.0)(sass@1.98.0)(terser@5.16.1)(tsx@4.19.3)(yaml@2.8.3)
@@ -6032,6 +6088,9 @@ importers:
       '@n8n/dual-canvas-core':
         specifier: workspace:*
         version: link:../../@n8n/dual-canvas-core
+      '@n8n/dual-canvas-operation-runtime':
+        specifier: workspace:*
+        version: link:../../@n8n/dual-canvas-operation-runtime
       '@n8n/frontend-constants':
         specifier: workspace:*
         version: link:../@n8n/frontend-constants
@@ -22901,8 +22960,8 @@ packages:
   vue-component-type-helpers@2.2.12:
     resolution: {integrity: sha512-YbGqHZ5/eW4SnkPNR44mKVc6ZKQoRs/Rux1sxC6rdwXb4qpbOSYfDr9DsTHolOTGmIKgM9j141mZbBeg05R1pw==}
 
-  vue-component-type-helpers@3.3.10:
-    resolution: {integrity: sha512-t7IQivQ3oD4D01b7s7a9AWzHAcr3DGBIa/1jZREsFQJcFgSL92gqUkqNiHTYgzTt7QDuJa0I9wCeDwEtZICoBQ==}
+  vue-component-type-helpers@3.3.11:
+    resolution: {integrity: sha512-LwcxzeliO9fkQcpJG0PoX8X5kmAhKmH9wkpDLxNabwzkQ9Zeib2YVHwFV4pcWmMLfXVfjr/dSV+DaJ3cIPgSNA==}
 
   vue-demi@0.14.10:
     resolution: {integrity: sha512-nMZBOwuzabUO0nLgIcc6rycZEebF6eeUfaiQx9+WSk8e29IbLvPU9feI6tqW4kTo3hvoYAJkMh8n8D0fuISphg==}
@@ -29979,7 +30038,7 @@ snapshots:
       storybook: 10.1.11(@testing-library/dom@10.4.0)(bufferutil@4.0.9)(prettier@3.6.2)(react-dom@18.2.0(react@18.2.0))(react@18.2.0)(utf-8-validate@5.0.10)
       type-fest: 2.19.0
       vue: 3.5.26(typescript@6.0.2)
-      vue-component-type-helpers: 3.3.10
+      vue-component-type-helpers: 3.3.11
 
   '@stryker-mutator/api@9.6.1':
     dependencies:
@@ -42784,7 +42843,7 @@ snapshots:
 
   vue-component-type-helpers@2.2.12: {}
 
-  vue-component-type-helpers@3.3.10: {}
+  vue-component-type-helpers@3.3.11: {}
 
   vue-demi@0.14.10(vue@3.5.26(typescript@6.0.2)):
     dependencies:

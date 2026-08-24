@@ -7,3 +7,12 @@ export {
 } from '@n8n/blockly-data-transform';
 
 export type { BlocklyDataPayload, CompileResult } from '@n8n/blockly-data-transform';
+export {
+	createOperationBlockDescriptorV1,
+	createOperationModuleCatalogV1,
+	finalizeOperationModuleSpecV1,
+} from '@n8n/dual-canvas-operation-runtime';
+export type {
+	OperationModuleCatalogV1,
+	OperationModuleSpecV1,
+} from '@n8n/dual-canvas-operation-runtime';

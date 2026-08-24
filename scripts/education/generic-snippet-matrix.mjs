@@ -208,7 +208,10 @@ export function verifyPositiveSnippet(spec) {
 	assert.equal(canvas.payload, roundTripped.artifact.generatedCanvas.blocklyPayload);
 	const parsedPayload = dataTransform.parseBlocklyDataPayload(canvas.payload);
 	assert.equal(parsedPayload.ok, true, parsedPayload.error);
-	const compiled = dataTransform.compileBlocklyWorkspace(parsedPayload.payload.workspace);
+	const compiled = dataTransform.compileBlocklyWorkspace(
+		parsedPayload.payload.workspace,
+		parsedPayload.payload.operationCatalog,
+	);
 	assert.equal(compiled.ok, true, compiled.error);
 	assert.equal(compiled.javascript, roundTripped.artifact.generatedCanvas.javascript);
 	assert.equal(canvas.preview, compiled.javascript);

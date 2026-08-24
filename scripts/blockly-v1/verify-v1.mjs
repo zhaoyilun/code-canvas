@@ -13,7 +13,9 @@ const refreshPreview = process.argv.includes('--refresh-preview');
 if (
 	refreshPreview &&
 	fixturePath !==
-		resolve(fileURLToPath(new URL('./fixtures/blockly-data-transform-v1.workflow.json', import.meta.url)))
+		resolve(
+			fileURLToPath(new URL('./fixtures/blockly-data-transform-v1.workflow.json', import.meta.url)),
+		)
 ) {
 	fail('--refresh-preview only permits the repository fixture');
 }
@@ -39,7 +41,7 @@ if (!compiler) {
 	assert(payload.javascript === '', 'without the shared compiler, fixture preview must stay empty');
 	console.log(`PASS: ${fixturePath}`);
 	console.log(
-		'PASS: schema 2 workspace, approved blocks, three inputs, and three expected one-to-one outputs are valid',
+		'PASS: schema 3 workspace, empty operation catalog, approved blocks, three inputs, and three expected one-to-one outputs are valid',
 	);
 	console.log(
 		'SKIP: shared compiler is unavailable; run pnpm --filter @n8n/blockly-data-transform build, then rerun with --refresh-preview',
@@ -47,7 +49,7 @@ if (!compiler) {
 	process.exit(0);
 }
 
-const result = compiler.compileBlocklyWorkspace(payload.workspace);
+const result = compiler.compileBlocklyWorkspace(payload.workspace, payload.operationCatalog);
 assertRecord(result, 'shared compiler returned an invalid result');
 assert(
 	result.ok === true,
@@ -114,14 +116,18 @@ function validateWorkflow(workflow) {
 		'split node must split orders',
 	);
 	const node = byName.get('Blockly Data Transform');
-	assert(
-		node.type === 'n8n-nodes-blockly-code.blocklyCode',
-		'missing Blockly Data Transform node',
-	);
+	assert(node.type === 'n8n-nodes-blockly-code.blocklyCode', 'missing Blockly Data Transform node');
 	assert(typeof node.parameters?.blocklyPayload === 'string', 'blocklyPayload must be a string');
 	const payload = JSON.parse(node.parameters.blocklyPayload);
 	assertRecord(payload, 'payload must be an object');
-	assert(payload.schemaVersion === 2, 'payload must use schemaVersion 2');
+	assert(payload.schemaVersion === 3, 'payload must use schemaVersion 3');
+	assertRecord(payload.operationCatalog, 'payload.operationCatalog must be an object');
+	assert(
+		payload.operationCatalog.apiVersion === 1 &&
+			Array.isArray(payload.operationCatalog.modules) &&
+			payload.operationCatalog.modules.length === 0,
+		'fixture operation catalog must be empty',
+	);
 	assertRecord(payload.workspace, 'payload.workspace must be an object');
 	assert(typeof payload.javascript === 'string', 'payload.javascript must be a string');
 	const top = payload.workspace.blocks?.blocks;

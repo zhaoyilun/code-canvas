@@ -112,7 +112,10 @@ function loadModelValue(value: string) {
 	const currentAdapter = adapter;
 	if (!currentWorkspace || !currentBlockly || !currentAdapter) return;
 	const payload = currentAdapter.parsePayload(value);
-	if (payload.ok) currentAdapter.registerBlocks(currentBlockly);
+	if (payload.ok) {
+		currentAdapter.registerBlocks(currentBlockly);
+		currentWorkspace.updateToolbox(currentAdapter.createToolbox());
+	}
 	loadParsedPayload(payload);
 }
 function loadParsedPayload(payload: BlocklyPayloadParseResult) {

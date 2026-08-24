@@ -70,7 +70,11 @@ export function importTypeScriptSource(requestInput: unknown): TypeScriptImportR
 	);
 	if (!sourceResult.ok) return sourceResult;
 
-	const generationResult = generateLogicCanvas(sourceResult.parsed.logic, request.documentRef);
+	const generationResult = generateLogicCanvas(
+		sourceResult.parsed.logic,
+		request.documentRef,
+		request.operationCatalog,
+	);
 	if (!generationResult.ok) {
 		return {
 			ok: false,
@@ -312,6 +316,7 @@ function importTypeScriptSourceToVisualProgram(
 			revisionRef: request.revisionRef,
 			entryFunction: options.entryFunction,
 			source: { ...request.source, language: language.data },
+			operationCatalog: options.operationCatalog,
 		},
 		refs.logicNodeRef,
 		options.title,

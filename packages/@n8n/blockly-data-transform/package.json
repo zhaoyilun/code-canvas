@@ -26,6 +26,9 @@
     "test": "vitest run",
     "test:unit": "vitest run"
   },
+  "dependencies": {
+    "@n8n/dual-canvas-operation-runtime": "workspace:*"
+  },
   "devDependencies": {
     "@n8n/typescript-config": "workspace:*",
     "@n8n/vitest-config": "workspace:*",

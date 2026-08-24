@@ -1,3 +1,8 @@
+import {
+	createOperationBlockDescriptorV1,
+	createOperationModuleCatalogV1,
+	type OperationModuleCatalogV1,
+} from '@n8n/dual-canvas-operation-runtime';
 import type * as Blockly from 'blockly';
 
 export const TRANSFORM_ITEM_BLOCK = 'n8n_transform_item';
@@ -16,10 +21,16 @@ export const OBJECT_PROPERTY_BLOCK = 'n8n_object_property';
 
 const LOGIC_STATEMENT_CHECK = 'N8nLogicStatement';
 const OBJECT_PROPERTY_CHECK = 'N8nObjectProperty';
+const OPERATION_IDENTITY_EXTENSION = 'n8n_operation_identity_v1';
 
 type BlocklyRuntime = Pick<
 	typeof Blockly,
-	'Blocks' | 'FieldDropdown' | 'FieldTextInput' | 'serialization'
+	| 'Blocks'
+	| 'FieldDropdown'
+	| 'FieldTextInput'
+	| 'serialization'
+	| 'defineBlocksWithJsonArray'
+	| 'Extensions'
 >;
 
 export type ToolboxLabels = {
@@ -30,6 +41,7 @@ export type ToolboxLabels = {
 	arrays: string;
 	objects: string;
 	types: string;
+	operations: string;
 };
 
 export type BlockLabels = {
@@ -68,7 +80,11 @@ export type BlockLabels = {
 	key: string;
 };
 
-export function createToolbox(labels: ToolboxLabels): Blockly.utils.toolbox.ToolboxInfo {
+export function createToolbox(
+	labels: ToolboxLabels,
+	operationCatalog: OperationModuleCatalogV1,
+): Blockly.utils.toolbox.ToolboxInfo {
+	const catalog = createOperationModuleCatalogV1(operationCatalog);
 	return {
 		kind: 'categoryToolbox',
 		contents: [
@@ -91,6 +107,7 @@ export function createToolbox(labels: ToolboxLabels): Blockly.utils.toolbox.Tool
 					{ kind: 'block', type: IF_BLOCK },
 					{ kind: 'block', type: ASSERT_BLOCK },
 					{ kind: 'block', type: 'logic_boolean' },
+					{ kind: 'block', type: 'logic_null' },
 					{ kind: 'block', type: 'logic_compare' },
 					{ kind: 'block', type: 'logic_operation' },
 					{ kind: 'block', type: 'logic_negate' },
@@ -143,11 +160,41 @@ export function createToolbox(labels: ToolboxLabels): Blockly.utils.toolbox.Tool
 				colour: '190',
 				contents: [{ kind: 'block', type: CONVERT_BLOCK }],
 			},
+			{
+				kind: 'category',
+				name: labels.operations,
+				colour: '290',
+				contents: catalog.modules.map((module) => {
+					const descriptor = createOperationBlockDescriptorV1(module);
+					return {
+						kind: 'block',
+						type: descriptor.blockType,
+						fields: {
+							OPERATION_REF: descriptor.operationRef,
+							IMPLEMENTATION_REF: descriptor.implementationRef,
+							VERSION: descriptor.version,
+							QUALIFIED_NAME: descriptor.qualifiedName,
+						},
+					};
+				}),
+			},
 		],
 	};
 }
 
-export function registerN8nBlocks(blockly: BlocklyRuntime, labels: BlockLabels) {
+export function registerN8nBlocks(
+	blockly: BlocklyRuntime,
+	labels: BlockLabels,
+	operationCatalog: OperationModuleCatalogV1,
+) {
+	const catalog = createOperationModuleCatalogV1(operationCatalog);
+	if (!blockly.Extensions.isRegistered(OPERATION_IDENTITY_EXTENSION)) {
+		blockly.Extensions.register(OPERATION_IDENTITY_EXTENSION, function (this: Blockly.Block) {
+			this.getField('OPERATION_REF')?.setVisible(false);
+			this.getField('IMPLEMENTATION_REF')?.setVisible(false);
+			this.getField('QUALIFIED_NAME')?.setVisible(false);
+		});
+	}
 	blockly.Blocks[TRANSFORM_ITEM_BLOCK] = {
 		init(this: Blockly.Block) {
 			this.appendDummyInput()
@@ -302,6 +349,53 @@ export function registerN8nBlocks(blockly: BlocklyRuntime, labels: BlockLabels) 
 			this.setColour(160);
 		},
 	};
+	blockly.defineBlocksWithJsonArray(
+		catalog.modules.map((module) => {
+			const descriptor = createOperationBlockDescriptorV1(module);
+			const messageParts = [descriptor.label];
+			const args = descriptor.inputs.map((input, index) => {
+				messageParts.push(`${input.name} %${index + 1}`);
+				return {
+					type: 'input_value',
+					name: input.inputName,
+					...(input.check === null ? {} : { check: input.check }),
+				};
+			});
+			return {
+				type: descriptor.blockType,
+				message0: messageParts.join(' · '),
+				...(args.length === 0 ? {} : { args0: args }),
+				message1: '版本 %1 %2 %3 %4',
+				args1: [
+					{
+						type: 'field_label_serializable',
+						name: 'VERSION',
+						text: descriptor.version,
+					},
+					{
+						type: 'field_label_serializable',
+						name: 'OPERATION_REF',
+						text: descriptor.operationRef,
+					},
+					{
+						type: 'field_label_serializable',
+						name: 'IMPLEMENTATION_REF',
+						text: descriptor.implementationRef,
+					},
+					{
+						type: 'field_label_serializable',
+						name: 'QUALIFIED_NAME',
+						text: descriptor.qualifiedName,
+					},
+				],
+				output: descriptor.output.check,
+				colour: descriptor.colour,
+				tooltip: descriptor.tooltip,
+				helpUrl: '',
+				extensions: [OPERATION_IDENTITY_EXTENSION],
+			};
+		}),
+	);
 }
 
 export function loadWorkspaceOrDefault(

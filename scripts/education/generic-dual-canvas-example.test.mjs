@@ -43,6 +43,7 @@ test('runs from an empty working directory with only the generic runtime depende
 		workspaceRuntimeDependencies: [
 			'@n8n/blockly-data-transform',
 			'@n8n/dual-canvas-core',
+			'@n8n/dual-canvas-operation-runtime',
 			'@n8n/dual-canvas-operation-sdk',
 		],
 	});
@@ -61,6 +62,7 @@ test('runs from an empty working directory with only the generic runtime depende
 		assert.deepEqual(report.workspaceRuntimeDependencies, [
 			'@n8n/blockly-data-transform',
 			'@n8n/dual-canvas-core',
+			'@n8n/dual-canvas-operation-runtime',
 			'@n8n/dual-canvas-operation-sdk',
 		]);
 	} finally {

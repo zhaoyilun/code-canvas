@@ -1,7 +1,12 @@
 import { compileBlocklyWorkspace, serializeBlocklyDataPayload } from '@n8n/blockly-data-transform';
-
-import { createLogicStatementBlockRef } from './logic-block-refs';
 import {
+	createOperationBlockTypeV1,
+	type OperationModuleCatalogV1,
+} from '@n8n/dual-canvas-operation-runtime';
+
+import { createLogicExpressionBlockRef, createLogicStatementBlockRef } from './logic-block-refs';
+import {
+	flattenLogicOperationCalls,
 	flattenLogicStatements,
 	logicNodeDraftV1Schema,
 	type LogicExpressionV1,
@@ -23,7 +28,11 @@ export type GeneratedLogicCanvasV1 = {
 };
 
 export type LogicCanvasGenerationErrorV1 = {
-	code: 'LOGIC_SCOPE_INVALID' | 'LOGIC_DRAFT_INVALID' | 'LOGIC_WORKSPACE_COMPILE_FAILED';
+	code:
+		| 'LOGIC_SCOPE_INVALID'
+		| 'LOGIC_DRAFT_INVALID'
+		| 'LOGIC_WORKSPACE_COMPILE_FAILED'
+		| 'LOGIC_PAYLOAD_SERIALIZE_FAILED';
 	path: string;
 	message: string;
 };
@@ -37,6 +46,7 @@ type BlocklyBlock = Record<string, unknown> & { type: string; id: string };
 export function generateLogicCanvas(
 	draftInput: unknown,
 	documentRef: string,
+	operationCatalog: OperationModuleCatalogV1,
 ): LogicCanvasGenerationResultV1 {
 	const parsedDocumentRef = stableReferenceSchema.safeParse(documentRef);
 	if (!parsedDocumentRef.success) {
@@ -63,7 +73,7 @@ export function generateLogicCanvas(
 	}
 
 	const workspace = createWorkspace(parsed.data, documentRef);
-	const compiled = compileBlocklyWorkspace(workspace);
+	const compiled = compileBlocklyWorkspace(workspace, operationCatalog);
 	if (!compiled.ok) {
 		return {
 			ok: false,
@@ -74,41 +84,57 @@ export function generateLogicCanvas(
 			},
 		};
 	}
+	let blocklyPayload: string;
+	try {
+		blocklyPayload = serializeBlocklyDataPayload(workspace, operationCatalog);
+	} catch (error) {
+		return {
+			ok: false,
+			error: {
+				code: 'LOGIC_PAYLOAD_SERIALIZE_FAILED',
+				path: `logicNodes.${parsed.data.nodeRef}`,
+				message: error instanceof Error ? error.message : String(error),
+			},
+		};
+	}
 	return {
 		ok: true,
 		generated: {
 			nodeRef: parsed.data.nodeRef,
 			label: parsed.data.label,
 			workspace,
-			blocklyPayload: serializeBlocklyDataPayload(workspace),
+			blocklyPayload,
 			javascript: compiled.javascript,
 			blockRefs: collectBlockRefs(workspace),
-			sourceMap: flattenLogicStatements(parsed.data.statements).map((statement) => {
-				const blockRef = createLogicStatementBlockRef(
-					documentRef,
-					parsed.data.nodeRef,
-					statement.stepRef,
-				);
-				const context = {
-					nodeRef: parsed.data.nodeRef,
-					statementKind: statement.kind,
-					...(statement.kind === 'set' || statement.kind === 'delete'
-						? { targetField: statement.targetField }
-						: {}),
-				};
-				const entry: SourceMapEntryV1 = {
-					apiVersion: 1,
-					mappingRef: `mapping-${createStableId(
+			sourceMap: [
+				...flattenLogicStatements(parsed.data.statements).map((statement) => {
+					const blockRef = createLogicStatementBlockRef(
 						documentRef,
-						`mapping:${parsed.data.nodeRef}:${statement.stepRef}`,
-					)}`,
-					semanticRef: statement.stepRef,
-					artifact: { kind: 'canvasBlock', ref: blockRef },
-					...(statement.source === undefined ? {} : { source: statement.source }),
-					context,
-				};
-				return entry;
-			}),
+						parsed.data.nodeRef,
+						statement.stepRef,
+					);
+					const context = {
+						nodeRef: parsed.data.nodeRef,
+						statementKind: statement.kind,
+						...(statement.kind === 'set' || statement.kind === 'delete'
+							? { targetField: statement.targetField }
+							: {}),
+					};
+					const entry: SourceMapEntryV1 = {
+						apiVersion: 1,
+						mappingRef: `mapping-${createStableId(
+							documentRef,
+							`mapping:${parsed.data.nodeRef}:${statement.stepRef}`,
+						)}`,
+						semanticRef: statement.stepRef,
+						artifact: { kind: 'canvasBlock', ref: blockRef },
+						...(statement.source === undefined ? {} : { source: statement.source }),
+						context,
+					};
+					return entry;
+				}),
+				...createOperationCallMappings(parsed.data, documentRef),
+			],
 		},
 		normalizedDraft: parsed.data,
 	};
@@ -317,6 +343,28 @@ function expressionBlock(
 				id,
 				fields: { BOOL: expression.value ? 'TRUE' : 'FALSE' },
 			};
+		case 'operationCall':
+			return {
+				type: createOperationBlockTypeV1(
+					expression.operationRef,
+					expression.implementationRef,
+					expression.version,
+				),
+				id,
+				data: JSON.stringify({ callRef: expression.callRef, source: expression.source }),
+				fields: {
+					OPERATION_REF: expression.operationRef,
+					IMPLEMENTATION_REF: expression.implementationRef,
+					VERSION: expression.version,
+					QUALIFIED_NAME: expression.qualifiedName,
+				},
+				inputs: Object.fromEntries(
+					expression.arguments.map((argument, index) => [
+						`ARG${index}`,
+						child(argument, `arguments:${index}`),
+					]),
+				),
+			};
 		case 'arithmetic':
 			return {
 				type: 'math_arithmetic',
@@ -360,6 +408,33 @@ function expressionBlock(
 				),
 			};
 	}
+}
+
+function createOperationCallMappings(
+	draft: LogicNodeDraftV1,
+	documentRef: string,
+): SourceMapEntryV1[] {
+	return flattenLogicOperationCalls(draft.statements).map(({ expression, stepRef, path }) => ({
+		apiVersion: 1,
+		mappingRef: `mapping-${createStableId(
+			documentRef,
+			`mapping:${draft.nodeRef}:operation-call:${expression.callRef}`,
+		)}`,
+		semanticRef: expression.callRef,
+		artifact: {
+			kind: 'canvasBlock',
+			ref: createLogicExpressionBlockRef(documentRef, draft.nodeRef, stepRef, path),
+		},
+		source: expression.source,
+		context: {
+			nodeRef: draft.nodeRef,
+			expressionKind: expression.kind,
+			operationRef: expression.operationRef,
+			implementationRef: expression.implementationRef,
+			qualifiedName: expression.qualifiedName,
+			version: expression.version,
+		},
+	}));
 }
 
 function objectPropertyChain(
