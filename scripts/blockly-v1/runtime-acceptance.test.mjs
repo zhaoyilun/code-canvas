@@ -1,6 +1,9 @@
 #!/usr/bin/env node
 
 import assert from 'node:assert/strict';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import test from 'node:test';
 
 import {
@@ -9,6 +12,7 @@ import {
 	extractExecutionJson,
 	formatMissingBuildOutputs,
 	parseArguments,
+	runWorkflowAcceptance,
 	selectBrokerPort,
 	validateWorkflowFixture,
 	verifyTaskRunnerLog,
@@ -88,6 +92,36 @@ test('selects an available broker port other than 8080', async () => {
 	const port = await selectBrokerPort(new Set([8080]));
 	assert.ok(Number.isInteger(port) && port > 0 && port < 65536);
 	assert.notEqual(port, 8080);
+});
+
+test('rejects a reused runtime directory before staging or overwriting evidence', async () => {
+	const runtimeDirectory = mkdtempSync(join(tmpdir(), 'blockly-runtime-reused-'));
+	const evidenceDirectory = join(runtimeDirectory, 'evidence');
+	mkdirSync(evidenceDirectory);
+	const sentinelPath = join(evidenceDirectory, 'sentinel.txt');
+	writeFileSync(sentinelPath, 'keep-this-byte-for-byte', 'utf8');
+	let staged = false;
+	try {
+		await assert.rejects(
+			runWorkflowAcceptance({
+				runtimeDir: runtimeDirectory,
+				workflow: {
+					id: 'runtime-reuse-test',
+					nodes: [{ type: 'n8n-nodes-blockly-code.blocklyCode' }],
+				},
+				stageEvidence: () => {
+					staged = true;
+				},
+			}),
+			/new or empty/,
+		);
+		assert.equal(staged, false);
+		assert.deepEqual(readdirSync(runtimeDirectory), ['evidence']);
+		assert.deepEqual(readdirSync(evidenceDirectory), ['sentinel.txt']);
+		assert.equal(readFileSync(sentinelPath, 'utf8'), 'keep-this-byte-for-byte');
+	} finally {
+		rmSync(runtimeDirectory, { force: true, recursive: true });
+	}
 });
 
 test('builds an isolated runtime environment from an n8n and database whitelist', () => {

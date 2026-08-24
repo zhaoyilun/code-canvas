@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import {
 	createWriteStream,
 	existsSync,
@@ -52,6 +53,11 @@ const BUILD_OUTPUTS = [
 			'ManualTrigger',
 			'ManualTrigger.node.js',
 		),
+		command: 'pnpm --filter n8n-nodes-base build',
+		logName: 'nodes-base-build.log',
+	},
+	{
+		path: join(ROOT_DIR, 'packages', 'nodes-base', 'dist', 'nodes', 'Set', 'Set.node.js'),
 		command: 'pnpm --filter n8n-nodes-base build',
 		logName: 'nodes-base-build.log',
 	},
@@ -155,6 +161,176 @@ export function parseArguments(arguments_) {
 	return { checkOnly, runtimeDir };
 }
 
+export async function runWorkflowAcceptance({
+	runtimeDir,
+	workflow,
+	workflowPath,
+	executionPath,
+	logDirectory,
+	verifyV1Fixture = false,
+	stageEvidence,
+}) {
+	const fixture = validateWorkflowFixture(workflow);
+	if (typeof runtimeDir !== 'string' || runtimeDir.length === 0) {
+		throw new Error('Runtime directory is required');
+	}
+	if (stageEvidence !== undefined && typeof stageEvidence !== 'function') {
+		throw new Error('stageEvidence must be a function');
+	}
+
+	const resolvedRuntimeDir = resolve(runtimeDir);
+	const evidenceDir = join(resolvedRuntimeDir, 'evidence');
+	const packageOutputDir = join(resolvedRuntimeDir, 'package');
+	const userFolder = join(resolvedRuntimeDir, 'n8n-user');
+	const nodeModulesDir = join(userFolder, '.n8n', 'nodes', 'node_modules');
+	const installedPackageDir = join(nodeModulesDir, 'n8n-nodes-blockly-code');
+	const resolvedWorkflowPath = resolve(workflowPath ?? join(evidenceDir, 'workflow.json'));
+	const resolvedExecutionPath = resolve(executionPath ?? join(evidenceDir, 'execution.json'));
+	const resolvedLogDirectory = resolve(logDirectory ?? evidenceDir);
+	validateRuntimeStagingDirectory(resolvedRuntimeDir);
+	const missingOutputs = getMissingBuildOutputs();
+	if (missingOutputs.length > 0) {
+		throw new Error(formatMissingBuildOutputs(missingOutputs));
+	}
+	for (const directory of [
+		evidenceDir,
+		packageOutputDir,
+		installedPackageDir,
+		resolvedLogDirectory,
+	]) {
+		mkdirSync(directory, { recursive: true });
+	}
+	await stageEvidence?.({
+		evidenceDir,
+		workflowPath: resolvedWorkflowPath,
+	});
+
+	if (workflowPath === undefined) {
+		writeJson(resolvedWorkflowPath, workflow);
+	} else {
+		const persistedWorkflow = JSON.parse(readFileSync(resolvedWorkflowPath, 'utf8'));
+		if (JSON.stringify(persistedWorkflow) !== JSON.stringify(workflow)) {
+			throw new Error('Persisted workflow does not match the workflow passed to the runtime');
+		}
+	}
+
+	const brokerPort = await selectBrokerPort();
+	const runtimeEnvironment = createRuntimeEnvironment(userFolder, brokerPort);
+	writeJson(join(evidenceDir, 'runtime-config.json'), {
+		runtimeDir: resolvedRuntimeDir,
+		userFolder,
+		communityPackageDirectory: installedPackageDir,
+		workflowId: fixture.workflowId,
+		workflowPath: resolvedWorkflowPath,
+		workflowSha256: sha256(readFileSync(resolvedWorkflowPath)),
+		nodeType: fixture.nodeType,
+		brokerPort,
+		n8nPort: runtimeEnvironment.N8N_PORT,
+		communityPackagesEnabled: runtimeEnvironment.N8N_COMMUNITY_PACKAGES_ENABLED,
+		unverifiedPackagesEnabled: runtimeEnvironment.N8N_UNVERIFIED_PACKAGES_ENABLED,
+		communityPackagesPreventLoading: runtimeEnvironment.N8N_COMMUNITY_PACKAGES_PREVENT_LOADING,
+		runnersMode: runtimeEnvironment.N8N_RUNNERS_MODE,
+		runnersInsecureMode: runtimeEnvironment.N8N_RUNNERS_INSECURE_MODE,
+	});
+
+	console.log(`Runtime: ${resolvedRuntimeDir}`);
+	console.log(`Evidence: ${evidenceDir}`);
+	console.log(`Task Runner broker port: ${brokerPort}`);
+
+	await runRequiredCommand(
+		'pnpm',
+		['--dir', PACKAGE_DIR, 'pack', '--pack-destination', packageOutputDir],
+		{
+			cwd: ROOT_DIR,
+			env: { ...process.env, CI: '1' },
+			logPrefix: join(resolvedLogDirectory, '01-pack'),
+		},
+	);
+	const tarballs = readdirSync(packageOutputDir).filter((name) => name.endsWith('.tgz'));
+	if (tarballs.length !== 1) {
+		throw new Error('Package step did not produce exactly one .tgz archive');
+	}
+	const tarballPath = join(packageOutputDir, tarballs[0]);
+
+	await runRequiredCommand(
+		'tar',
+		['-xzf', tarballPath, '--strip-components=1', '-C', installedPackageDir],
+		{
+			cwd: ROOT_DIR,
+			env: process.env,
+			logPrefix: join(resolvedLogDirectory, '02-unpack'),
+		},
+	);
+	const installedManifest = JSON.parse(
+		readFileSync(join(installedPackageDir, 'package.json'), 'utf8'),
+	);
+	if (installedManifest.name !== 'n8n-nodes-blockly-code') {
+		throw new Error('Installed package manifest has an unexpected package name');
+	}
+	if (installedManifest.n8n?.nodes?.[0] !== 'dist/nodes/BlocklyCode/BlocklyCode.node.js') {
+		throw new Error('Installed package manifest has an unexpected n8n node entry');
+	}
+	writeJson(join(evidenceDir, 'installed-package.json'), {
+		name: installedManifest.name,
+		version: installedManifest.version,
+		nodeEntry: installedManifest.n8n.nodes[0],
+		tarball: basename(tarballPath),
+	});
+	if (verifyV1Fixture) {
+		await runRequiredCommand(
+			process.execPath,
+			[VERIFY_V1_PATH, resolvedWorkflowPath, '--require-compiler'],
+			{
+				cwd: ROOT_DIR,
+				env: createFixtureEnvironment(),
+				logPrefix: join(resolvedLogDirectory, '03-fixture'),
+			},
+		);
+	}
+
+	const n8nBin = join(ROOT_DIR, 'packages', 'cli', 'bin', 'n8n');
+	await runRequiredCommand(
+		process.execPath,
+		[n8nBin, 'import:workflow', `--input=${resolvedWorkflowPath}`],
+		{
+			cwd: ROOT_DIR,
+			env: runtimeEnvironment,
+			logPrefix: join(resolvedLogDirectory, '04-import'),
+		},
+	);
+	const rawExecution = await runRequiredCommand(
+		process.execPath,
+		[n8nBin, 'execute', `--id=${fixture.workflowId}`, '--rawOutput'],
+		{
+			cwd: ROOT_DIR,
+			env: runtimeEnvironment,
+			logPrefix: join(resolvedLogDirectory, '05-execute'),
+		},
+	);
+	const combinedExecutionOutput = `${rawExecution.stdout}\n${rawExecution.stderr}`;
+	const taskRunnerEvidence = verifyTaskRunnerLog(combinedExecutionOutput, brokerPort);
+	let execution;
+	try {
+		execution = extractExecutionJson(rawExecution.stdout);
+	} catch {
+		execution = extractExecutionJson(combinedExecutionOutput);
+	}
+	mkdirSync(dirname(resolvedExecutionPath), { recursive: true });
+	writeJson(resolvedExecutionPath, execution);
+
+	return {
+		execution,
+		executionPath: resolvedExecutionPath,
+		evidenceDir,
+		packageDirectory: installedPackageDir,
+		n8nPort: runtimeEnvironment.N8N_PORT,
+		brokerPort,
+		runnersMode: runtimeEnvironment.N8N_RUNNERS_MODE,
+		runnersInsecureMode: runtimeEnvironment.N8N_RUNNERS_INSECURE_MODE,
+		taskRunnerEvidence,
+	};
+}
+
 async function main() {
 	const options = parseArguments(process.argv.slice(2));
 	const workflow = JSON.parse(readFileSync(FIXTURE_PATH, 'utf8'));
@@ -173,136 +349,34 @@ async function main() {
 	const runtimeDir = resolve(
 		options.runtimeDir ?? join(SCRIPT_DIR, '.runtime', 'acceptance', runtimeName()),
 	);
-	if (existsSync(runtimeDir) && readdirSync(runtimeDir).length > 0) {
-		throw new Error(`Runtime directory must be new or empty: ${runtimeDir}`);
-	}
-	const evidenceDir = join(runtimeDir, 'evidence');
-	const packageOutputDir = join(runtimeDir, 'package');
-	const userFolder = join(runtimeDir, 'n8n-user');
-	const nodeModulesDir = join(userFolder, '.n8n', 'nodes', 'node_modules');
-	const installedPackageDir = join(nodeModulesDir, 'n8n-nodes-blockly-code');
-	for (const directory of [evidenceDir, packageOutputDir, installedPackageDir]) {
-		mkdirSync(directory, { recursive: true });
-	}
-
-	const brokerPort = await selectBrokerPort();
-	const runtimeEnvironment = createRuntimeEnvironment(userFolder, brokerPort);
-	writeJson(join(evidenceDir, 'runtime-config.json'), {
+	const runtimeResult = await runWorkflowAcceptance({
 		runtimeDir,
-		userFolder,
-		communityPackageDirectory: installedPackageDir,
-		workflowId: fixture.workflowId,
-		nodeType: fixture.nodeType,
-		brokerPort,
-		n8nPort: runtimeEnvironment.N8N_PORT,
-		communityPackagesEnabled: runtimeEnvironment.N8N_COMMUNITY_PACKAGES_ENABLED,
-		unverifiedPackagesEnabled: runtimeEnvironment.N8N_UNVERIFIED_PACKAGES_ENABLED,
-		communityPackagesPreventLoading: runtimeEnvironment.N8N_COMMUNITY_PACKAGES_PREVENT_LOADING,
-		runnersMode: runtimeEnvironment.N8N_RUNNERS_MODE,
-		runnersInsecureMode: runtimeEnvironment.N8N_RUNNERS_INSECURE_MODE,
+		workflow,
+		workflowPath: FIXTURE_PATH,
+		verifyV1Fixture: true,
 	});
-
-	console.log(`Runtime: ${runtimeDir}`);
-	console.log(`Evidence: ${evidenceDir}`);
-	console.log(`Task Runner broker port: ${brokerPort}`);
-
-	await runRequiredCommand(
-		'pnpm',
-		['--dir', PACKAGE_DIR, 'pack', '--pack-destination', packageOutputDir],
-		{
-			cwd: ROOT_DIR,
-			env: { ...process.env, CI: '1' },
-			logPrefix: join(evidenceDir, '01-pack'),
-		},
-	);
-	const tarballs = readdirSync(packageOutputDir).filter((name) => name.endsWith('.tgz'));
-	if (tarballs.length !== 1)
-		throw new Error('Package step did not produce exactly one .tgz archive');
-	const tarballPath = join(packageOutputDir, tarballs[0]);
-
-	await runRequiredCommand(
-		'tar',
-		['-xzf', tarballPath, '--strip-components=1', '-C', installedPackageDir],
-		{
-			cwd: ROOT_DIR,
-			env: process.env,
-			logPrefix: join(evidenceDir, '02-unpack'),
-		},
-	);
-	const installedManifest = JSON.parse(
-		readFileSync(join(installedPackageDir, 'package.json'), 'utf8'),
-	);
-	if (installedManifest.name !== 'n8n-nodes-blockly-code') {
-		throw new Error('Installed package manifest has an unexpected package name');
-	}
-	if (installedManifest.n8n?.nodes?.[0] !== 'dist/nodes/BlocklyCode/BlocklyCode.node.js') {
-		throw new Error('Installed package manifest has an unexpected n8n node entry');
-	}
-	writeJson(join(evidenceDir, 'installed-package.json'), {
-		name: installedManifest.name,
-		version: installedManifest.version,
-		nodeEntry: installedManifest.n8n.nodes[0],
-		tarball: basename(tarballPath),
-	});
-
-	await runRequiredCommand(process.execPath, [VERIFY_V1_PATH, FIXTURE_PATH, '--require-compiler'], {
-		cwd: ROOT_DIR,
-		env: createFixtureEnvironment(),
-		logPrefix: join(evidenceDir, '03-fixture'),
-	});
-
-	const n8nBin = join(ROOT_DIR, 'packages', 'cli', 'bin', 'n8n');
-	await runRequiredCommand(
-		process.execPath,
-		[n8nBin, 'import:workflow', `--input=${FIXTURE_PATH}`],
-		{
-			cwd: ROOT_DIR,
-			env: runtimeEnvironment,
-			logPrefix: join(evidenceDir, '04-import'),
-		},
-	);
-
-	const execution = await runRequiredCommand(
-		process.execPath,
-		[n8nBin, 'execute', `--id=${fixture.workflowId}`, '--rawOutput'],
-		{
-			cwd: ROOT_DIR,
-			env: runtimeEnvironment,
-			logPrefix: join(evidenceDir, '05-execute'),
-		},
-	);
-	let executionRecord;
-	const taskRunnerEvidence = verifyTaskRunnerLog(
-		`${execution.stdout}\n${execution.stderr}`,
-		brokerPort,
-	);
-	try {
-		executionRecord = extractExecutionJson(execution.stdout);
-	} catch {
-		executionRecord = extractExecutionJson(`${execution.stdout}\n${execution.stderr}`);
-	}
-	const executionPath = join(evidenceDir, 'execution.json');
-	writeJson(executionPath, executionRecord);
 
 	const verification = await runRequiredCommand(
 		process.execPath,
-		[VERIFY_EXECUTION_PATH, executionPath, `--workflow=${FIXTURE_PATH}`],
+		[VERIFY_EXECUTION_PATH, runtimeResult.executionPath, `--workflow=${FIXTURE_PATH}`],
 		{
 			cwd: ROOT_DIR,
 			env: process.env,
-			logPrefix: join(evidenceDir, '06-verify'),
+			logPrefix: join(runtimeResult.evidenceDir, '06-verify'),
 		},
 	);
 	const verificationMessage = verification.stdout.trim().split(/\r?\n/).at(-1);
-	writeJson(join(evidenceDir, 'result.json'), {
+	writeJson(join(runtimeResult.evidenceDir, 'result.json'), {
 		status: 'passed',
 		workflowId: fixture.workflowId,
 		nodeType: fixture.nodeType,
-		n8nPort: runtimeEnvironment.N8N_PORT,
-		brokerPort,
-		...taskRunnerEvidence,
-		packageDirectory: installedPackageDir,
-		executionPath,
+		n8nPort: runtimeResult.n8nPort,
+		brokerPort: runtimeResult.brokerPort,
+		runnersMode: runtimeResult.runnersMode,
+		runnersInsecureMode: runtimeResult.runnersInsecureMode,
+		...runtimeResult.taskRunnerEvidence,
+		packageDirectory: runtimeResult.packageDirectory,
+		executionPath: runtimeResult.executionPath,
 		verification: verificationMessage,
 	});
 
@@ -310,7 +384,7 @@ async function main() {
 	console.log(
 		`PASS: real n8n runtime loaded ${fixture.nodeType} from the isolated community package`,
 	);
-	console.log(`Evidence retained at: ${evidenceDir}`);
+	console.log(`Evidence retained at: ${runtimeResult.evidenceDir}`);
 }
 
 export function createRuntimeEnvironment(userFolder, brokerPort, baseEnvironment = process.env) {
@@ -450,6 +524,12 @@ function reserveEphemeralPort() {
 	});
 }
 
+function validateRuntimeStagingDirectory(runtimeDir) {
+	if (existsSync(runtimeDir) && readdirSync(runtimeDir).length > 0) {
+		throw new Error(`Runtime directory must be new or empty: ${runtimeDir}`);
+	}
+}
+
 export function formatMissingBuildOutputs(missingOutputs) {
 	const paths = missingOutputs.map(({ path }) => `- ${path}`).join('\n');
 	const commands = missingOutputs
@@ -460,6 +540,10 @@ export function formatMissingBuildOutputs(missingOutputs) {
 
 function runtimeName() {
 	return `${new Date().toISOString().replaceAll(/[-:.]/g, '')}-${process.pid}`;
+}
+
+function sha256(value) {
+	return createHash('sha256').update(value).digest('hex').toUpperCase();
 }
 
 function writeJson(path, value) {

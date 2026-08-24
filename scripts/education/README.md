@@ -48,3 +48,22 @@ payload 编译和 JSON 往返，并对照源码与生成 JavaScript 的运行结
 
 - `docs/education/examples/generic-snippet-matrix.md`
 - `docs/education/examples/generic-snippet-matrix.report.json`
+
+## 基础代码到真实 n8n Runtime
+
+`numeric-runtime-acceptance.mjs` 把转换矩阵中的 `numeric-calculation.ts` 直接接到真实
+n8n Runtime，验证 importer 生成的 IR、Blockly workspace 和 Blockly payload 经 assembly
+插入固定输入节点并装配成正式 workflow 后进入
+`n8n-nodes-blockly-code.blocklyCode`。其中 Blockly payload 的字符串值与 importer 产物
+逐字符一致，未经重编译或改写，并由 internal secure JavaScript Task Runner 输出
+`total=52` 与 `pairedItem.item=0`：
+
+```bash
+node scripts/education/numeric-runtime-acceptance.mjs --check
+node --test scripts/education/numeric-runtime-acceptance.test.mjs
+node scripts/education/numeric-runtime-acceptance.mjs
+```
+
+运行使用隔离的 `N8N_USER_FOLDER`、n8n `5678` 端口以及自动选择且排除 `8080` 的
+Task Broker 端口。完整契约和证据文件说明见
+`docs/education/numeric-runtime-acceptance.md`。

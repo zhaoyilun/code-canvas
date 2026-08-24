@@ -324,7 +324,7 @@ export function writeGenericSnippetMatrixReport() {
 	return { report, bytes };
 }
 
-function createSnippetRequest(spec, source, sourcePath) {
+export function createSnippetRequest(spec, source, sourcePath) {
 	const base = createGenericImportRequest(source);
 	return {
 		...base,
