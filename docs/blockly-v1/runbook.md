@@ -1,152 +1,147 @@
-# Blockly Data Transform v1 本地验收运行手册
+# Blockly Data Transform 真实 Runtime 验收手册
 
-## 目的与边界
+## 结论
 
-本资产验证三个真实业务订单的一对一转换：保留原始客户对象并生成 `customerLabel`，计算 `amount * quantity` 为 `orderTotal`，按 `100` 阈值写入 `grade`。不提供密码、token、cookie、`.env` 读取或写入能力。
+本验收走真实的 n8n 社区节点加载链路，而不是“把某个 `dist` 目录当成自定义节点目录”：
 
-`payload.workspace` 是唯一业务源；`payload.javascript` 仅是共享编译器生成的只读预览缓存。编辑中的非法 workspace 可以保存空预览，但正式验收 fixture 必须由共享编译器刷新为 canonical 预览；不得手写 JavaScript 代替编译结果。运行时始终重新编译 workspace，而不信任该预览缓存。
+```text
+打包 n8n-nodes-blockly-code
+  → 解包到隔离 N8N_USER_FOLDER/.n8n/nodes/node_modules
+  → n8n CLI 导入 workflow
+  → internal secure JavaScript Task Runner 执行
+  → 提取 --rawOutput 中的 execution JSON
+  → 校验三条业务输出和 pairedItem
+```
 
-## 构建与本地静态验证
+workflow 中的节点类型始终是：
 
-在仓库根目录执行（构建输出按项目规则重定向）：
+```text
+n8n-nodes-blockly-code.blocklyCode
+```
+
+脚本只使用 `scripts/blockly-v1/fixtures/blockly-data-transform-v1.workflow.json` 里的通用数据转换案例，RoboFrame 插件不参与本验收。
+
+## 一次运行
+
+在仓库根目录执行：
 
 ```bash
+node scripts/blockly-v1/runtime-acceptance.mjs
+```
+
+脚本自动完成以下工作：
+
+1. 检查共享编译器、社区节点、基础节点、Task Runner 和 CLI 的现有构建产物。
+2. 用共享编译器校验 fixture 的结构、连接、workspace 和 canonical preview，并确认其中只有一个包名限定的 Blockly 节点。
+3. 在 `scripts/blockly-v1/.runtime/acceptance/` 下创建独立运行目录。
+4. 将 n8n CLI 端口固定为 `5678`，再自动选择一个空闲的本机 Task Runner broker 端口；两者均排除 `8080`。
+5. 显式启用 community/unverified package loader，用 `pnpm pack` 生成社区节点 tarball，再解包到隔离用户目录的 `node_modules`。
+6. 清除调用者环境中已有的 n8n、数据库、执行模式、队列、节点过滤和外部 hook 配置，再写入隔离验收白名单；SQLite 固定在本次 `N8N_USER_FOLDER/.n8n/database.sqlite`，fixture 校验固定使用仓库内共享编译器。
+7. 调用真实 n8n CLI 导入并执行 workflow；执行模式固定为 `internal`，secure runner 配置固定为 `N8N_RUNNERS_INSECURE_MODE=false`。
+8. 断言本次 broker 端口已就绪、JavaScript Task Runner 已注册，且日志中没有 insecure runner 警告。
+9. 从 n8n 启动日志前缀之后提取 execution JSON，再调用 `verify-execution.mjs`。
+10. 保留完整 runtime 与 evidence，便于复查。
+
+成功输出的核心内容是：
+
+```text
+PASS: execution returned 3 expected one-to-one Blockly outputs
+PASS: real n8n runtime loaded n8n-nodes-blockly-code.blocklyCode from the isolated community package
+```
+
+## 已有构建产物时的快速检查
+
+```bash
+node scripts/blockly-v1/runtime-acceptance.mjs --check
+node --test scripts/blockly-v1/runtime-acceptance.test.mjs
+```
+
+`--check` 只读检查运行所需的 `dist` 文件，并调用 `verify-v1.mjs --require-compiler` 完整验证 fixture。缺少构建产物时，脚本会逐项打印需要执行的 `pnpm --filter ... build` 命令，并为每条命令给出重定向日志路径。
+
+完整构建命令如下：
+
+```bash
+node -e "require('node:fs').mkdirSync('scripts/blockly-v1/.runtime',{recursive:true})"
 pnpm --filter @n8n/blockly-data-transform build > scripts/blockly-v1/.runtime/shared-compiler-build.log 2>&1
-pnpm --filter n8n-nodes-blockly-code build > scripts/blockly-v1/.runtime/custom-node-build.log 2>&1
-node scripts/blockly-v1/verify-v1.mjs --require-compiler --refresh-preview
-node scripts/blockly-v1/verify-v1.mjs --require-compiler
-scripts/blockly-v1/setup-demo.sh --check
-scripts/blockly-v1/check-package-contents.sh
+pnpm --filter n8n-nodes-blockly-code build > scripts/blockly-v1/.runtime/community-node-build.log 2>&1
+pnpm --filter n8n-nodes-base build > scripts/blockly-v1/.runtime/nodes-base-build.log 2>&1
+pnpm --filter @n8n/task-runner build > scripts/blockly-v1/.runtime/task-runner-build.log 2>&1
+pnpm --filter n8n build > scripts/blockly-v1/.runtime/cli-build.log 2>&1
 ```
 
-若共享包的构建入口不在默认 `packages/@n8n/blockly-data-transform/dist/index.js`，仅在当前 shell 设置非敏感路径变量后运行：
+运行环境还需要 Node.js、pnpm，以及 Windows/Linux 均常见的 `tar` 命令。
+
+## 指定独立证据目录
+
+默认目录带时间戳与进程号，每次运行互不覆盖。也可以指定一个新的空目录作为绝对路径：
 
 ```bash
-N8N_BLOCKLY_COMPILER_MODULE=/absolute/path/to/index.js node scripts/blockly-v1/verify-v1.mjs --require-compiler --refresh-preview
+node scripts/blockly-v1/runtime-acceptance.mjs --runtime-dir=/absolute/path/blockly-runtime
 ```
 
-刷新会且只会改写该 fixture 的 `payload.javascript` 为 `compileBlocklyWorkspace(workspace)` 的 canonical 输出；不会复制或执行编译逻辑。
+Windows PowerShell 示例：
 
-## 隔离实例、人工登录与导入
+```powershell
+node scripts/blockly-v1/runtime-acceptance.mjs --runtime-dir="$env:TEMP\blockly-runtime-acceptance-$([DateTimeOffset]::UtcNow.ToUnixTimeSeconds())"
+```
 
-1. 不要停止或改动当前正在运行的 n8n 服务。选择一个未被占用的端口后，由主会话在其启动 shell 设置非敏感 `N8N_PORT`；本脚本不设置端口。
-2. 导入到隔离目录（运行时 DB 和日志只会写入 `scripts/blockly-v1/.runtime/`）：
+## 证据结构
 
-   ```bash
-   scripts/blockly-v1/setup-demo.sh --import
-   N8N_RUNNERS_INSECURE_MODE=false scripts/blockly-v1/run-demo.sh
-   ```
+每次成功运行至少保留：
 
-3. 在浏览器打开启动输出的 URL。用户必须在浏览器手工完成 owner 登录/设置；不得将密码写到命令、日志、截图或仓库文件。
-4. 导入 **Blockly Data Transform v1 — Three Orders**。画布路径必须是 Manual Trigger → Seed three business orders → Split orders into three items → Blockly Data Transform。
+```text
+<runtime>/
+├─ package/
+│  └─ n8n-nodes-blockly-code-*.tgz
+├─ n8n-user/
+│  └─ .n8n/
+│     ├─ database.sqlite
+│     └─ nodes/node_modules/n8n-nodes-blockly-code/
+└─ evidence/
+   ├─ runtime-config.json
+   ├─ installed-package.json
+   ├─ 01-pack.*.log
+   ├─ 02-unpack.*.log
+   ├─ 03-fixture.*.log
+   ├─ 04-import.*.log
+   ├─ 05-execute.*.log
+   ├─ execution.json
+   ├─ 06-verify.*.log
+   └─ result.json
+```
 
-## UI 业务验收与证据
+判断边界：
 
-在真实 UI 中完成并留存脱敏截图或日志：
+- `installed-package.json` 证明 tarball 中的包名与 n8n 节点入口。
+- `04-import` 与 `05-execute` 的退出码由脚本强制检查。
+- `05-execute.stdout.log` 保留 broker、runner 注册等启动日志以及原始 `--rawOutput`。
+- `execution.json` 是从日志前缀中提取出的结构化执行记录。
+- `06-verify.stdout.log` 与 `result.json` 证明三条输出、顺序和 `pairedItem` 均符合 fixture。
+- `runtime-config.json` 记录 n8n CLI 端口、实际 broker 端口与 secure runner 模式；端口不是 `8080`。
 
-1. 节点创建器搜索并添加 **Blockly Data Transform**；截图显示可见入口。
-2. 打开节点，确认 schema URL `/schemas/CUSTOM.blocklyCode/1.0.0.json` 返回 HTTP 200，并另行截图/记录响应。此 HTTP 200 **不等于业务 PASS**。
-3. 确认 Blockly 工作区包含字段标准化、金额乘法和条件分级；预览只读，且与 `verify-v1.mjs --require-compiler` 的 canonical 输出一致。
-4. 编辑一个可识别的文本块，再保存；记录正常 workflow PATCH 成功。重新加载后 workspace 仍存在。
-5. 执行 workflow；执行记录必须为 `success`，Blockly 节点输出必须恰好三项、顺序不变，并与 `scripts/blockly-v1/fixtures/expected-output.json` 字段完全一致。
-6. 通过官方 UI/CLI 导出 workflow；对导出文件运行 `node scripts/blockly-v1/verify-v1.mjs /path/to/export.json --require-compiler`。将该文件导入新的隔离 `N8N_USER_FOLDER`，用 `n8n execute --id=<imported-id> --rawOutput` 保存结果，再运行 `node scripts/blockly-v1/verify-execution.mjs /path/to/raw-output.json`；必须得到相同三项输出。此 `--rawOutput` 只证明输出验收，不能证明 preview tamper 信任边界。
+## Secure runner 的额外进程证据
 
-静态验证、单元测试或 health/HTTP 200 都不能替代上述真实 UI 保存、重载、执行、导出/导入和证据留存。
+脚本会显式设置 `N8N_RUNNERS_MODE=internal` 与 `N8N_RUNNERS_INSECURE_MODE=false`。若发布材料还要求保存 runner 启动参数，可在执行期间记录子进程命令行；secure JavaScript runner 应包含：
 
-## Secure runner 与 preview 信任边界
+```text
+--disallow-code-generation-from-strings
+--disable-proto=delete
+```
 
-发布证据必须使用 secure JavaScript task runner。启动时显式保持 `N8N_RUNNERS_INSECURE_MODE=false`，并在另一个终端记录 runner 进程参数：
+Windows PowerShell：
+
+```powershell
+Get-CimInstance Win32_Process |
+  Where-Object CommandLine -Match '@n8n[\\/]task-runner[\\/]dist[\\/]start\.js' |
+  Select-Object ProcessId, ParentProcessId, CommandLine
+```
+
+Linux：
 
 ```bash
-ps -axww -o pid=,ppid=,command= \
-  | grep '/packages/@n8n/task-runner/dist/start.js' \
-  | grep -v grep
+ps -axww -o pid=,ppid=,command= | grep '/packages/@n8n/task-runner/dist/start.js' | grep -v grep
 ```
 
-输出必须同时包含 `--disallow-code-generation-from-strings` 和 `--disable-proto=delete`，启动日志不得出现 `TASK RUNNER CONFIGURED TO START IN INSECURE MODE`。Instance AI 的 `Sandbox: enabled=...` 日志与 JavaScript task runner 模式无关，不能作为此项证据。
+## 清理范围
 
-后端不信任 preview 的运行时验收使用正式 UI 导出文件的副本，不改 workspace，只改 `payload.javascript`：
-
-```bash
-export EXPORTED_WORKFLOW=/path/to/ui-exported.json
-export TAMPER_RUNTIME=scripts/blockly-v1/.runtime/tampered-preview
-mkdir -p "$TAMPER_RUNTIME"
-export TAMPER_RUNTIME="$(cd "$TAMPER_RUNTIME" && pwd)"
-
-node - "$EXPORTED_WORKFLOW" "$TAMPER_RUNTIME/workflow.json" <<'NODE'
-const fs = require('node:fs');
-const workflow = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-workflow.id = `${workflow.id}-tampered-preview`;
-const node = workflow.nodes.find(({ type }) => type === 'CUSTOM.blocklyCode');
-const payload = JSON.parse(node.parameters.blocklyPayload);
-payload.javascript = 'return { json: { tampered: true } };';
-node.parameters.blocklyPayload = JSON.stringify(payload);
-fs.writeFileSync(process.argv[3], JSON.stringify(workflow, null, 2));
-NODE
-
-N8N_USER_FOLDER="$TAMPER_RUNTIME/n8n-user" \
-N8N_CUSTOM_EXTENSIONS="$PWD/custom-nodes/n8n-nodes-blockly-code/dist" \
-packages/cli/bin/n8n import:workflow --input="$TAMPER_RUNTIME/workflow.json"
-
-# 先把 N8N_RUNNERS_BROKER_PORT 设置为一个未占用端口。
-N8N_USER_FOLDER="$TAMPER_RUNTIME/n8n-user" \
-N8N_CUSTOM_EXTENSIONS="$PWD/custom-nodes/n8n-nodes-blockly-code/dist" \
-N8N_RUNNERS_INSECURE_MODE=false \
-packages/cli/bin/n8n execute --id="$(node -p "require(process.env.TAMPER_RUNTIME + '/workflow.json').id")" \
-  --rawOutput > "$TAMPER_RUNTIME/raw-output.json"
-
-# rawOutput 只可用于常规输出验收，不能作为 tamper 证据。
-node scripts/blockly-v1/verify-execution.mjs "$TAMPER_RUNTIME/raw-output.json"
-
-# 取该次执行的完整 execution record。它必须同时包含 workflowId、workflowData
-# 和 data.resultData；不要将上面的 raw-output.json 传给 tamper 验证。
-export TAMPER_WORKFLOW_ID="$(node -p "require(process.env.TAMPER_RUNTIME + '/workflow.json').id")"
-export N8N_SQLITE_DB="$TAMPER_RUNTIME/n8n-user/.n8n/database.sqlite"
-export TAMPER_EXECUTION_ID="$(sqlite3 -readonly "$N8N_SQLITE_DB" \
-  "SELECT id FROM execution_entity WHERE workflowId = '$TAMPER_WORKFLOW_ID' ORDER BY id DESC LIMIT 1;")"
-test -n "$TAMPER_EXECUTION_ID"
-
-# 从 SQLite 的 execution_entity 与 execution_data 导出同一条完整记录。
-sqlite3 -readonly -json "$N8N_SQLITE_DB" "
-SELECT e.id, e.workflowId, e.finished, e.mode, e.status, d.workflowData, d.data
-FROM execution_entity e
-JOIN execution_data d ON d.executionId = e.id
-WHERE e.id = $TAMPER_EXECUTION_ID;
-" > "$TAMPER_RUNTIME/execution-record-row.json"
-
-# execution_data.data 使用 flatted 存储；在声明该现有依赖的 packages/cli
-# 上下文中解码，不新增依赖。
-(
-  cd packages/cli
-  node --input-type=module - \
-    "$TAMPER_RUNTIME/execution-record-row.json" \
-    "$TAMPER_RUNTIME/execution-record.json" <<'NODE'
-import { readFileSync, writeFileSync } from 'node:fs';
-import { parse as parseFlatted } from 'flatted';
-
-const [inputPath, outputPath] = process.argv.slice(2);
-const [row] = JSON.parse(readFileSync(inputPath, 'utf8'));
-if (!row) throw new Error('SQLite execution record was not found');
-const record = {
-  ...row,
-  finished: Boolean(row.finished),
-  workflowData: JSON.parse(row.workflowData),
-  data: parseFlatted(row.data),
-};
-writeFileSync(outputPath, `${JSON.stringify(record, null, 2)}\n`);
-NODE
-)
-
-node scripts/blockly-v1/verify-execution.mjs \
-  "$TAMPER_RUNTIME/execution-record.json" \
-  --workflow="$TAMPER_RUNTIME/workflow.json" \
-  --expect-tampered-preview
-```
-
-tamper 模式会额外校验 `execution.workflowId` 与 `--workflow` 文档 id 一致，且 `execution.workflowData` 中唯一 `CUSTOM.blocklyCode` 节点的 `blocklyPayload` 与传入 tampered workflow 完全一致，再校验三条运行输出。只有验证器报告 tampered preview 被忽略、三条输出与 `expected-output.json` 完全一致时，该信任边界才通过。
-
-## 停止、清理与回滚
-
-- 在运行 `run-demo.sh` 的终端按 `Ctrl-C` 停止；先确认进程已退出，再删除 `scripts/blockly-v1/.runtime/`，仅清理本验收隔离数据。
-- 回滚本 worker 资产：删除 `scripts/blockly-v1/` 与 `docs/blockly-v1/`，或用 `git restore --source=HEAD -- scripts/blockly-v1 docs/blockly-v1`（仅对已跟踪文件有效）。
-- 不要删除其他 n8n 用户目录；清理范围只限本手册明确创建的隔离目录。
+验收脚本不会启动常驻 Web 服务，CLI 执行结束后 broker 与 internal runner 随主进程退出。运行数据全部位于本次输出的 `<runtime>` 目录；复核结束后，只清理该目录即可，其他 n8n 用户目录与服务保持原状。

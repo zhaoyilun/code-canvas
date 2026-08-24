@@ -4,6 +4,7 @@
 		"outDir": "dist"
 	},
 	"include": [
+		"shims.d.ts",
 		"credentials/**/*.ts",
 		"credentials/translations/**/*.json",
 		"nodes/**/*.ts",

@@ -1,3 +1,5 @@
+import type { TableCheck } from '@n8n/typeorm';
+
 import type { IrreversibleMigration, MigrationContext } from '../migration-types';
 
 const EXECUTION_ENTITY = 'execution_entity';
@@ -9,9 +11,9 @@ export class AllowAzureStoredAt1784000000034 implements IrreversibleMigration {
 		const table = await queryRunner.getTable(`${tablePrefix}${EXECUTION_ENTITY}`);
 
 		const storedAtCheck = table?.checks.find(
-			(c) =>
-				(c.columnNames?.includes(STORED_AT) ?? false) ||
-				(c.expression?.includes(STORED_AT) ?? false),
+			(check: TableCheck) =>
+				(check.columnNames?.includes(STORED_AT) ?? false) ||
+				(check.expression?.includes(STORED_AT) ?? false),
 		);
 
 		if (table && storedAtCheck) {

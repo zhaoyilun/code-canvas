@@ -1,8 +1,9 @@
 # `@n8n/blockly-data-transform`
 
 Pure TypeScript compiler for **Blockly Logic**, the visual logic editor embedded
-inside the n8n `CUSTOM.blocklyCode` node. It covers deterministic, per-item work
-that would otherwise require a small JavaScript Code node.
+inside the n8n `n8n-nodes-blockly-code.blocklyCode` community node. It covers
+deterministic, per-item work that would otherwise require a small JavaScript Code
+node.
 
 The package has no Blockly, browser, network, filesystem, credential, or dynamic
 code-execution dependency. A saved `workspace` is the only execution source of
