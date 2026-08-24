@@ -308,6 +308,8 @@ function importTypeScriptSourceToVisualProgram(
 	const refs = createArtifactRefs(request);
 	const sourceResult = parseTeachingProgram(
 		{
+			documentRef: request.documentRef,
+			revisionRef: request.revisionRef,
 			entryFunction: options.entryFunction,
 			source: { ...request.source, language: language.data },
 		},

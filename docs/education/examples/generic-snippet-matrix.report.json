@@ -1,0 +1,185 @@
+{
+  "apiVersion": 1,
+  "matrixRef": "education.generic-snippet-matrix.v1",
+  "pipeline": [
+    "TypeScript source",
+    "VisualProgramIRV1",
+    "n8n workflow fragment",
+    "Blockly payload compile",
+    "JSON round-trip",
+    "isolated source/generated JavaScript equivalence"
+  ],
+  "executionBoundary": {
+    "generatedJavaScript": "node:vm compileFunction",
+    "n8nNodeRuntime": "separate acceptance gate"
+  },
+  "positiveCases": [
+    {
+      "caseRef": "field-copy-rename",
+      "title": "Field copy and rename",
+      "sourceFile": "docs/education/examples/generic-snippets/field-copy-rename.ts",
+      "sourceSha256": "5E660A9E348AAEF87A44E36CD0F88589872612950B0B71CCEBB936D011F17011",
+      "coverage": [
+        "field-copy",
+        "field-rename"
+      ],
+      "statementCount": 2,
+      "sourceMapCount": 5,
+      "blockCount": 4,
+      "executionCount": 1,
+      "artifactSha256": "89A13CF2F9E11ACB3549930D71365E92F4862228B11533A237BFBE742F7413B0"
+    },
+    {
+      "caseRef": "numeric-calculation",
+      "title": "Numeric calculation",
+      "sourceFile": "docs/education/examples/generic-snippets/numeric-calculation.ts",
+      "sourceSha256": "DE764B25E1A2194D9E8D607BF79161E99E9A82D5CCDBEC720C6C0616E16EE013",
+      "coverage": [
+        "numeric-calculation"
+      ],
+      "statementCount": 1,
+      "sourceMapCount": 4,
+      "blockCount": 7,
+      "executionCount": 1,
+      "artifactSha256": "D8C830FCFD8389F2E0AE43B2ABBC43588D4EBDFAAA2E2B6F9CE4EC748B018226"
+    },
+    {
+      "caseRef": "scalar-conversion",
+      "title": "String number and boolean conversion",
+      "sourceFile": "docs/education/examples/generic-snippets/scalar-conversion.ts",
+      "sourceSha256": "19CEBBE07A484BB9D48D622234B569C12E125E9E0C6BC4634A658F9B635BDA56",
+      "coverage": [
+        "number-conversion",
+        "string-conversion",
+        "boolean-conversion"
+      ],
+      "statementCount": 3,
+      "sourceMapCount": 6,
+      "blockCount": 10,
+      "executionCount": 1,
+      "artifactSha256": "13AA595BD24A812E4F19164D1558D8AE5FDAD07C393568B9A7305A77FCA56FBE"
+    },
+    {
+      "caseRef": "conditional-branch",
+      "title": "Conditional branch",
+      "sourceFile": "docs/education/examples/generic-snippets/conditional-branch.ts",
+      "sourceSha256": "CDE3B206DE8DA165A9638C129C30C14719CAA7D62BCF39B242DF70D767EF14DB",
+      "coverage": [
+        "conditional-branch"
+      ],
+      "statementCount": 3,
+      "sourceMapCount": 6,
+      "blockCount": 12,
+      "executionCount": 2,
+      "artifactSha256": "CCE1ABB584F61BAB84DC2037EAA7CB06CB1203B593D0FA82BEC2ABD3F28BC271"
+    },
+    {
+      "caseRef": "array-object-construction",
+      "title": "Array and object construction",
+      "sourceFile": "docs/education/examples/generic-snippets/array-object-construction.ts",
+      "sourceSha256": "2550D2E1B0CD9AFF2D3609323807B46B09B9406E4DD1E0AA18EEEA20A82FE9C7",
+      "coverage": [
+        "array-construction",
+        "object-construction"
+      ],
+      "statementCount": 1,
+      "sourceMapCount": 4,
+      "blockCount": 10,
+      "executionCount": 1,
+      "artifactSha256": "81C7DF05617667D66CF787B8B3EF8BB584ACE4D9793F337B82B90E7E49170DC8"
+    },
+    {
+      "caseRef": "field-delete",
+      "title": "Field deletion",
+      "sourceFile": "docs/education/examples/generic-snippets/field-delete.ts",
+      "sourceSha256": "924CEB6E718EEEAF920D5695B679A8D7F4376919DFF11F65E6F7CB5AC53411C7",
+      "coverage": [
+        "field-delete"
+      ],
+      "statementCount": 1,
+      "sourceMapCount": 4,
+      "blockCount": 2,
+      "executionCount": 1,
+      "artifactSha256": "087805DC656CB45A5C0DC374A0E1C1735A23CF31CF7B06875DB96921FABE7EC1"
+    },
+    {
+      "caseRef": "throwing-assertion",
+      "title": "Throwing assertion",
+      "sourceFile": "docs/education/examples/generic-snippets/throwing-assertion.ts",
+      "sourceSha256": "9F7DEFD70692F25E3EEA23532C9BB65DDFE5276620DC80974FFBD6A71E63A3CC",
+      "coverage": [
+        "throwing-assertion"
+      ],
+      "statementCount": 2,
+      "sourceMapCount": 5,
+      "blockCount": 12,
+      "executionCount": 2,
+      "artifactSha256": "94AC903E8B34364737171EC6B750E8AE0E74F4D87D588CF86A98D40A5371333B"
+    }
+  ],
+  "negativeCases": [
+    {
+      "caseRef": "negative-direct-input-read",
+      "title": "Direct input read without null normalization",
+      "sourceFile": "docs/education/examples/generic-snippets/negative-direct-input-read.ts",
+      "sourceSha256": "441CFF6C79774999B672374ED4468DE7A0DDEF44186CF5AA412233C80874073B",
+      "expectedCode": "SOURCE_SEMANTICS_MISMATCH",
+      "reason": "A missing property is undefined in source but is normalized to null by the V1 blocks.",
+      "diagnostic": {
+        "code": "SOURCE_SEMANTICS_MISMATCH",
+        "path": "source.3.16",
+        "line": 3,
+        "column": 16
+      }
+    },
+    {
+      "caseRef": "negative-nested-output-write",
+      "title": "Nested output write",
+      "sourceFile": "docs/education/examples/generic-snippets/negative-nested-output-write.ts",
+      "sourceSha256": "8530BDDD749531C078A9186137EA569ABE3B86DF10C75ED734EFA17A2D590A9A",
+      "expectedCode": "SOURCE_SEMANTICS_MISMATCH",
+      "reason": "The V1 blocks create and clone parent objects, which changes source reference semantics.",
+      "diagnostic": {
+        "code": "SOURCE_SEMANTICS_MISMATCH",
+        "path": "source.3.1",
+        "line": 3,
+        "column": 1
+      }
+    },
+    {
+      "caseRef": "negative-nullable-number-conversion",
+      "title": "Number conversion of a nullable input read",
+      "sourceFile": "docs/education/examples/generic-snippets/negative-nullable-number-conversion.ts",
+      "sourceSha256": "15E3AE78DFD578BDA5292A49B2AB882F955D5154BA002B1B96D69EF0388CEAE6",
+      "expectedCode": "SOURCE_SEMANTICS_MISMATCH",
+      "reason": "Number(null) and the V1 null-preserving number block produce different values.",
+      "diagnostic": {
+        "code": "SOURCE_SEMANTICS_MISMATCH",
+        "path": "source.3.16",
+        "line": 3,
+        "column": 16
+      }
+    }
+  ],
+  "coverage": [
+    "array-construction",
+    "boolean-conversion",
+    "conditional-branch",
+    "field-copy",
+    "field-delete",
+    "field-rename",
+    "number-conversion",
+    "numeric-calculation",
+    "object-construction",
+    "string-conversion",
+    "throwing-assertion"
+  ],
+  "totals": {
+    "positiveCases": 7,
+    "negativeCases": 3,
+    "runtimeExecutions": 9,
+    "statements": 13,
+    "sourceMappings": 34,
+    "blocks": 57
+  }
+}

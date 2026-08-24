@@ -8,6 +8,7 @@ import type {
 import ts from 'typescript';
 
 import type { TypeScriptImportRequestV1 } from './contracts';
+import { MissingOperationDiscovery, staticQualifiedCallName } from './operation-discovery';
 import { diagnosticForNode, diagnosticForRange, sourceSpanForNode } from './source-location';
 
 export type ParsedTeachingProgram = {
@@ -23,7 +24,7 @@ export type TeachingProgramParseResult =
 
 export type TeachingProgramParseRequestV1 = Pick<
 	TypeScriptImportRequestV1,
-	'entryFunction' | 'source'
+	'documentRef' | 'revisionRef' | 'entryFunction' | 'source'
 >;
 
 export function parseTeachingProgram(
@@ -92,8 +93,11 @@ export function parseTeachingProgram(
 		sourceFile,
 		request.source.sourceRef,
 		parameter.name.text,
+		request.documentRef,
+		request.revisionRef,
 	);
 	const statements = translator.translateStatements(bodyStatements.slice(1, -1));
+	translator.completeDiscovery();
 	if (translator.diagnostics.length > 0) {
 		return { ok: false, diagnostics: translator.diagnostics };
 	}
@@ -330,12 +334,26 @@ function outputModeFromDeclaration(
 class TeachingAstTranslator {
 	readonly diagnostics: DiagnosticV1[] = [];
 	private readonly stepRefs = new Map<string, number>();
+	private readonly missingOperations: MissingOperationDiscovery;
 
 	constructor(
 		private readonly sourceFile: ts.SourceFile,
 		private readonly sourceRef: string,
 		private readonly inputName: string,
-	) {}
+		documentRef: string,
+		revisionRef: string,
+	) {
+		this.missingOperations = new MissingOperationDiscovery(
+			sourceFile,
+			sourceRef,
+			documentRef,
+			revisionRef,
+		);
+	}
+
+	completeDiscovery(): void {
+		this.diagnostics.push(...this.missingOperations.createDiagnostics());
+	}
 
 	translateStatements(statements: readonly ts.Statement[]): LogicStatementV1[] {
 		const translated: LogicStatementV1[] = [];
@@ -599,25 +617,76 @@ class TeachingAstTranslator {
 	}
 
 	private translateConversion(expression: ts.CallExpression): LogicExpressionV1 | undefined {
-		if (!ts.isIdentifier(expression.expression) || expression.arguments.length !== 1) {
-			this.unsupported(expression, 'Only Number, String, and Boolean conversions are supported');
+		const conversionName = ts.isIdentifier(expression.expression)
+			? expression.expression.text
+			: undefined;
+		const conversion =
+			conversionName === undefined ? undefined : conversionFunctions.get(conversionName);
+		if (conversion === undefined) {
+			const qualifiedName =
+				expression.questionDotToken === undefined
+					? staticQualifiedCallName(expression.expression)
+					: undefined;
+			if (qualifiedName === undefined) {
+				this.unsupported(
+					expression,
+					'Dynamic, computed, optional, and call-result invocations are outside operation discovery',
+				);
+			} else if (!this.missingOperations.record(expression, qualifiedName)) {
+				this.unsupported(expression, 'Static operation call exceeds discovery contract limits');
+			}
+			this.discoverNestedOperationCalls(expression.arguments);
 			return undefined;
 		}
-		const conversion = conversionFunctions.get(expression.expression.text);
+		if (expression.arguments.length !== 1) {
+			this.unsupported(expression, 'Number, String, and Boolean conversions require one argument');
+			return undefined;
+		}
 		const argument = expression.arguments[0];
-		if (conversion === undefined || argument === undefined) {
-			this.unsupported(expression, 'Only Number, String, and Boolean conversions are supported');
-			return undefined;
-		}
+		if (argument === undefined) throw new Error('validated conversion argument is missing');
 		if (conversion !== 'boolean' && !isSourceEquivalentPrimitiveConversion(argument, conversion)) {
 			this.semanticMismatch(
 				expression,
-				`${expression.expression.text} conversion is only source-equivalent for supported primitive literals`,
+				`${conversionName} conversion is only source-equivalent for supported primitive literals`,
 			);
 			return undefined;
 		}
 		const value = this.translateExpression(argument);
 		return value === undefined ? undefined : { kind: 'convert', to: conversion, value };
+	}
+
+	private discoverNestedOperationCalls(nodes: readonly ts.Node[]): void {
+		for (const node of nodes) this.discoverNestedOperationCallsInNode(node);
+	}
+
+	private discoverNestedOperationCallsInNode(node: ts.Node): void {
+		if (ts.isCallExpression(node)) {
+			const conversionName = ts.isIdentifier(node.expression) ? node.expression.text : undefined;
+			if (conversionName !== undefined && conversionFunctions.has(conversionName)) {
+				if (node.arguments.length !== 1) {
+					this.unsupported(node, 'Number, String, and Boolean conversions require one argument');
+					return;
+				}
+				this.discoverNestedOperationCalls(node.arguments);
+				return;
+			}
+
+			const qualifiedName =
+				node.questionDotToken === undefined ? staticQualifiedCallName(node.expression) : undefined;
+			if (qualifiedName === undefined) {
+				this.unsupported(
+					node,
+					'Dynamic, computed, optional, and call-result invocations are outside operation discovery',
+				);
+				return;
+			}
+			if (!this.missingOperations.record(node, qualifiedName)) {
+				this.unsupported(node, 'Static operation call exceeds discovery contract limits');
+			}
+			this.discoverNestedOperationCalls(node.arguments);
+			return;
+		}
+		ts.forEachChild(node, (child) => this.discoverNestedOperationCallsInNode(child));
 	}
 
 	private translateMemberRead(

@@ -479,7 +479,7 @@ cd packages/frontend/editor-ui
 pnpm dev
 ```
 
-Changing the base text file will trigger a rebuild of the client at `http://localhost:8080`.
+Changing the base text file will trigger a rebuild of the client at `http://localhost:18181`.
 
 ## Dynamic text
 
@@ -508,4 +508,4 @@ After changing the dynamic text file:
 
 If a `headerText` section was changed, re-run `pnpm n8n-generate-translations` in `/nodes-base`.
 
-> **Note**: To translate base and dynamic text simultaneously, run three terminals following the steps from both sections (first terminal running only once) and browse `http://localhost:8080`.
+> **Note**: To translate base and dynamic text simultaneously, run three terminals following the steps from both sections (first terminal running only once) and browse `http://localhost:18181`.

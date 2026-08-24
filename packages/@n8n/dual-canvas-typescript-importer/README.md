@@ -64,6 +64,33 @@ UI component DSL syntax is reported at its source location. Source import parses
 execute the submitted program. Accepted artifacts record
 `source-semantics.blockly-data-transform-equivalent.v1` in metadata.
 
+## Calls without an admitted operation
+
+A static identifier or property call that is not one of the built-in `Number`, `String`, and
+`Boolean` conversions produces `OPERATION_MODULE_MISSING`. Calls with the same qualified name and
+arity are aggregated into one `ModuleScaffoldRequestV1` in `diagnostic.details`:
+
+```ts
+output.low = clamp(-2, 0, 10);
+output.high = clamp(12, 0, 10);
+output.other = tools.math.clamp(input?.value ?? null, 0, 10);
+```
+
+The request contains document/revision/source scope, exact AST-derived call text, call and argument
+source spans, JSON-safe literal values, and conservative type hints. Static calls nested in another
+unknown call's arguments are recursively discovered and independently aggregated. The request
+deliberately lists behavior, effect, parameter names, input types, null handling, output type, and
+test vectors as decisions instead of inferring them from a function name. Dynamic, computed,
+optional, spread-argument, and call-result invocations stay on the located syntax-diagnostic route.
+
+`createOperationModuleTemplateV1(request)` from `@n8n/dual-canvas-operation-sdk` supplies a stable
+JSON shell for AI or human generation. That shell is only generation input. Admission requires a
+strict `OperationModuleAdmissionV1` envelope pairing the request with an `OperationModuleSpecV1`,
+including a bounded declarative expression and at least three test vectors. Async work,
+network/device access, and other effects route to a capability/plugin package. Operation
+registration, an `operationCall` IR node, and dynamic Blockly block creation belong to the next
+implementation slice.
+
 See [`examples/score-normalizer.ts`](examples/score-normalizer.ts) for a domain-independent input.
 
 ## API

@@ -1,4 +1,8 @@
 import { flattenLogicStatements } from '@n8n/dual-canvas-core';
+import {
+	createOperationModuleTemplateV1,
+	moduleScaffoldRequestV1Schema,
+} from '@n8n/dual-canvas-operation-sdk';
 import { describe, expect, it } from 'vitest';
 
 import { parseTeachingProgram } from './parser';
@@ -26,6 +30,218 @@ const fullSource = `function transform(input) {
 }`;
 
 describe('teaching-subset parser', () => {
+	it('discovers and aggregates repeated static unknown calls as one stable scaffold request', () => {
+		const source = `function transform(input) {
+	const output = {};
+	output.low = clamp(-2, 0, 10);
+	output.high = clamp(12, 0, 10);
+	return output;
+}`;
+		const first = parseTeachingProgram(createTestRequest(source), 'node.logic');
+		const second = parseTeachingProgram(createTestRequest(source), 'node.logic');
+
+		expect(first).toMatchObject({
+			ok: false,
+			diagnostics: [{ code: 'OPERATION_MODULE_MISSING' }],
+		});
+		if (first.ok || second.ok) return;
+		expect(first.diagnostics).toHaveLength(1);
+		expect(second.diagnostics).toEqual(first.diagnostics);
+		const parsedRequest = moduleScaffoldRequestV1Schema.safeParse(first.diagnostics[0]?.details);
+		expect(parsedRequest.success).toBe(true);
+		if (!parsedRequest.success) return;
+		expect(parsedRequest.data).toMatchObject({
+			qualifiedName: 'clamp',
+			arity: 3,
+			calls: [
+				{
+					callText: 'clamp(-2, 0, 10)',
+					source: { start: { offset: source.indexOf('clamp(-2') } },
+					arguments: [
+						{ index: 0, text: '-2', typeHint: 'number', literalValue: -2 },
+						{ index: 1, text: '0', typeHint: 'number', literalValue: 0 },
+						{ index: 2, text: '10', typeHint: 'number', literalValue: 10 },
+					],
+				},
+				{ callText: 'clamp(12, 0, 10)' },
+			],
+			requiredDecisions: [
+				'behavior',
+				'effect',
+				'parameter-names',
+				'input-types',
+				'null-handling',
+				'output-type',
+				'test-vectors',
+			],
+		});
+		expect(new Set(parsedRequest.data.calls.map((call) => call.callRef)).size).toBe(2);
+		const firstArgument = parsedRequest.data.calls[0]?.arguments[0];
+		expect(firstArgument?.source).toMatchObject({
+			start: { offset: source.indexOf('-2') },
+			end: { offset: source.indexOf('-2') + 2 },
+		});
+
+		const template = createOperationModuleTemplateV1(parsedRequest.data);
+		expect(template).toMatchObject({
+			requestRef: parsedRequest.data.requestRef,
+			identity: { qualifiedName: 'clamp' },
+			parameters: [{ type: null }, { type: null }, { type: null }],
+		});
+	});
+
+	it('discovers static property calls without guessing argument semantics', () => {
+		const source = `function transform(input) {
+	const output = {};
+	output.value = tools.math.clamp(input?.value ?? null, { min: 0 }, [10]);
+	return output;
+}`;
+		const result = parseTeachingProgram(createTestRequest(source), 'node.logic');
+
+		expect(result.ok).toBe(false);
+		if (result.ok) return;
+		const request = moduleScaffoldRequestV1Schema.parse(result.diagnostics[0]?.details);
+		expect(request).toMatchObject({
+			qualifiedName: 'tools.math.clamp',
+			arity: 3,
+			calls: [
+				{
+					arguments: [
+						{ text: 'input?.value ?? null', typeHint: 'unknown' },
+						{ text: '{ min: 0 }', typeHint: 'object', literalValue: { min: 0 } },
+						{ text: '[10]', typeHint: 'array', literalValue: [10] },
+					],
+				},
+			],
+		});
+	});
+
+	it('keeps non-finite numeric syntax as a number hint without emitting invalid JSON', () => {
+		const source = `function transform(input) {
+	const output = {};
+	output.high = mystery(1e309);
+	output.low = mystery(-1e309);
+	return output;
+}`;
+		let result: ReturnType<typeof parseTeachingProgram> | undefined;
+		expect(() => {
+			result = parseTeachingProgram(createTestRequest(source), 'node.logic');
+		}).not.toThrow();
+		expect(result).toMatchObject({
+			ok: false,
+			diagnostics: [{ code: 'OPERATION_MODULE_MISSING' }],
+		});
+		if (result === undefined || result.ok) return;
+		const request = moduleScaffoldRequestV1Schema.parse(result.diagnostics[0]?.details);
+		expect(request.calls).toHaveLength(2);
+		for (const call of request.calls) {
+			const argument = call.arguments[0];
+			expect(argument).toMatchObject({ typeHint: 'number' });
+			expect(argument === undefined ? true : 'literalValue' in argument).toBe(false);
+		}
+	});
+
+	it('recursively discovers and aggregates nested static unknown calls without duplicates', () => {
+		const source = `function transform(input) {
+	const output = {};
+	output.first = outer(inner(1), sibling(2));
+	output.second = outer(inner(3), sibling(4));
+	return output;
+}`;
+		const first = parseTeachingProgram(createTestRequest(source), 'node.logic');
+		const second = parseTeachingProgram(createTestRequest(source), 'node.logic');
+
+		expect(first.ok).toBe(false);
+		if (first.ok || second.ok) return;
+		expect(first.diagnostics).toHaveLength(3);
+		expect(second.diagnostics).toEqual(first.diagnostics);
+		expect(
+			first.diagnostics.every((diagnostic) => diagnostic.code === 'OPERATION_MODULE_MISSING'),
+		).toBe(true);
+		const requests = first.diagnostics.map((diagnostic) =>
+			moduleScaffoldRequestV1Schema.parse(diagnostic.details),
+		);
+		expect(requests.map((request) => `${request.qualifiedName}/${request.arity}`)).toEqual([
+			'outer/2',
+			'inner/1',
+			'sibling/1',
+		]);
+		for (const request of requests) {
+			expect(request.calls).toHaveLength(2);
+			expect(new Set(request.calls.map((call) => call.callRef)).size).toBe(2);
+		}
+	});
+
+	it('scopes stable request and call references to document revisions', () => {
+		const source = `function transform(input) {
+	const output = {};
+	output.value = mystery(1);
+	return output;
+}`;
+		const revisionOneRequest = createTestRequest(source);
+		const sameRevision = parseTeachingProgram(revisionOneRequest, 'node.logic');
+		const repeated = parseTeachingProgram(revisionOneRequest, 'node.logic');
+		const nextRevision = parseTeachingProgram(
+			{ ...revisionOneRequest, revisionRef: 'revision.2' },
+			'node.logic',
+		);
+
+		if (sameRevision.ok || repeated.ok || nextRevision.ok) {
+			throw new Error('unknown operation must produce scaffold diagnostics');
+		}
+		const first = moduleScaffoldRequestV1Schema.parse(sameRevision.diagnostics[0]?.details);
+		const again = moduleScaffoldRequestV1Schema.parse(repeated.diagnostics[0]?.details);
+		const next = moduleScaffoldRequestV1Schema.parse(nextRevision.diagnostics[0]?.details);
+		expect(again).toEqual(first);
+		expect(first.scope).toEqual({
+			documentRef: revisionOneRequest.documentRef,
+			revisionRef: 'revision.1',
+			sourceRef: 'source.main',
+		});
+		expect(next.scope.revisionRef).toBe('revision.2');
+		expect(next.requestRef).not.toBe(first.requestRef);
+		expect(next.calls[0]?.callRef).not.toBe(first.calls[0]?.callRef);
+	});
+
+	it.each([
+		'operations[name](1)',
+		'(input?.fn ?? null)(1)',
+		'factory()(1)',
+		'tools?.clamp(1)',
+		'clamp(...values)',
+	])('keeps dynamic or optional calls as located syntax diagnostics: %s', (call) => {
+		const source = `function transform(input) {
+	const output = {};
+	output.value = ${call};
+	return output;
+}`;
+		const result = parseTeachingProgram(createTestRequest(source), 'node.logic');
+		expect(result).toMatchObject({
+			ok: false,
+			diagnostics: [{ code: 'UNSUPPORTED_SYNTAX', details: { line: 3 } }],
+		});
+		if (!result.ok) {
+			expect(
+				result.diagnostics.some((diagnostic) => diagnostic.code === 'OPERATION_MODULE_MISSING'),
+			).toBe(false);
+		}
+	});
+
+	it('keeps known conversion arity errors on the existing syntax route', () => {
+		const source = `function transform(input) {
+	const output = {};
+	output.value = Number(1, 2);
+	return output;
+}`;
+		const result = parseTeachingProgram(createTestRequest(source), 'node.logic');
+		expect(result).toMatchObject({ ok: false, diagnostics: [{ code: 'UNSUPPORTED_SYNTAX' }] });
+		if (!result.ok) {
+			expect(
+				result.diagnostics.some((diagnostic) => diagnostic.code === 'OPERATION_MODULE_MISSING'),
+			).toBe(false);
+		}
+	});
+
 	it.each(['javascript', 'typescript', 'arkts'] as const)(
 		'parses the TypeScript-compatible subset as %s',
 		(language) => {

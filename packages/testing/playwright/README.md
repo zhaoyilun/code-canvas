@@ -62,7 +62,7 @@ some do, some don't yet.
 
 ## Separate Backend and Frontend URLs
 
-When developing with separate backend and frontend servers (e.g., backend on port 5680, frontend on port 8080), you can use the following environment variables:
+When developing with separate backend and frontend servers (e.g., backend on port 5680, frontend on port 18181), you can use the following environment variables:
 
 - **`N8N_BASE_URL`**: Backend server URL (also used as frontend URL if `N8N_EDITOR_URL` is not set)
 - **`N8N_EDITOR_URL`**: Frontend server URL (when set, overrides frontend URL while backend uses `N8N_BASE_URL`)
@@ -72,7 +72,7 @@ When developing with separate backend and frontend servers (e.g., backend on por
 - **Frontend URL** (for browser navigation): Uses `N8N_EDITOR_URL` if set, otherwise falls back to `N8N_BASE_URL`
 
 This allows you to:
-- Test against a backend on port 5680 while the frontend dev server runs on port 8080
+- Test against a backend on port 5680 while the frontend dev server runs on port 18181
 - Use different URLs for API calls vs browser navigation
 - Maintain backward compatibility with single-URL setups
 

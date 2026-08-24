@@ -9,12 +9,12 @@ node --test scripts/education/verify-generic-boundary.test.mjs
 
 检查范围严格限定为本项目增加的生产代码、相关 `package.json` 和项目工作流夹具。上游测试、`node_modules`、`dist`、`.pack` 以及用于解释边界的 `docs/education` 不参与文本扫描。
 
-脚本检查五组旧实现已经退出主仓：领域社区节点、领域 Blockly/生成器、硬件 bridge、设备部署、领域交付材料；同时检查生产代码与 manifest 不再引用旧领域契约，并要求项目生成的工作流使用已安装包提供的标准节点类型，而不是临时类型名。
+脚本检查五组旧实现已经退出主仓：领域社区节点、领域 Blockly/生成器、硬件 bridge、设备部署、领域交付材料；同时检查生产代码与 manifest 不再引用旧领域契约，并要求项目工作流不再使用 `CUSTOM.*` 临时类型名。真实 Blockly Code 节点的 package/name 契约由节点包自身测试锁定。
 
 ## 通用双画布端到端示例
 
-`generic-dual-canvas-example.mjs` 使用已构建的 TypeScript importer、dual-canvas core 和
-data-transform compiler，把纯通用 TypeScript 转换函数生成成可审计的双画布 JSON：
+`generic-dual-canvas-example.mjs` 使用已构建的 TypeScript importer、dual-canvas core、
+operation SDK 和 data-transform compiler，把纯通用 TypeScript 转换函数生成成可审计的双画布 JSON：
 
 ```bash
 node scripts/education/generic-dual-canvas-example.mjs
@@ -23,5 +23,28 @@ node --test scripts/education/generic-dual-canvas-example.test.mjs
 
 输入为 `docs/education/examples/generic-score-normalizer.ts`，确定性输出为
 `docs/education/examples/generic-score-normalizer.dual-canvas.json`。验收覆盖
-`VisualProgramIRV1`、实际安装节点名的工作流片段、Blockly payload 编译、完整源码映射、
-JSON 往返、字节稳定性以及独立的通用运行时依赖闭包。
+`VisualProgramIRV1`、绑定仓库已有 Blockly Code 节点真实类型的工作流片段、Blockly
+payload 编译、完整源码映射、JSON 往返、字节稳定性以及独立的通用运行时依赖闭包。
+
+## 通用代码片段验收矩阵
+
+`generic-snippet-matrix.mjs` 在单一综合示例之外，再用七类基础代码片段逐项验证
+字段复制/重命名、数值计算、标量转换、条件分支、数组/对象构造、字段删除和抛错断言：
+
+```bash
+node scripts/education/generic-snippet-matrix.mjs
+node scripts/education/generic-snippet-matrix.mjs --check
+node --test scripts/education/generic-snippet-matrix.test.mjs
+```
+
+每个正例都真实经过 TypeScript importer、`VisualProgramIRV1`、n8n workflow、Blockly
+payload 编译和 JSON 往返，并对照源码与生成 JavaScript 的运行结果。三个负例锁定 V1
+等价语义边界，要求在产物生成前返回带源码位置的诊断。
+
+这里的运行结果对照由 Node.js `node:vm` 完成；真实 n8n 服务与 Task Runner 执行作为
+独立运行时验收门，不与基础转换矩阵混写。
+
+样例说明与机器报告分别位于：
+
+- `docs/education/examples/generic-snippet-matrix.md`
+- `docs/education/examples/generic-snippet-matrix.report.json`

@@ -3,7 +3,7 @@ import { execSync } from 'child_process';
 function globalTeardown() {
 	console.log('🧹 Starting global teardown...');
 
-	const ports = [5678, 8080];
+	const ports = [5678, 18181];
 
 	for (const port of ports) {
 		try {

@@ -26,7 +26,7 @@ Playwright system deps, and Docker-in-Docker (for testcontainers and
 pnpm session              # attach the default agent session (creates everything on first run)
 pnpm session fix-flaky    # a second, parallel agent in its own git worktree
 pnpm session ls           # what's running
-pnpm session tunnel       # forward n8n ports (default 5678, 8080) to localhost; Ctrl-C to stop
+pnpm session tunnel       # forward n8n ports (default 5678, 18181) to localhost; Ctrl-C to stop
 pnpm session stop         # end of day: billing stops, disk survives
 pnpm session rm           # delete the codespace
 ```
@@ -54,17 +54,17 @@ Two terminal windows:
 
 ```bash
 pnpm session          # window 1: attach the agent session
-pnpm session tunnel   # window 2: forward 5678 + 8080 to localhost
+pnpm session tunnel   # window 2: forward 5678 + 18181 to localhost
 ```
 
 Attaching lands you in the agent (Claude), not a shell — open a shell in a
 new tmux window with `Ctrl-b c` (or ask the agent) and run `pnpm dev` there.
-Then open http://localhost:8080.
+Then open http://localhost:18181.
 
 The tunnel prints nothing while forwarding — that's normal. `Connection
 refused` means nothing is listening on that port in the codespace yet; it
 starts serving as soon as `pnpm dev` is up, no restart needed. Pass ports to
-override the defaults (`pnpm session tunnel 5678 8080 5679`), but always
+override the defaults (`pnpm session tunnel 5678 18181 5679`), but always
 forward the pair together with matching numbers: the Vite dev UI points its
 API base at `localhost:5678` (the `N8N_PORT` default), so an asymmetric or
 partial mapping breaks it.

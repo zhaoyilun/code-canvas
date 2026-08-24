@@ -183,6 +183,7 @@ export function verifyRuntimeDependencyBoundary() {
 	const manifests = [
 		readManifest('packages/@n8n/dual-canvas-typescript-importer/package.json'),
 		readManifest('packages/@n8n/dual-canvas-core/package.json'),
+		readManifest('packages/@n8n/dual-canvas-operation-sdk/package.json'),
 		readManifest('packages/@n8n/blockly-data-transform/package.json'),
 	];
 	const workspaceRuntimeDependencies = [
@@ -195,6 +196,7 @@ export function verifyRuntimeDependencyBoundary() {
 	assert.deepEqual(workspaceRuntimeDependencies, [
 		'@n8n/blockly-data-transform',
 		'@n8n/dual-canvas-core',
+		'@n8n/dual-canvas-operation-sdk',
 	]);
 	return { workspaceRuntimeDependencies };
 }

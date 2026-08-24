@@ -40,7 +40,11 @@ test('keeps the checked-in JSON export importable and byte-stable', () => {
 
 test('runs from an empty working directory with only the generic runtime dependency closure', () => {
 	assert.deepEqual(verifyRuntimeDependencyBoundary(), {
-		workspaceRuntimeDependencies: ['@n8n/blockly-data-transform', '@n8n/dual-canvas-core'],
+		workspaceRuntimeDependencies: [
+			'@n8n/blockly-data-transform',
+			'@n8n/dual-canvas-core',
+			'@n8n/dual-canvas-operation-sdk',
+		],
 	});
 
 	const emptyWorkingDirectory = mkdtempSync(join(tmpdir(), 'generic-dual-canvas-'));
@@ -57,6 +61,7 @@ test('runs from an empty working directory with only the generic runtime depende
 		assert.deepEqual(report.workspaceRuntimeDependencies, [
 			'@n8n/blockly-data-transform',
 			'@n8n/dual-canvas-core',
+			'@n8n/dual-canvas-operation-sdk',
 		]);
 	} finally {
 		rmdirSync(emptyWorkingDirectory);

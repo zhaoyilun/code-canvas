@@ -255,7 +255,7 @@ function runCli() {
 		`PASS: generic boundary verified (${report.scannedFileCount} production/manifest/fixture files, ${report.workflowFileCount} workflow fixtures)`,
 	);
 	console.log(
-		'PASS: five legacy implementation groups are absent and project workflows use installed node types',
+		'PASS: five legacy implementation groups are absent and project workflows avoid CUSTOM.* node types',
 	);
 }
 

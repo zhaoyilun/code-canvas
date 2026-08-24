@@ -17,7 +17,7 @@
 		// needs `privileged: true` on the n8n service (compose-based config)
 		"ghcr.io/devcontainers/features/docker-in-docker:2": {}
 	},
-	"forwardPorts": [8080, 5678],
+	"forwardPorts": [5678, 18181],
 	// Runs in prebuilds, so a fresh codespace starts with deps installed and the build warm
 	"onCreateCommand": "corepack install && pnpm install && (pnpm build > /tmp/build.log 2>&1 || tail -n 50 /tmp/build.log) && pnpm --filter=n8n-playwright exec playwright install chromium",
 	"secrets": {

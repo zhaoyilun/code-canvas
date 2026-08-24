@@ -1,7 +1,7 @@
 {
-	"name": "@n8n/dual-canvas-typescript-importer",
+	"name": "@n8n/dual-canvas-operation-sdk",
 	"version": "0.1.0",
-	"description": "Source-equivalent JavaScript, TypeScript, and ArkTS teaching-subset importer for dual-canvas visual programs",
+	"description": "Strict discovery and admission contracts for generated pure dual-canvas operations",
 	"main": "dist/index.js",
 	"module": "dist/index.js",
 	"types": "dist/index.d.ts",
@@ -15,31 +15,28 @@
 	"files": [
 		"dist/**/*.d.ts",
 		"dist/**/*.js",
-		"dist/**/*.js.map",
-		"examples"
+		"dist/**/*.js.map"
 	],
 	"sideEffects": false,
 	"scripts": {
 		"clean": "rimraf dist .turbo",
 		"typecheck": "tsc --noEmit",
 		"build": "tsc -p tsconfig.build.json",
-		"format": "biome format --write src examples README.md package.json eslint.config.mjs tsconfig.json tsconfig.build.json vitest.config.ts",
-		"format:check": "biome ci src examples README.md package.json eslint.config.mjs tsconfig.json tsconfig.build.json vitest.config.ts",
+		"format": "biome format --write src README.md package.json eslint.config.mjs tsconfig.json tsconfig.build.json vitest.config.ts",
+		"format:check": "biome ci src README.md package.json eslint.config.mjs tsconfig.json tsconfig.build.json vitest.config.ts",
 		"lint": "eslint . --quiet",
 		"test": "vitest run",
 		"test:unit": "vitest run"
 	},
 	"dependencies": {
 		"@n8n/dual-canvas-core": "workspace:*",
-		"@n8n/dual-canvas-operation-sdk": "workspace:*",
-		"typescript": "catalog:typescript-tooling",
 		"zod": "catalog:"
 	},
 	"devDependencies": {
-		"@n8n/blockly-data-transform": "workspace:*",
 		"@n8n/eslint-config": "workspace:*",
 		"@n8n/typescript-config": "workspace:*",
 		"@n8n/vitest-config": "workspace:*",
+		"typescript": "catalog:typescript",
 		"vite": "catalog:",
 		"vitest": "catalog:"
 	},
