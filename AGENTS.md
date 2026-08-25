@@ -1,16 +1,16 @@
 # AGENTS.md
 
-This file provides guidance on how to work with the n8n repository.
+This file provides guidance on how to work with the CodeCanvas repository.
 
 ## Project Overview
 
-n8n is a workflow automation platform written in TypeScript, using a monorepo
-structure managed by pnpm workspaces. It consists of a Node.js backend, Vue.js
-frontend, and extensible node-based workflow engine.
+CodeCanvas is a code-understanding platform built on the n8n workflow engine.
+It uses a pnpm-managed TypeScript monorepo, with a Node.js backend, Vue.js
+frontend, Blockly logic canvas, and extensible node-based execution engine.
 
 ## 教学演示项目最高宗旨（Blockly / n8n / RoboFrame）
 
-本仓库当前教育分支交付的是可现场操作的演示样机，而不是生产平台。涉及
+本仓库当前 v0.1 交付的是可现场操作的演示样机，而不是生产平台。涉及
 通用代码双画布、AI 生成未知函数模块和 RoboFrame 教学插件时，本节优先于
 下方通用的生产级工程建议。
 
