@@ -2,6 +2,17 @@
 
 > 本分支只负责教育侧的通用能力：把代码转换为同一份中间表示，并同步呈现 Blockly 逻辑画布与 n8n 工作流画布。设备适配、硬件通信和具体机器人产品均在插件或硬件交付边界内实现。以下为上游 n8n 原始 README。
 
+## 项目仓库
+
+- GitHub：[`zhaoyilun/n8n-blockly`](https://github.com/zhaoyilun/n8n-blockly)
+- Git 远程地址：`https://github.com/zhaoyilun/n8n-blockly.git`
+- 教学演示说明：[双画布演示运行手册](docs/education/demo-runbook.md)
+- 可导入示例：[复合双画布工作流](docs/education/examples/interactive-dual-canvas-demo.workflow.json)
+
+```bash
+git clone https://github.com/zhaoyilun/n8n-blockly.git
+```
+
 ## 本仓库新增内容
 
 | 层级 | 作用 | 入口 |
