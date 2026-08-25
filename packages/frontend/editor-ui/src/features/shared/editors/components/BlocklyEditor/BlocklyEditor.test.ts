@@ -1,7 +1,9 @@
 import { flushPromises, mount } from '@vue/test-utils';
+import type { WorkflowFragmentV1 } from '@n8n/dual-canvas-core';
 
 import BlocklyEditor from './BlocklyEditor.vue';
 import { createToolbox, registerN8nBlocks } from './blockly';
+import { convertBlocklySource } from './blocklyImport.api';
 import {
 	CAPABILITY_PLAN_ROOT_BLOCK_TYPE,
 	CAPABILITY_PLAN_STEP_BLOCK_TYPE,
@@ -17,6 +19,12 @@ import {
 } from './payload';
 
 type ChangeListener = (event: { isUiEvent: boolean }) => void;
+
+const workflowDocumentStoreMock = vi.hoisted(() => ({
+	getSnapshot: vi.fn<() => Record<string, unknown>>(),
+	hydrate: vi.fn(),
+}));
+const uiStoreMock = vi.hoisted(() => ({ markStateDirty: vi.fn() }));
 
 const capabilityCatalog = {
 	apiVersion: 1,
@@ -82,6 +90,128 @@ const BOOLEAN_OPERATION_CATALOG = createOperationModuleCatalogV1({
 		}),
 	],
 });
+function createWorkflowFragment(blocklyPayload: string): WorkflowFragmentV1 {
+	return {
+		apiVersion: 1,
+		fragmentRef: 'workflow.synthetic',
+		nodes: [
+			{
+				nodeRef: 'node.start',
+				bindingRef: 'binding.start',
+				nodeType: 'n8n-nodes-base.manualTrigger',
+				typeVersion: 1,
+				label: 'Start',
+				position: { x: 0, y: 0 },
+				parameters: {},
+			},
+			{
+				nodeRef: 'node.blockly',
+				bindingRef: 'binding.blockly',
+				nodeType: 'n8n-nodes-blockly-code.blocklyCode',
+				typeVersion: 1,
+				label: 'Blockly Logic',
+				position: { x: 280, y: 0 },
+				parameters: { blocklyPayload },
+			},
+		],
+		connections: [
+			{
+				connectionRef: 'connection.start-to-blockly',
+				from: { nodeRef: 'node.start', port: 'main', index: 0 },
+				to: { nodeRef: 'node.blockly', port: 'main', index: 0 },
+			},
+		],
+		entryNodeRefs: ['node.start'],
+		exitNodeRefs: ['node.blockly'],
+	};
+}
+
+function createFixtureWorkflowSnapshot() {
+	return {
+		id: 'workflow.current',
+		versionId: 'version.current',
+		name: 'Current teaching workflow',
+		nodes: [
+			{
+				id: 'fixture-start',
+				name: 'Start',
+				type: 'n8n-nodes-base.manualTrigger',
+				typeVersion: 1,
+				position: [0, 0],
+				parameters: {},
+			},
+			{
+				id: 'fixture-input',
+				name: 'Seed numeric input',
+				type: 'n8n-nodes-base.set',
+				typeVersion: 3.4,
+				position: [280, 0],
+				parameters: { assignments: { assignments: [{ name: 'price', value: 12.5 }] } },
+			},
+			{
+				id: 'fixture-blockly',
+				name: 'Numeric calculation',
+				type: 'n8n-nodes-blockly-code.blocklyCode',
+				typeVersion: 1,
+				position: [560, 0],
+				parameters: { blocklyPayload: 'fixture-payload' },
+			},
+		],
+		connections: {
+			Start: { main: [[{ node: 'Seed numeric input', type: 'main', index: 0 }]] },
+			'Seed numeric input': {
+				main: [[{ node: 'Numeric calculation', type: 'main', index: 0 }]],
+			},
+		},
+		pinData: {},
+		nodeGroups: [],
+		meta: { visualProgramming: { displayName: '通用代码双画布课堂' } },
+	};
+}
+
+function createSingleBlocklyShellSnapshot() {
+	return {
+		...createFixtureWorkflowSnapshot(),
+		nodes: [
+			{
+				id: 'shell-blockly',
+				name: 'Blockly shell',
+				type: 'n8n-nodes-blockly-code.blocklyCode',
+				typeVersion: 1,
+				position: [0, 0],
+				parameters: { blocklyPayload: 'shell-payload' },
+			},
+		],
+		connections: {},
+	};
+}
+
+function createImportedFragmentSnapshot(blocklyPayload: string) {
+	return {
+		...createFixtureWorkflowSnapshot(),
+		nodes: [
+			{
+				id: 'node.start',
+				name: 'Start',
+				type: 'n8n-nodes-base.manualTrigger',
+				typeVersion: 1,
+				position: [0, 0],
+				parameters: {},
+			},
+			{
+				id: 'node.blockly',
+				name: 'Blockly Logic',
+				type: 'n8n-nodes-blockly-code.blocklyCode',
+				typeVersion: 1,
+				position: [280, 0],
+				parameters: { blocklyPayload },
+			},
+		],
+		connections: {
+			Start: { main: [[{ node: 'Blockly Logic', type: 'main', index: 0 }]] },
+		},
+	};
+}
 
 const events = {
 	disabled: false,
@@ -151,7 +281,39 @@ const blockly = {
 };
 
 vi.mock('@n8n/design-system', () => ({
+	N8nButton: {
+		props: ['disabled', 'loading', 'type'],
+		template:
+			'<button :type="type ?? \'button\'" :disabled="disabled || loading"><slot /></button>',
+	},
+	N8nInput: {
+		props: ['disabled', 'modelValue', 'rows', 'type'],
+		emits: ['update:modelValue'],
+		template: `<textarea
+			v-if="type === 'textarea'"
+			:value="modelValue"
+			:disabled="disabled"
+			:rows="rows"
+			@input="$emit('update:modelValue', $event.target.value)"
+		/>
+		<input
+			v-else
+			:value="modelValue"
+			:disabled="disabled"
+			@input="$emit('update:modelValue', $event.target.value)"
+		/>`,
+	},
 	N8nNotice: { template: '<div><slot /></div>' },
+	N8nOption: {
+		props: ['label', 'value'],
+		template: '<option :value="value">{{ label }}</option>',
+	},
+	N8nSelect: {
+		props: ['disabled', 'modelValue'],
+		emits: ['update:modelValue'],
+		template:
+			'<select :value="modelValue" :disabled="disabled" @change="$emit(\'update:modelValue\', $event.target.value)"><slot /></select>',
+	},
 	N8nText: { template: '<div><slot /></div>' },
 }));
 
@@ -160,6 +322,24 @@ vi.mock('@n8n/i18n', () => ({
 }));
 
 vi.mock('blockly', () => blockly);
+
+vi.mock('@n8n/stores/useRootStore', () => ({
+	useRootStore: () => ({
+		restApiContext: { baseUrl: '/rest', pushRef: 'test' },
+	}),
+}));
+
+vi.mock('@/app/stores/ui.store', () => ({
+	useUIStore: () => uiStoreMock,
+}));
+
+vi.mock('@/app/stores/workflowDocument.store', () => ({
+	injectWorkflowDocumentStore: () => ({ value: workflowDocumentStoreMock }),
+}));
+
+vi.mock('./blocklyImport.api', () => ({
+	convertBlocklySource: vi.fn(),
+}));
 
 vi.mock('blockly/msg/zh-hans', () => ({
 	LOGIC_BOOLEAN_TRUE: '真',
@@ -190,6 +370,7 @@ describe('BlocklyEditor.vue', () => {
 		savedWorkspace = createDefaultWorkspace();
 		selectedBlockData = undefined;
 		vi.clearAllMocks();
+		workflowDocumentStoreMock.getSnapshot.mockReturnValue(createFixtureWorkflowSnapshot());
 		vi.stubGlobal(
 			'ResizeObserver',
 			class {
@@ -285,6 +466,9 @@ describe('BlocklyEditor.vue', () => {
 			expect(wrapper.text()).toContain('当前节点');
 			expect(wrapper.text()).toContain('n8n 流程节点');
 			expect(wrapper.attributes('data-editor-profile')).toBe(props.profileId);
+			expect(wrapper.find('[data-test-id="blockly-source-importer"]').exists()).toBe(
+				props.profileId === 'data-transform',
+			);
 			wrapper.unmount();
 		},
 	);
@@ -348,6 +532,214 @@ describe('BlocklyEditor.vue', () => {
 			BOOLEAN_OPERATION_CATALOG,
 		);
 		expect(workspace.updateToolbox).toHaveBeenCalledWith({ contents: [] });
+		wrapper.unmount();
+	});
+
+	it('converts the numeric TypeScript example without replacing the existing input graph', async () => {
+		const fixtureWorkflow = createFixtureWorkflowSnapshot();
+		workflowDocumentStoreMock.getSnapshot.mockReturnValue(fixtureWorkflow);
+		const initialPayload = serializeBlocklyDataPayload(
+			createDefaultWorkspace(),
+			EMPTY_OPERATION_CATALOG,
+		);
+		const convertedPayload = serializeBlocklyDataPayload(
+			createDefaultWorkspace(),
+			BOOLEAN_OPERATION_CATALOG,
+		);
+		vi.mocked(convertBlocklySource).mockResolvedValue({
+			status: 'ready',
+			blocklyPayload: convertedPayload,
+			workflowFragment: createWorkflowFragment(convertedPayload),
+		});
+		const wrapper = mount(BlocklyEditor, {
+			props: { modelValue: initialPayload, profileId: 'data-transform' },
+		});
+		await flushPromises();
+
+		await wrapper.get('[data-test-id="blockly-source-importer"]').trigger('submit');
+		await flushPromises();
+
+		expect(convertBlocklySource).toHaveBeenCalledWith(
+			{ baseUrl: '/rest', pushRef: 'test' },
+			expect.objectContaining({
+				source: expect.stringContaining('output.total'),
+				currentBlocklyPayload: initialPayload,
+				generateMissingOperation: false,
+				teacherIntent: expect.stringContaining('订单总额'),
+			}),
+		);
+		expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toBe(convertedPayload);
+		expect(workflowDocumentStoreMock.hydrate).not.toHaveBeenCalled();
+		expect(fixtureWorkflow.nodes.map((node) => node.name)).toEqual([
+			'Start',
+			'Seed numeric input',
+			'Numeric calculation',
+		]);
+		expect(fixtureWorkflow.connections['Seed numeric input']).toEqual({
+			main: [[{ node: 'Numeric calculation', type: 'main', index: 0 }]],
+		});
+		expect(uiStoreMock.markStateDirty).toHaveBeenCalledOnce();
+
+		await wrapper.setProps({ modelValue: convertedPayload });
+		await flushPromises();
+
+		expect(registerN8nBlocks).toHaveBeenLastCalledWith(
+			blockly,
+			expect.any(Object),
+			BOOLEAN_OPERATION_CATALOG,
+		);
+		expect(workspace.updateToolbox).toHaveBeenCalledWith({ contents: [] });
+		wrapper.unmount();
+	});
+
+	it('replaces a single Blockly shell with the returned workflow fragment', async () => {
+		workflowDocumentStoreMock.getSnapshot.mockReturnValue(createSingleBlocklyShellSnapshot());
+		const initialPayload = serializeBlocklyDataPayload(
+			createDefaultWorkspace(),
+			EMPTY_OPERATION_CATALOG,
+		);
+		const convertedPayload = serializeBlocklyDataPayload(
+			createDefaultWorkspace(),
+			BOOLEAN_OPERATION_CATALOG,
+		);
+		vi.mocked(convertBlocklySource).mockResolvedValue({
+			status: 'ready',
+			blocklyPayload: convertedPayload,
+			workflowFragment: createWorkflowFragment(convertedPayload),
+		});
+		const wrapper = mount(BlocklyEditor, {
+			props: { modelValue: initialPayload, profileId: 'data-transform' },
+		});
+		await flushPromises();
+
+		await wrapper.get('[data-test-id="blockly-source-importer"]').trigger('submit');
+		await flushPromises();
+
+		const importedWorkflow = workflowDocumentStoreMock.hydrate.mock.calls[0]?.[0];
+		expect(importedWorkflow).toEqual(
+			expect.objectContaining({
+				name: 'Current teaching workflow',
+				meta: { visualProgramming: { displayName: '通用代码双画布课堂' } },
+				nodes: [
+					expect.objectContaining({ id: 'node.start', name: 'Start' }),
+					expect.objectContaining({
+						id: 'node.blockly',
+						name: 'Blockly Logic',
+						parameters: { blocklyPayload: convertedPayload },
+					}),
+				],
+				connections: {
+					Start: { main: [[{ node: 'Blockly Logic', type: 'main', index: 0 }]] },
+				},
+			}),
+		);
+		expect(importedWorkflow?.nodes).toHaveLength(2);
+		wrapper.unmount();
+	});
+
+	it('replaces an already imported fragment instead of stacking another copy', async () => {
+		workflowDocumentStoreMock.getSnapshot.mockReturnValue(
+			createImportedFragmentSnapshot('previous-payload'),
+		);
+		const initialPayload = serializeBlocklyDataPayload(
+			createDefaultWorkspace(),
+			EMPTY_OPERATION_CATALOG,
+		);
+		const convertedPayload = serializeBlocklyDataPayload(
+			createDefaultWorkspace(),
+			BOOLEAN_OPERATION_CATALOG,
+		);
+		vi.mocked(convertBlocklySource).mockResolvedValue({
+			status: 'ready',
+			blocklyPayload: convertedPayload,
+			workflowFragment: createWorkflowFragment(convertedPayload),
+		});
+		const wrapper = mount(BlocklyEditor, {
+			props: { modelValue: initialPayload, profileId: 'data-transform' },
+		});
+		await flushPromises();
+
+		await wrapper.get('[data-test-id="blockly-source-importer"]').trigger('submit');
+		await flushPromises();
+
+		const importedWorkflow = workflowDocumentStoreMock.hydrate.mock.calls[0]?.[0];
+		expect(importedWorkflow?.nodes).toHaveLength(2);
+		expect(importedWorkflow?.nodes).toEqual([
+			expect.objectContaining({ id: 'node.start' }),
+			expect.objectContaining({
+				id: 'node.blockly',
+				parameters: { blocklyPayload: convertedPayload },
+			}),
+		]);
+		expect(importedWorkflow?.connections).toEqual({
+			Start: { main: [[{ node: 'Blockly Logic', type: 'main', index: 0 }]] },
+		});
+		wrapper.unmount();
+	});
+
+	it('generates a missing operation and refreshes its dynamic block toolbox', async () => {
+		const workspaceState = createDefaultWorkspace();
+		const initialPayload = serializeBlocklyDataPayload(workspaceState, EMPTY_OPERATION_CATALOG);
+		const generatedPayload = serializeBlocklyDataPayload(workspaceState, BOOLEAN_OPERATION_CATALOG);
+		vi.mocked(convertBlocklySource)
+			.mockResolvedValueOnce({
+				status: 'missing-operation',
+				qualifiedName: 'clampScore',
+				arity: 3,
+				message: 'Operation module clampScore/3 is missing.',
+			})
+			.mockResolvedValueOnce({
+				status: 'ready',
+				blocklyPayload: generatedPayload,
+				workflowFragment: createWorkflowFragment(generatedPayload),
+			});
+		const wrapper = mount(BlocklyEditor, {
+			props: { modelValue: initialPayload, profileId: 'data-transform' },
+		});
+		await flushPromises();
+
+		await wrapper.get('[data-test-id="blockly-source-example"]').setValue('clamp-score');
+		await wrapper.get('[data-test-id="blockly-source-importer"]').trigger('submit');
+		await flushPromises();
+
+		const missing = wrapper.get('[data-test-id="blockly-missing-operation"]');
+		expect(missing.text()).toContain('clampScore / 3 个参数');
+		expect(convertBlocklySource).toHaveBeenNthCalledWith(
+			1,
+			{ baseUrl: '/rest', pushRef: 'test' },
+			expect.objectContaining({
+				source: expect.stringContaining('clampScore'),
+				generateMissingOperation: false,
+			}),
+		);
+
+		await wrapper.get('[data-test-id="blockly-ai-generate"]').trigger('click');
+		await flushPromises();
+
+		expect(convertBlocklySource).toHaveBeenNthCalledWith(
+			2,
+			{ baseUrl: '/rest', pushRef: 'test' },
+			expect.objectContaining({
+				source: expect.stringContaining('clampScore'),
+				currentBlocklyPayload: initialPayload,
+				generateMissingOperation: true,
+				teacherIntent: expect.stringContaining('0 到 100'),
+			}),
+		);
+		expect(wrapper.emitted('update:modelValue')?.at(-1)?.[0]).toBe(generatedPayload);
+		expect(workflowDocumentStoreMock.hydrate).not.toHaveBeenCalled();
+		expect(uiStoreMock.markStateDirty).toHaveBeenCalledOnce();
+
+		await wrapper.setProps({ modelValue: generatedPayload });
+		await flushPromises();
+
+		expect(registerN8nBlocks).toHaveBeenLastCalledWith(
+			blockly,
+			expect.any(Object),
+			BOOLEAN_OPERATION_CATALOG,
+		);
+		expect(workspace.updateToolbox).toHaveBeenCalledWith({ contents: [] });
+		expect(wrapper.find('[data-test-id="blockly-missing-operation"]').exists()).toBe(false);
 		wrapper.unmount();
 	});
 

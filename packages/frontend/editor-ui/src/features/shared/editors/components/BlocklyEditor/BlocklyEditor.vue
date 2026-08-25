@@ -1,7 +1,13 @@
 <script setup lang="ts">
-import { N8nNotice, N8nText } from '@n8n/design-system';
+import type { BlocklySourceMissingOperationResponse } from '@n8n/api-types';
+import { N8nButton, N8nInput, N8nNotice, N8nOption, N8nSelect, N8nText } from '@n8n/design-system';
+import { useRootStore } from '@n8n/stores/useRootStore';
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useUIStore } from '@/app/stores/ui.store';
+import { injectWorkflowDocumentStore } from '@/app/stores/workflowDocument.store';
 import { loadWorkspaceOrDefault } from './blockly';
+import { convertBlocklySource } from './blocklyImport.api';
+import { replaceWorkflowWithFragment } from './blocklyWorkflowFragment';
 import { createBlocklyEditorAdapter, getBlocklyEditorProfile } from './profiles';
 import type { BlocklyEditorAdapter, BlocklyPayloadParseResult } from './profiles';
 
@@ -9,6 +15,32 @@ const CHINESE_BLOCKLY_MESSAGE_OVERRIDES = {
 	LOGIC_BOOLEAN_TRUE: '真',
 	LOGIC_BOOLEAN_FALSE: '假',
 };
+
+const SOURCE_EXAMPLES = [
+	{
+		id: 'numeric-calculation',
+		label: '数值计算（直接转换）',
+		teacherIntent: '计算订单总额，并在商品金额上增加固定费用。',
+		source: `function transform(input) {
+	const output = {};
+	output.total = (input?.price ?? null) * (input?.quantity ?? null) + 2;
+	return output;
+}`,
+	},
+	{
+		id: 'clamp-score',
+		label: '成绩限幅（AI 生成函数）',
+		teacherIntent: '把成绩限制在 0 到 100 之间，空值继续保持为空。',
+		source: `function transform(input) {
+	const output = {};
+	output.score = clampScore(input?.score ?? null, 0, 100);
+	return output;
+}`,
+	},
+] as const;
+
+type SourceImportState = 'idle' | 'converting' | 'generating';
+type SourceExampleId = (typeof SOURCE_EXAMPLES)[number]['id'];
 
 type Props = {
 	modelValue: string;
@@ -19,11 +51,20 @@ const props = withDefaults(defineProps<Props>(), {
 	isReadOnly: false,
 });
 const emit = defineEmits<{ 'update:modelValue': [value: string] }>();
+const rootStore = useRootStore();
+const uiStore = useUIStore();
+const workflowDocumentStore = injectWorkflowDocumentStore();
 const profile = computed(() => getBlocklyEditorProfile(props.profileId));
 const editorContainer = ref<HTMLDivElement>();
 const javascriptPreview = ref('');
 const compileError = ref('');
 const selectedTeaching = ref<TeachingAnnotation>();
+const selectedSourceExample = ref<SourceExampleId>(SOURCE_EXAMPLES[0].id);
+const sourceCode = ref<string>(SOURCE_EXAMPLES[0].source);
+const teacherIntent = ref<string>(SOURCE_EXAMPLES[0].teacherIntent);
+const sourceImportState = ref<SourceImportState>('idle');
+const sourceImportError = ref('');
+const missingOperation = ref<BlocklySourceMissingOperationResponse>();
 let workspace: BlocklyWorkspace | undefined;
 let blockly: Awaited<ReturnType<typeof loadBlocklyModule>> | undefined;
 let adapter: BlocklyEditorAdapter | undefined;
@@ -31,8 +72,11 @@ let isSynchronizing = false;
 let resizeObserver: ResizeObserver | undefined;
 let editorRevision = 0;
 let isComponentMounted = false;
+let previousWorkflowFragmentNodeRefs: ReadonlySet<string> | undefined;
 
 const isCapabilityAppearance = computed(() => profile.value.appearance === 'capability');
+const supportsSourceImport = computed(() => profile.value.id === 'data-transform');
+const isSourceImporting = computed(() => sourceImportState.value !== 'idle');
 const modeVisual = computed(() => profile.value.copy);
 const compileStatus = computed(() =>
 	compileError.value ? '等待修正' : javascriptPreview.value ? '实时同步' : '准备就绪',
@@ -104,6 +148,65 @@ function disposeEditor() {
 	if (!currentWorkspace) return;
 	currentWorkspace.removeChangeListener(handleWorkspaceChange);
 	currentWorkspace.dispose();
+}
+
+function selectSourceExample(value: unknown) {
+	if (typeof value !== 'string') return;
+	const example = SOURCE_EXAMPLES.find((candidate) => candidate.id === value);
+	if (!example) return;
+	selectedSourceExample.value = example.id;
+	sourceCode.value = example.source;
+	teacherIntent.value = example.teacherIntent;
+	missingOperation.value = undefined;
+	sourceImportError.value = '';
+}
+
+async function requestSourceConversion(generateMissingOperation: boolean) {
+	if (!supportsSourceImport.value || isSourceImporting.value) return;
+	if (!sourceCode.value.trim()) {
+		sourceImportError.value = '请先输入需要转换的 TypeScript。';
+		return;
+	}
+
+	sourceImportState.value = generateMissingOperation ? 'generating' : 'converting';
+	sourceImportError.value = '';
+	if (!generateMissingOperation) missingOperation.value = undefined;
+
+	try {
+		const trimmedTeacherIntent = teacherIntent.value.trim();
+		const response = await convertBlocklySource(rootStore.restApiContext, {
+			source: sourceCode.value,
+			currentBlocklyPayload: props.modelValue,
+			generateMissingOperation,
+			...(trimmedTeacherIntent ? { teacherIntent: trimmedTeacherIntent } : {}),
+		});
+		if (response.status === 'missing-operation') {
+			missingOperation.value = response;
+			return;
+		}
+
+		missingOperation.value = undefined;
+		emit('update:modelValue', response.blocklyPayload);
+		replaceWorkflowWithFragment(
+			workflowDocumentStore.value,
+			response.workflowFragment,
+			previousWorkflowFragmentNodeRefs,
+		);
+		previousWorkflowFragmentNodeRefs = new Set(
+			response.workflowFragment.nodes.map((node) => node.nodeRef),
+		);
+		uiStore.markStateDirty();
+	} catch (error) {
+		sourceImportError.value = getSourceImportError(error);
+	} finally {
+		sourceImportState.value = 'idle';
+	}
+}
+
+function getSourceImportError(error: unknown): string {
+	if (error instanceof Error && error.message.trim()) return error.message;
+	if (typeof error === 'string' && error.trim()) return error;
+	return '转换失败，请重新操作。';
 }
 
 function loadModelValue(value: string) {
@@ -274,6 +377,105 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 				</span>
 			</li>
 		</ol>
+
+		<form
+			v-if="supportsSourceImport"
+			:class="$style.sourceImporter"
+			data-test-id="blockly-source-importer"
+			@submit.prevent="requestSourceConversion(false)"
+		>
+			<div :class="$style.importHeading">
+				<div>
+					<N8nText tag="h4" size="small" bold>TypeScript 转双画布</N8nText>
+					<N8nText tag="p" size="small">
+						选择示例或粘贴代码；普通语句直接转换，未知函数可现场生成积木。
+					</N8nText>
+				</div>
+				<span :class="$style.panelState">源码入口</span>
+			</div>
+			<div :class="$style.importGrid">
+				<label :class="$style.importField">
+					<span :class="$style.fieldLabel">示例程序</span>
+					<N8nSelect
+						:model-value="selectedSourceExample"
+						:disabled="isReadOnly || isSourceImporting"
+						:teleported="false"
+						data-test-id="blockly-source-example"
+						@update:model-value="selectSourceExample"
+					>
+						<N8nOption
+							v-for="example in SOURCE_EXAMPLES"
+							:key="example.id"
+							:value="example.id"
+							:label="example.label"
+						/>
+					</N8nSelect>
+				</label>
+				<label :class="$style.importField">
+					<span :class="$style.fieldLabel">教师意图（选填）</span>
+					<N8nInput
+						v-model="teacherIntent"
+						:disabled="isReadOnly || isSourceImporting"
+						autocomplete="off"
+						placeholder="例如：将成绩限制在 0 到 100 之间"
+						data-test-id="blockly-teacher-intent"
+					/>
+				</label>
+			</div>
+			<label :class="[$style.importField, $style.sourceField]">
+				<span :class="$style.fieldLabel">TypeScript 源码</span>
+				<N8nInput
+					v-model="sourceCode"
+					type="textarea"
+					:rows="8"
+					:disabled="isReadOnly || isSourceImporting"
+					autocomplete="off"
+					:spellcheck="false"
+					data-test-id="blockly-source-input"
+				/>
+			</label>
+			<div :class="$style.importActions">
+				<N8nButton
+					type="submit"
+					variant="solid"
+					size="medium"
+					:loading="sourceImportState === 'converting'"
+					:disabled="isReadOnly || !sourceCode.trim() || sourceImportState === 'generating'"
+					data-test-id="blockly-source-convert"
+				>
+					转换为双画布
+				</N8nButton>
+				<N8nText tag="span" size="small"> 转换完成后，下方积木工作区会自动加载最新结果。 </N8nText>
+			</div>
+		</form>
+
+		<section
+			v-if="missingOperation"
+			:class="$style.missingOperation"
+			data-test-id="blockly-missing-operation"
+		>
+			<div :class="$style.missingCopy">
+				<N8nText tag="h4" size="small" bold>发现缺少函数模块</N8nText>
+				<N8nText tag="p" size="small">{{ missingOperation.message }}</N8nText>
+				<span :class="$style.operationSignature">
+					{{ `${missingOperation.qualifiedName} / ${missingOperation.arity} 个参数` }}
+				</span>
+			</div>
+			<N8nButton
+				type="button"
+				variant="solid"
+				size="medium"
+				:loading="sourceImportState === 'generating'"
+				:disabled="isReadOnly || sourceImportState === 'converting'"
+				data-test-id="blockly-ai-generate"
+				@click="requestSourceConversion(true)"
+			>
+				AI 生成模块
+			</N8nButton>
+		</section>
+		<N8nNotice v-if="sourceImportError" type="warning" data-test-id="blockly-source-error">
+			{{ sourceImportError }}
+		</N8nNotice>
 
 		<div :class="$style.editorGrid">
 			<section :class="$style.blockPanel">
@@ -557,6 +759,91 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 	text-overflow: ellipsis;
 	white-space: nowrap;
 }
+
+.sourceImporter {
+	display: flex;
+	flex-direction: column;
+	gap: var(--spacing--sm);
+	padding: var(--spacing--sm);
+	border: var(--border-width) var(--border-style) var(--border-color--subtle);
+	border-radius: var(--radius--lg);
+	background: var(--background--surface);
+	box-shadow: var(--shadow--2xs);
+}
+
+.importHeading,
+.importActions,
+.missingOperation {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--spacing--sm);
+}
+
+.importHeading > div,
+.missingCopy {
+	display: flex;
+	min-width: 0;
+	flex-direction: column;
+	gap: var(--spacing--3xs);
+}
+
+.importHeading p,
+.missingCopy p {
+	margin: 0;
+	color: var(--text-color--subtle);
+}
+
+.importGrid {
+	display: grid;
+	grid-template-columns: minmax(12rem, 0.4fr) minmax(0, 1fr);
+	gap: var(--spacing--sm);
+}
+
+.importField {
+	display: flex;
+	min-width: 0;
+	flex-direction: column;
+	gap: var(--spacing--3xs);
+}
+
+.fieldLabel {
+	color: var(--text-color);
+	font-size: var(--font-size--xs);
+	font-weight: var(--font-weight--bold);
+}
+
+.sourceField :global(textarea) {
+	font-family: var(--font-family--monospace);
+	line-height: var(--line-height--lg);
+}
+
+.importActions {
+	justify-content: flex-start;
+	flex-wrap: wrap;
+}
+
+.importActions span {
+	color: var(--text-color--subtle);
+}
+
+.missingOperation {
+	padding: var(--spacing--sm);
+	border: var(--border-width) var(--border-style) var(--blockly-editor--accent);
+	border-radius: var(--radius--lg);
+	background: var(--blockly-editor--accent-soft);
+}
+
+.operationSignature {
+	align-self: flex-start;
+	padding: var(--spacing--4xs) var(--spacing--2xs);
+	border-radius: var(--radius--sm);
+	color: var(--blockly-editor--accent-text);
+	background: var(--background--surface);
+	font-family: var(--font-family--monospace);
+	font-size: var(--font-size--xs);
+}
+
 .editorGrid {
 	display: grid;
 	grid-template-columns: minmax(0, 1.65fr) minmax(20rem, 0.85fr);
@@ -808,8 +1095,18 @@ type BlocklyRuntime = Awaited<ReturnType<typeof loadBlocklyModule>>;
 	}
 
 	.modeLine,
-	.panelHeading {
+	.panelHeading,
+	.importHeading,
+	.missingOperation {
 		align-items: flex-start;
+	}
+
+	.importGrid {
+		grid-template-columns: minmax(0, 1fr);
+	}
+
+	.missingOperation {
+		flex-direction: column;
 	}
 
 	.learningPath {

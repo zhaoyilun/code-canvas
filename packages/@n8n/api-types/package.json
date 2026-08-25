@@ -35,6 +35,7 @@
     "zod": "catalog:"
   },
   "dependencies": {
+    "@n8n/dual-canvas-core": "workspace:*",
     "@n8n_io/ai-assistant-sdk": "catalog:",
     "n8n-workflow": "workspace:*",
     "xss": "catalog:",

@@ -1,0 +1,123 @@
+{
+  "id": "education-interactive-dual-canvas-demo-v1",
+  "name": "Education — Interactive Dual Canvas Demo",
+  "active": false,
+  "settings": {},
+  "nodes": [
+    {
+      "id": "node-4c720e54-3b42-5201-b1bf-ff6826175b50",
+      "name": "Start",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        240,
+        300
+      ],
+      "parameters": {}
+    },
+    {
+      "id": "input-7f214697-8748-5814-b464-f64a9c4df985",
+      "name": "Seed numeric input",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        500,
+        300
+      ],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {
+              "id": "input-price",
+              "name": "price",
+              "type": "number",
+              "value": 12.5
+            },
+            {
+              "id": "input-quantity",
+              "name": "quantity",
+              "type": "number",
+              "value": 4
+            },
+            {
+              "id": "input-score",
+              "name": "score",
+              "type": "number",
+              "value": 125
+            }
+          ]
+        }
+      }
+    },
+    {
+      "id": "node-a226cae5-466f-5012-a2e1-fbcc297a8e3d",
+      "name": "Numeric calculation",
+      "type": "n8n-nodes-blockly-code.blocklyCode",
+      "typeVersion": 1,
+      "position": [
+        760,
+        300
+      ],
+      "parameters": {
+        "blocklyPayload": "{\"schemaVersion\":3,\"operationCatalog\":{\"apiVersion\":1,\"modules\":[]},\"workspace\":{\"blocks\":{\"languageVersion\":0,\"blocks\":[{\"type\":\"n8n_transform_item\",\"id\":\"logic-62b19c73-f98f-5ab3-92d8-1426297c4538\",\"x\":24,\"y\":24,\"fields\":{\"MODE\":\"EMPTY\"},\"inputs\":{\"STATEMENTS\":{\"block\":{\"type\":\"n8n_set_field\",\"id\":\"logic-550689da-b616-51a9-a0ce-d556e21976b7\",\"data\":\"{\\\"stepRef\\\":\\\"step.3.1.set\\\",\\\"source\\\":{\\\"sourceRef\\\":\\\"source.generic-snippet.numeric-calculation\\\",\\\"start\\\":{\\\"line\\\":3,\\\"column\\\":1,\\\"offset\\\":49},\\\"end\\\":{\\\"line\\\":3,\\\"column\\\":71,\\\"offset\\\":119}}}\",\"fields\":{\"KEY\":\"total\"},\"inputs\":{\"VALUE\":{\"block\":{\"type\":\"math_arithmetic\",\"id\":\"logic-b2cbbe04-9d8f-52e4-b0b4-7c608f6d2cc1\",\"fields\":{\"OP\":\"ADD\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"math_arithmetic\",\"id\":\"logic-51471cb9-e4e0-5061-a6e6-a0c0d3e23ebe\",\"fields\":{\"OP\":\"MULTIPLY\"},\"inputs\":{\"A\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-db6223dd-71e1-535e-a3ac-6b9142f927bc\",\"fields\":{\"PATH\":\"price\"}}},\"B\":{\"block\":{\"type\":\"n8n_get_field\",\"id\":\"logic-3fa36f94-9b6e-5df5-86fa-351148784035\",\"fields\":{\"PATH\":\"quantity\"}}}}}},\"B\":{\"block\":{\"type\":\"math_number\",\"id\":\"logic-ca06819e-0a65-53bb-9774-5e3e85db8dde\",\"fields\":{\"NUM\":2}}}}}}}}}}}]}},\"javascript\":\"const output = {};\\noutput[\\\"total\\\"] = ((($json?.[\\\"price\\\"] ?? null) * ($json?.[\\\"quantity\\\"] ?? null)) + 2);\\nreturn { json: output };\\n\"}"
+      }
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Seed numeric input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Seed numeric input": {
+      "main": [
+        [
+          {
+            "node": "Numeric calculation",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "meta": {
+    "visualProgramming": {
+      "schemaVersion": 1,
+      "profileId": "education-interactive-dual-canvas",
+      "displayName": "通用代码双画布课堂",
+      "brand": "n8n Blockly 教学",
+      "stages": [
+        {
+          "id": "input",
+          "label": "输入",
+          "nodeTypes": [
+            "n8n-nodes-base.manualTrigger",
+            "n8n-nodes-base.set"
+          ]
+        },
+        {
+          "id": "dual-canvas",
+          "label": "双画布",
+          "nodeTypes": [
+            "n8n-nodes-blockly-code.blocklyCode"
+          ]
+        },
+        {
+          "id": "run",
+          "label": "运行",
+          "nodeTypes": [
+            "n8n-nodes-blockly-code.blocklyCode"
+          ]
+        }
+      ]
+    }
+  }
+}

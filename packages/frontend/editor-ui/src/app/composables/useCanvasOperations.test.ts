@@ -17,6 +17,7 @@ import type { AddedNode, INodeUi, IWorkflowDb, WorkflowDataWithTemplateId } from
 import type { IExecutionResponse } from '@/features/execution/executions/executions.types';
 import type { ICredentialsResponse } from '@/features/credentials/credentials.types';
 import type { IWorkflowTemplate, IWorkflowTemplateNode } from '@n8n/rest-api-client/api/templates';
+import type { WorkflowDataUpdate, WorkflowMetadata } from '@n8n/rest-api-client/api/workflows';
 import {
 	AddConnectionCommand,
 	AddNodeGroupCommand,
@@ -5728,6 +5729,86 @@ describe('useCanvasOperations', () => {
 			await canvasOperations.importWorkflowData(workflowDataWithName, 'file');
 
 			expect(setNameSpy).toHaveBeenCalledWith('Test Workflow Name');
+		});
+
+		it('should merge only visual programming metadata from an imported workflow file', async () => {
+			const uiStore = mockedStore(useUIStore);
+			vi.mocked(workflowDocumentStoreInstance.createWorkflowObject).mockReturnValue({
+				nodes: {},
+				connections: {},
+				connectionsBySourceNode: {},
+				renameNode: vi.fn(),
+			} as unknown as Workflow);
+			const visualProgramming = {
+				schemaVersion: 1,
+				profileId: 'education-interactive-dual-canvas',
+				displayName: '通用代码双画布课堂',
+				stages: [{ id: 'logic', label: '逻辑', nodeTypes: ['blocklyCode'] }],
+			};
+			const workflowDataWithVisualProgramming: WorkflowDataUpdate & {
+				meta: WorkflowMetadata & { visualProgramming: typeof visualProgramming };
+			} = {
+				nodes: [],
+				connections: {},
+				meta: {
+					instanceId: 'source-instance',
+					templateId: 'source-template',
+					visualProgramming,
+				},
+			};
+
+			const canvasOperations = useCanvasOperations();
+			const result = await canvasOperations.importWorkflowData(
+				workflowDataWithVisualProgramming,
+				'file',
+			);
+
+			expect(useToast().showError).not.toHaveBeenCalled();
+			expect(result).toBe(workflowDataWithVisualProgramming);
+			expect(workflowDocumentStoreInstance.addToMeta).toHaveBeenCalledOnce();
+			expect(workflowDocumentStoreInstance.addToMeta).toHaveBeenCalledWith({
+				visualProgramming,
+			});
+			expect(workflowDocumentStoreInstance.setMeta).not.toHaveBeenCalled();
+			expect(workflowDocumentStoreInstance.addToMeta).not.toHaveBeenCalledWith(
+				expect.objectContaining({ instanceId: 'source-instance' }),
+			);
+			expect(workflowDocumentStoreInstance.addToMeta).not.toHaveBeenCalledWith(
+				expect.objectContaining({ templateId: 'source-template' }),
+			);
+			expect(uiStore.markStateDirty).toHaveBeenCalledWith('metadata');
+		});
+
+		it('should leave workflow metadata unchanged when an imported file has no visual profile', async () => {
+			const uiStore = mockedStore(useUIStore);
+			vi.mocked(workflowDocumentStoreInstance.createWorkflowObject).mockReturnValue({
+				nodes: {},
+				connections: {},
+				connectionsBySourceNode: {},
+				renameNode: vi.fn(),
+			} as unknown as Workflow);
+			const canvasOperations = useCanvasOperations();
+
+			const result = await canvasOperations.importWorkflowData(
+				{
+					nodes: [],
+					connections: {},
+					meta: { instanceId: 'source-instance', templateId: 'source-template' },
+				},
+				'file',
+			);
+
+			expect(result).toEqual(
+				expect.objectContaining({
+					nodes: [],
+					connections: {},
+					meta: { instanceId: 'source-instance', templateId: 'source-template' },
+				}),
+			);
+			expect(useToast().showError).not.toHaveBeenCalled();
+			expect(workflowDocumentStoreInstance.addToMeta).not.toHaveBeenCalled();
+			expect(workflowDocumentStoreInstance.setMeta).not.toHaveBeenCalled();
+			expect(uiStore.markStateDirty).not.toHaveBeenCalledWith('metadata');
 		});
 
 		it('should not crash when importing nodes that exceed maxNodes limit', async () => {

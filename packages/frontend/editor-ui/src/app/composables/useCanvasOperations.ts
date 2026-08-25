@@ -16,7 +16,11 @@ import type { IExecutionResponse } from '@/features/execution/executions/executi
 import type { IUsedCredential } from '@/features/credentials/credentials.types';
 import type { ITag } from '@n8n/rest-api-client/api/tags';
 import type { IWorkflowTemplate } from '@n8n/rest-api-client/api/templates';
-import type { WorkflowData, WorkflowDataUpdate } from '@n8n/rest-api-client/api/workflows';
+import type {
+	WorkflowData,
+	WorkflowDataUpdate,
+	WorkflowMetadata,
+} from '@n8n/rest-api-client/api/workflows';
 import {
 	type CanvasConnectionReplacement,
 	createInputConnectionHandle,
@@ -173,6 +177,10 @@ import { serializeNode } from '@/app/utils/nodes/nodeTransforms';
 
 type AddNodeData = Partial<INodeUi> & {
 	type: string;
+};
+
+type WorkflowMetadataWithVisualProgramming = WorkflowMetadata & {
+	visualProgramming: unknown;
 };
 
 type AddNodeDataWithTypeVersion = AddNodeData & {
@@ -3148,6 +3156,20 @@ export function useCanvasOperations() {
 
 			if (workflowData.name) {
 				workflowDocumentStore.value.setName(workflowData.name);
+				if (setStateDirty) {
+					uiStore.markStateDirty('metadata');
+				}
+			}
+
+			const importedVisualProgramming =
+				source === 'file' && workflowData.meta && 'visualProgramming' in workflowData.meta
+					? workflowData.meta.visualProgramming
+					: undefined;
+			if (importedVisualProgramming !== undefined) {
+				const metaPatch: WorkflowMetadataWithVisualProgramming = {
+					visualProgramming: importedVisualProgramming,
+				};
+				workflowDocumentStore.value.addToMeta(metaPatch);
 				if (setStateDirty) {
 					uiStore.markStateDirty('metadata');
 				}

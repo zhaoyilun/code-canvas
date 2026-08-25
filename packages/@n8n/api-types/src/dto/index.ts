@@ -1,5 +1,12 @@
 export { GetNodeTypesByIdentifierRequestDto } from './node-types/get-node-types-by-identifier.dto';
 
+export {
+	ConvertBlocklySourceRequestDto,
+	type BlocklySourceMissingOperationResponse,
+	type BlocklySourceReadyResponse,
+	type ConvertBlocklySourceResponse,
+} from './blockly/convert-blockly-source.dto';
+
 export { AiAskRequestDto } from './ai/ai-ask-request.dto';
 export { AiChatRequestDto } from './ai/ai-chat-request.dto';
 export {
