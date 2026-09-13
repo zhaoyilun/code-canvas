@@ -1,13 +1,13 @@
-# CodeCanvas — 代码双画布教学平台
+# CodeCanvas — 代码双画布转换器
 
-> CodeCanvas 把代码转换为同一份中间表示，并同步呈现 Blockly 逻辑画布与 n8n 执行画布，让学习者看懂代码、操作逻辑并观察真实运行结果。设备适配、硬件通信和具体机器人产品位于插件或硬件交付边界内实现。以下为 n8n 运行引擎的原始 README。
+> CodeCanvas 把代码转换为同一份中间表示，并同步呈现 Blockly 逻辑画布与 n8n 执行画布，两张画布共享稳定标识与源码位置映射。设备适配、硬件通信和具体机器人产品位于插件或硬件交付边界内实现。以下为 n8n 运行引擎的原始 README。
 
 ## 项目仓库
 
 - GitHub：[`zhaoyilun/code-canvas`](https://github.com/zhaoyilun/code-canvas)
 - Git 远程地址：`https://github.com/zhaoyilun/code-canvas.git`
 - 运行引擎上游：[`n8n-io/n8n`](https://github.com/n8n-io/n8n)
-- 教学演示说明：[双画布演示运行手册](docs/education/demo-runbook.md)
+- 运行手册：[双画布运行手册](docs/education/demo-runbook.md)
 - 可导入示例：[复合双画布工作流](docs/education/examples/interactive-dual-canvas-demo.workflow.json)
 
 ```bash
@@ -19,7 +19,7 @@ git clone https://github.com/zhaoyilun/code-canvas.git
 | 层级 | 作用 | 入口 |
 | --- | --- | --- |
 | **双画布核心** | 定义版本化 IR、能力目录、执行计划、映射、诊断和 Plugin SDK；核心保持领域无关 | `packages/@n8n/dual-canvas-core/` |
-| **TypeScript 导入器** | 将受支持的 JavaScript、TypeScript、ArkTS 教学子集转换为 IR、Blockly 工作区和 n8n 工作流片段 | `packages/@n8n/dual-canvas-typescript-importer/` |
+| **TypeScript 导入器** | 将受支持的 JavaScript、TypeScript、ArkTS 子集转换为 IR、Blockly 工作区和 n8n 工作流片段 | `packages/@n8n/dual-canvas-typescript-importer/` |
 | **Blockly Data Transform** | 用 Blockly 编辑逐项数据变换；运行时从工作区重新编译，代码预览只用于解释 | `custom-nodes/n8n-nodes-blockly-code/`、`packages/@n8n/blockly-data-transform/` |
 | **通用能力计划编辑器** | 按能力目录组织可视化计划，不在宿主中固化某个设备领域 | `packages/@n8n/blockly-capability-plan/` |
 
