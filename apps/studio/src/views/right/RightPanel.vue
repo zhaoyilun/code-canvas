@@ -1,26 +1,26 @@
 <script setup lang="ts">
 /**
- * 右栏 = **虚拟设备**（上）+ **代码 / 任务 JSON**（下，tab 切换）。
+ * 右栏 = **虚拟设备**（上，占大头）+ **代码 / 任务 JSON**（下，tab 切换）。
  *
- * 为什么上半要大：虚拟设备是这台机器「长什么样、什么状态」的位置——将来要放真的 3D
- * 或状态图，那一块得先有地方。所以它拿掉了一半以上（`flex` 5:4，约 55%），
- * 下半块留给「这份声明是什么」的两种看法。
+ * 为什么上半要大：虚拟设备那块现在装的是**真的 3D 设备**——`@codecanvas/robot3d` 的执行器
+ * 挂在 `<VirtualDevicePanel>` 里（画面、执行、步骤日志都在它里面）。3D 是这一栏里最吃地方的东西，
+ * 所以它拿掉七成以上（`flex` 8:3），下半块只留「这份声明是什么」的两种看法够用的高度。
  *
  * 为什么下半是 tab 而不是再分一块：代码与任务 JSON 是**同一件事的两种看法**
  * （编译产物 / 还原出来的输入），并排摆会把两块都压扁。tab 让当前看的那一份拿到整块高度。
- * 代码面板的内容一个字没改，只是从「固定常驻」变成 tab 里的一个（spec §4.1 的编译产物）。
  *
- * 上面那块现在**如实为空**：虚拟表示要显示一台真实设备的状态，设备没连上就没有可显示的东西。
- * 唯一能显示的是**已经登记在册的设备**（名字、是真机还是仿真、它的目录、以及那份目录的出处——
- * 这些都在 `shell/devices.ts` 与 `@codecanvas/capabilities` 里，是真的），以及入口带当前选的是哪一台。
- * 不画占位假数据，也不写「即将上线」。
+ * 设备**事实**那几行（名字、真机还是仿真、目录、能力数、出处）仍在 `VirtualDevicePanel` 里：
+ * 「选的是哪一台」和「它能不能跑 3D」是同一个问题的两半，拆成两个组件只会让两边各存一份判断。
+ *
+ * 右栏自身的宽度在 `theme.css` 的 `--cc-right-w` 上（3D 那块要 ≥420 宽才立得住），
+ * 组件里不写死像素。
  */
 import { computed, ref } from 'vue';
-import { ROBOFRAME_SO101_CATALOG, ROBOFRAME_SO101_PROVENANCE } from '@codecanvas/capabilities';
-import IconBase from '../../shell/IconBase.vue';
 import { useStudioDevices } from '../../shell/devices';
+import { useStudioDocument } from '../../state/document';
 import { CodePanel } from '../code-panel';
 import { TaskJsonPanel } from './task-json';
+import VirtualDevicePanel from './VirtualDevicePanel.vue';
 
 type RightTab = 'code' | 'json';
 
@@ -32,28 +32,11 @@ const TABS = [
 const activeTab = ref<RightTab>('code');
 
 const devices = useStudioDevices();
+const doc = useStudioDocument();
 /** 选中的是**设备**（名字 + 真机/仿真 + 目录 + 任务格式），不再只是一个目录。 */
 const selectedDevice = computed(() => devices.selectedDevice.value);
-const selectedCatalog = computed(() => devices.selectedCatalog.value);
-const capabilityCount = computed(() => selectedCatalog.value?.capabilities.length ?? 0);
-const primitiveCount = computed(() => selectedCatalog.value?.primitives.length ?? 0);
-/** 仿真还是真机：设备表里写着的事实，界面上照实说，不靠设备名里的括号让人自己猜。 */
-const deviceKind = computed(() => (selectedDevice.value === null ? '' : selectedDevice.value.virtual ? '仿真' : '真机'));
-
-/**
- * 目录的出处**只在拿到真实上游数据时才说**。
- *
- * SO-101 那份是 `tools/import-roboframe/import.mjs` 从上游仓库机械转出来的，`provenance` 里记着
- * 是哪一次 commit——这是「真实数据」四个字的凭据。一期那份是示意（一期协议没有「怎么做」的信息），
- * 没有出处可报。按 `catalogRef` 认，认不着就不显示：编一个出处比不显示更坏。
- */
-const provenance = computed(() =>
-	selectedCatalog.value?.catalogRef === ROBOFRAME_SO101_CATALOG.catalogRef
-		? ROBOFRAME_SO101_PROVENANCE
-		: null,
-);
-/** commit 全串太长，界面上取前 8 位（与 git 的短号一致，能对上就是能对上）。 */
-const shortCommit = computed(() => (provenance.value === null ? '' : provenance.value.commit.slice(0, 8)));
+/** 还原成技能计划用的尺子：声明**出生时**那把（没导入过时退到当前设备，那种情况下是空状态）。 */
+const declarationFormatRef = computed(() => doc.declarationFormatRef.value);
 
 /** 左右方向键在 tab 之间走——tablist 的常规键位，不额外造一套。 */
 function moveTab(event: KeyboardEvent, step: number): void {
@@ -66,59 +49,16 @@ function moveTab(event: KeyboardEvent, step: number): void {
 
 <template>
 	<section class="right-panel" data-testid="right-panel">
-		<!-- 虚拟设备：拿掉一半以上高度，给将来的 3D / 状态图留地方 -->
-		<section class="device" data-testid="virtual-device">
-			<header class="panel-header">
-				<IconBase name="device" :size="20" />
-				<span class="panel-title">虚拟设备</span>
-				<span class="panel-tag" data-testid="virtual-device-tag">设备层未接入</span>
-			</header>
-
-			<div class="device-body" data-testid="virtual-device-note">
-				<!-- 这几行是真的：设备在册、目录存在，且入口带上选的就是它。 -->
-				<dl v-if="selectedDevice !== null" class="device-facts" data-testid="virtual-device-facts">
-					<div class="fact-row">
-						<dt class="fact-name">当前设备</dt>
-						<dd class="fact-value" data-testid="virtual-device-name">
-							{{ selectedDevice.label }}
-						</dd>
-					</div>
-					<div class="fact-row">
-						<dt class="fact-name">真机 / 仿真</dt>
-						<dd class="fact-value" data-testid="virtual-device-sim">{{ deviceKind }}</dd>
-					</div>
-					<div class="fact-row">
-						<dt class="fact-name">目录</dt>
-						<dd class="fact-value fact-mono" data-testid="virtual-device-catalog-ref">
-							{{ selectedCatalog?.catalogRef }} · {{ selectedCatalog?.revisionRef }}
-						</dd>
-					</div>
-					<div class="fact-row">
-						<dt class="fact-name">目录里的动作</dt>
-						<dd class="fact-value fact-mono">
-							{{ capabilityCount }} 个能力 · {{ primitiveCount }} 个原语
-						</dd>
-					</div>
-					<!-- 出处只在拿到真实上游数据时才有一行（一期那份是示意，没有出处可报）。 -->
-					<div v-if="provenance !== null" class="fact-row">
-						<dt class="fact-name">出处</dt>
-						<dd
-							class="fact-value fact-mono fact-quiet"
-							data-testid="virtual-device-provenance"
-						>
-							上游 {{ provenance.branch }}@{{ shortCommit }}
-						</dd>
-					</div>
-				</dl>
-
-				<p class="panel-text">
-					上面几行是设备与目录里的事实（能力目录由设备侧提供）。这里将来放的是同一台设备的
-					虚拟表示——它当前的状态，以及它报出来的能力。设备层还没接上，没有设备可表示，
-					所以除了目录之外这块是空着的：不画占位图，也不给假状态。
-				</p>
-				<p class="panel-footnote">后置：设备协议定稿、设备层接上之后才有内容</p>
-			</div>
-		</section>
+		<!--
+			虚拟设备：拿掉大头，3D 画面在里面。
+			`key` 绑设备引用：换设备时让这个组件整块重建，旧的 3D 在 `onBeforeUnmount` 里 dispose，
+			新的在 `onMounted` 里挂——不把「设备迁移」这件事塞进组件内部当状态机。
+		-->
+		<VirtualDevicePanel
+			:key="selectedDevice?.deviceRef ?? 'none'"
+			:device="selectedDevice"
+			:format-ref="declarationFormatRef"
+		/>
 
 		<!-- 下半块：同一件事的两种看法，tab 切换 -->
 		<section class="inspector">
@@ -165,119 +105,17 @@ function moveTab(event: KeyboardEvent, step: number): void {
 }
 
 /*
- * 虚拟设备：占右栏的 5/9（≈55%，去掉 tab 条之后约 52%）——「至少一半以上」那一档。
- * 用 flex-grow 的比例而不是 max-height 封顶：两块的分界是稳定的，内容多少都不改变比例，
- * 各自内部滚动（min-height: 0 是滚动生效的前提）。
+ * 下半块。tab 条定高，面板吃满剩下的。
+ *
+ * `flex-basis: 0` + `min-height`：块高按内容**至少**要这么多（tab 条 + 220px 面板），
+ * 有富余时上下块按 8:3 分。上一版只写比例（`flex: 3 1 0`），在 900px 高的窗口里
+ * 下面这块被压到 209px——比面板自己的下限还矮，于是面板只能自己滚，那是「保底不够用」。
  */
-.device {
-	display: flex;
-	flex-direction: column;
-	flex: 5 1 0;
-	min-height: 0;
-	border-bottom: 1px solid var(--cc-line);
-}
-
-.panel-header {
-	display: flex;
-	align-items: center;
-	gap: var(--cc-space-2);
-	flex: 0 0 auto;
-	padding: var(--cc-space-3) var(--cc-space-4);
-	color: var(--cc-text-dim);
-	border-bottom: 1px solid var(--cc-line);
-}
-
-.panel-title {
-	font-size: var(--cc-fs-md);
-	font-weight: 600;
-	color: var(--cc-text);
-}
-
-.panel-tag {
-	margin-left: auto;
-	padding: 2px var(--cc-space-2);
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-xs);
-	letter-spacing: 0.06em;
-	color: var(--cc-text-faint);
-	background: var(--cc-surface-sunken);
-	border: 1px solid var(--cc-line-strong);
-	border-radius: var(--cc-radius-sm);
-}
-
-.device-body {
-	display: flex;
-	flex-direction: column;
-	gap: var(--cc-space-3);
-	flex: 1 1 auto;
-	min-height: 0;
-	padding: var(--cc-space-3) var(--cc-space-4);
-	overflow-y: auto;
-}
-
-/* 目录事实：名字与读数分居两端，跟流程卡片的参数行同一套排版语言。 */
-.device-facts {
-	display: flex;
-	flex-direction: column;
-	gap: var(--cc-space-1);
-	margin: 0;
-}
-
-.fact-row {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: var(--cc-space-2);
-	padding: 2px var(--cc-space-2);
-	background: var(--cc-surface-sunken);
-	border: 1px solid var(--cc-line);
-	border-radius: var(--cc-radius-sm);
-}
-
-.fact-name {
-	font-size: var(--cc-fs-sm);
-	color: var(--cc-text-dim);
-}
-
-.fact-value {
-	margin: 0;
-	font-size: var(--cc-fs-sm);
-	color: var(--cc-text);
-	text-align: right;
-	overflow-wrap: anywhere;
-}
-
-.fact-mono {
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-accent);
-}
-
-/* 出处是一行小字：它是凭据，不是读数——说清「数据从哪来」就够了，不必抢目录那几行的注意力。 */
-.fact-quiet {
-	color: var(--cc-text-faint);
-}
-
-.panel-text {
-	margin: 0;
-	font-size: var(--cc-fs-sm);
-	line-height: 1.6;
-	color: var(--cc-text-dim);
-}
-
-.panel-footnote {
-	margin: 0;
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-text-faint);
-}
-
-/* 下半块：4/9。tab 条定高，面板吃满剩下的。 */
 .inspector {
 	display: flex;
 	flex-direction: column;
-	flex: 4 1 0;
-	min-height: 0;
+	flex: 3.25 1 0;
+	min-height: calc(var(--cc-tabs-h) + 232px);
 }
 
 .inspector-tabs {

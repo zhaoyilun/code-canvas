@@ -15,6 +15,7 @@
     "@codecanvas/capabilities": "workspace:*",
     "@codecanvas/code-render": "workspace:*",
     "@codecanvas/contracts": "workspace:*",
+    "@codecanvas/robot3d": "workspace:*",
     "@codecanvas/task-import": "workspace:*",
     "blockly": "^12.5.1",
     "vue": "^3.5.43"

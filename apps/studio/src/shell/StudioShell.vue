@@ -1,6 +1,10 @@
 <script setup lang="ts">
 /**
- * 固定分区外壳：顶部品牌条 + 输入带 → 三栏（积木 / 流程 / 右栏）→ 底部状态条。
+ * 固定分区外壳：顶部品牌条 + 输入带 → 三栏（积木 / 流程 / 右栏）。
+ *
+ * 原本底下还有一条状态条（六段流水线 + RUN / STOP 占位），整块已去掉：
+ * 那三段可达的段位与两个按钮都只是标签与占位，本阶段不执行任何东西，留着反而像功能。
+ * 去掉后不留空底栏——空容器会带出一条没人要的分隔线。
  *
  * 这里**没有 tab**：三栏是同时可见的固定布局，不存在「切下面显示什么」这回事，
  * 所以既没有 tab 条也没有图标栏——不摆点了没用的控件。
@@ -10,23 +14,17 @@
  * 三栏之间留 `--cc-col-gap` 的空隙：那片空隙是**连线的过道**（见下一条），
  * 线从一栏边缘出来、横穿空隙、贴到下一栏元素的边缘上——紧贴的 grid 里线会压在内容上。
  */
-import { ref } from 'vue';
-import StatusBar from './StatusBar.vue';
 import TaskInputBand from './TaskInputBand.vue';
-import { FIRST_REACHABLE_STAGE } from './stages';
 import BlocklyView from '../views/blockly/BlocklyView.vue';
 import FlowView from '../views/flow/FlowView.vue';
 import RightPanel from '../views/right/RightPanel.vue';
 import { LinkOverlay } from '../views/mapping';
-
-const currentStage = ref<string>(FIRST_REACHABLE_STAGE);
 </script>
 
 <template>
 	<div class="shell">
 		<header class="topbar">
 			<span class="brand">CodeCanvas</span>
-			<span class="brand-sub">STUDIO</span>
 		</header>
 		<TaskInputBand />
 		<div class="studio-body">
@@ -50,7 +48,6 @@ const currentStage = ref<string>(FIRST_REACHABLE_STAGE);
 				<LinkOverlay />
 			</main>
 		</div>
-		<StatusBar :current-stage="currentStage" @select-stage="currentStage = $event" />
 	</div>
 </template>
 
@@ -79,12 +76,6 @@ const currentStage = ref<string>(FIRST_REACHABLE_STAGE);
 	font-weight: 650;
 	letter-spacing: 0.01em;
 	color: var(--cc-text);
-}
-
-.brand-sub {
-	font-size: var(--cc-fs-xs);
-	letter-spacing: 0.18em;
-	color: var(--cc-accent-dim);
 }
 
 .studio-body {
@@ -135,10 +126,15 @@ const currentStage = ref<string>(FIRST_REACHABLE_STAGE);
  *
  * ⚠ 空隙进了这条退化路径的宽度账：三栏 + 两条空隙要一起算。
  * 空隙这里收到 16px——窄窗下每一像素都该给栏，线照画，只是过道窄一点。
+ *
+ * ⚠ 右栏的下限是**按内容定的**，不再是一个可以随便压的数：它上半是 3D 画面
+ * （`views/right/VirtualDevicePanel.vue`），扣掉面板内边距后画面要 ≥420 宽才看得清机械臂。
+ * 所以这里给 440px 而不是旧的 320px——压到 320 那会儿，右栏里还没有真东西可看。
+ * 上限仍走 `--cc-right-w`：宽屏下不跟着长，多余的宽度给两张画布。
  */
 @media (max-width: 1400px) {
 	.workspace {
-		grid-template-columns: minmax(300px, 1fr) minmax(300px, 1fr) 320px;
+		grid-template-columns: minmax(300px, 1fr) minmax(300px, 1fr) minmax(440px, var(--cc-right-w));
 		gap: 0 var(--cc-col-gap-tight);
 		overflow-x: auto;
 	}

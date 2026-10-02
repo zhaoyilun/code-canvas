@@ -1,0 +1,391 @@
+/*
+ * 设计令牌**照抄** apps/studio/src/shell/theme.css 的 --cc-* 一套，两个应用看起来才是一个产品。
+ *
+ * 摆明这是复制：正确的做法是把令牌抽成 packages/theme 由两边引用，
+ * 那要动 studio，本次没做（见 README「已知欠账」）。改动 studio 的令牌时记得同步这里。
+ */
+:root {
+	--cc-bg: #070d14;
+	--cc-surface: #0d1724;
+	--cc-surface-raised: #14212f;
+	--cc-surface-sunken: #050a10;
+	--cc-stage: #0a121d;
+	--cc-line: #1c2c3d;
+	--cc-line-strong: #27405a;
+	--cc-text: #e2eef8;
+	--cc-text-dim: #8ba3ba;
+	--cc-text-faint: #5b7488;
+	--cc-accent: #2ee6d6;
+	--cc-accent-strong: #6ff5e8;
+	--cc-accent-dim: #14867e;
+	--cc-accent-veil: rgba(46, 230, 214, 0.12);
+	--cc-accent-glow: rgba(46, 230, 214, 0.28);
+	--cc-danger: #ef4d4d;
+	--cc-danger-veil: rgba(239, 77, 77, 0.12);
+	--cc-disabled: #38505f;
+	--cc-disabled-text: #46606f;
+	--cc-radius-sm: 6px;
+	--cc-radius: 10px;
+	--cc-radius-lg: 14px;
+	--cc-space-1: 4px;
+	--cc-space-2: 8px;
+	--cc-space-3: 12px;
+	--cc-space-4: 16px;
+	--cc-space-5: 24px;
+	--cc-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', sans-serif;
+	--cc-font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+	--cc-fs-xs: 10px;
+	--cc-fs-sm: 11px;
+	--cc-fs-md: 13px;
+	--cc-fs-lg: 15px;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+	height: 100%;
+	margin: 0;
+}
+
+body {
+	background: var(--cc-bg);
+	color: var(--cc-text);
+	font: var(--cc-fs-md) / 1.5 var(--cc-font);
+	overflow: hidden;
+}
+
+#app {
+	display: grid;
+	grid-template-columns: 300px minmax(0, 1fr) 360px;
+}
+
+/*
+ * 栅格项默认 min-width: auto：面板里的长串（目录引用、轨迹模板 JSON）会把列撑开，
+ * 画布反被挤没。归零之后长串自己换行，三栏宽度才是定死的。
+ *
+ * `min-height: 0` 是这次挂载入口带出来的一条：`#stage` 里那张 canvas 是 `mountVirtualDevice`
+ * **运行时新建**的，它的 `height: 100%` 会去回问栅格行要多高，而行高又由内容（= canvas 自身）
+ * 决定——这个环会让行一路涨到十万像素级，canvas 跟着涨，画面直接看不见。
+ * 给栅格项一个可以让步的最小高度，环就断在这里，行的 1fr 才真的等于「剩下的高度」。
+ */
+#catalog,
+#run,
+#stage {
+	min-width: 0;
+	min-height: 0;
+}
+
+.cc-panel {
+	background: var(--cc-surface);
+	border-right: 1px solid var(--cc-line);
+	overflow: auto;
+	padding: var(--cc-space-3);
+	display: flex;
+	flex-direction: column;
+	gap: var(--cc-space-3);
+}
+
+#run {
+	border-right: none;
+	border-left: 1px solid var(--cc-line);
+}
+
+#stage {
+	position: relative;
+	background: var(--cc-stage);
+	min-width: 0;
+}
+
+#canvas {
+	display: block;
+	width: 100%;
+	height: 100%;
+}
+
+#hud {
+	position: absolute;
+	/* 靠右下：机械臂在画面中间，HUD 压上去就看不见手在做什么了 */
+	right: var(--cc-space-3);
+	bottom: var(--cc-space-3);
+	max-width: 56%;
+	max-height: 40%;
+	border: 1px solid var(--cc-line);
+	border-radius: var(--cc-radius);
+	background: color-mix(in srgb, var(--cc-surface) 88%, transparent);
+	backdrop-filter: blur(8px);
+	padding: var(--cc-space-2) var(--cc-space-3);
+}
+
+.cc-title {
+	font-size: var(--cc-fs-sm);
+	letter-spacing: 0.14em;
+	text-transform: uppercase;
+	color: var(--cc-text-faint);
+	margin: 0;
+}
+
+.cc-robot {
+	font-size: var(--cc-fs-lg);
+	font-weight: 600;
+	margin: 0;
+}
+
+.cc-meta {
+	font: var(--cc-fs-xs) / 1.6 var(--cc-font-mono);
+	color: var(--cc-text-faint);
+	word-break: break-all;
+	margin: 0;
+}
+
+.cc-group {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cc-space-1);
+}
+
+.cc-group > h3 {
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-faint);
+	margin: var(--cc-space-2) 0 var(--cc-space-1);
+	letter-spacing: 0.1em;
+}
+
+.cc-cap {
+	display: flex;
+	flex-direction: column;
+	align-items: flex-start;
+	gap: 2px;
+	padding: var(--cc-space-2);
+	border: 1px solid transparent;
+	border-radius: var(--cc-radius-sm);
+	background: var(--cc-surface-raised);
+	color: var(--cc-text);
+	font: inherit;
+	text-align: left;
+	cursor: pointer;
+}
+
+.cc-cap:hover {
+	border-color: var(--cc-line-strong);
+}
+
+.cc-cap[aria-pressed='true'] {
+	border-color: var(--cc-accent);
+	background: var(--cc-accent-veil);
+}
+
+.cc-cap b {
+	font-weight: 600;
+}
+
+.cc-cap span {
+	font: var(--cc-fs-xs) / 1.4 var(--cc-font-mono);
+	color: var(--cc-text-faint);
+}
+
+.cc-actions {
+	display: flex;
+	gap: var(--cc-space-2);
+}
+
+.cc-btn {
+	flex: 1;
+	padding: var(--cc-space-2) var(--cc-space-3);
+	border-radius: var(--cc-radius-sm);
+	border: 1px solid var(--cc-line-strong);
+	background: var(--cc-surface-raised);
+	color: var(--cc-text);
+	font: inherit;
+	cursor: pointer;
+}
+
+.cc-btn:hover:not(:disabled) {
+	border-color: var(--cc-accent);
+}
+
+.cc-btn-primary {
+	background: var(--cc-accent);
+	border-color: var(--cc-accent-strong);
+	color: var(--cc-surface-sunken);
+	font-weight: 600;
+}
+
+.cc-btn:disabled {
+	background: var(--cc-surface-raised);
+	border-color: var(--cc-line);
+	color: var(--cc-disabled-text);
+	cursor: not-allowed;
+}
+
+.cc-field {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cc-space-1);
+}
+
+.cc-field label {
+	font: var(--cc-fs-xs) var(--cc-font-mono);
+	color: var(--cc-text-dim);
+}
+
+.cc-field input {
+	background: var(--cc-surface-sunken);
+	border: 1px solid var(--cc-line);
+	border-radius: var(--cc-radius-sm);
+	color: var(--cc-text);
+	font: var(--cc-fs-md) var(--cc-font-mono);
+	padding: var(--cc-space-2);
+}
+
+.cc-body {
+	border: 1px solid var(--cc-line);
+	border-radius: var(--cc-radius-sm);
+	background: var(--cc-surface-sunken);
+	padding: var(--cc-space-2);
+	font: var(--cc-fs-xs) / 1.6 var(--cc-font-mono);
+	color: var(--cc-text-dim);
+	white-space: pre-wrap;
+	word-break: break-all;
+	max-height: 220px;
+	overflow: auto;
+	margin: 0;
+}
+
+.cc-step {
+	display: grid;
+	grid-template-columns: 22px 1fr auto;
+	gap: var(--cc-space-2);
+	padding: var(--cc-space-1) 0;
+	border-bottom: 1px dashed var(--cc-line);
+	font: var(--cc-fs-xs) / 1.5 var(--cc-font-mono);
+}
+
+.cc-step:last-child {
+	border-bottom: none;
+}
+
+.cc-step-idx {
+	color: var(--cc-text-faint);
+}
+
+.cc-step-main {
+	min-width: 0;
+	word-break: break-all;
+}
+
+.cc-step-main em {
+	font-style: normal;
+	color: var(--cc-text-dim);
+}
+
+.cc-step-state {
+	text-transform: uppercase;
+	letter-spacing: 0.06em;
+}
+
+.cc-step-state[data-state='running'] {
+	color: var(--cc-accent);
+}
+.cc-step-state[data-state='done'] {
+	color: var(--cc-text-dim);
+}
+.cc-step-state[data-state='skipped'] {
+	color: var(--cc-text-faint);
+}
+.cc-step-state[data-state='refused'],
+.cc-step-state[data-state='failed'] {
+	color: var(--cc-danger);
+}
+
+.cc-note {
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-faint);
+	margin: 0;
+}
+
+.cc-hudline {
+	font: var(--cc-fs-xs) / 1.6 var(--cc-font-mono);
+	color: var(--cc-text-dim);
+	margin: 0;
+}
+
+.cc-json {
+	width: 100%;
+	background: var(--cc-surface-sunken);
+	border: 1px solid var(--cc-line);
+	border-radius: var(--cc-radius-sm);
+	color: var(--cc-text);
+	font: var(--cc-fs-xs) / 1.5 var(--cc-font-mono);
+	padding: var(--cc-space-2);
+	resize: vertical;
+}
+
+.cc-diag:empty {
+	display: none;
+}
+
+.cc-diag-row {
+	margin: 0;
+	font: var(--cc-fs-xs) / 1.5 var(--cc-font-mono);
+	word-break: break-all;
+}
+
+.cc-diag-row[data-severity='error'] {
+	color: var(--cc-danger);
+}
+
+.cc-diag-row[data-severity='warning'] {
+	color: #ffb648;
+}
+
+.cc-plan-step {
+	margin-top: var(--cc-space-2);
+	padding: var(--cc-space-1) var(--cc-space-2);
+	border-left: 2px solid var(--cc-accent-dim);
+	background: var(--cc-accent-veil);
+	font: var(--cc-fs-xs) / 1.5 var(--cc-font-mono);
+	color: var(--cc-accent-strong);
+}
+
+.cc-plan-step[data-state='failed'] {
+	border-left-color: var(--cc-danger);
+	background: var(--cc-danger-veil);
+	color: var(--cc-danger);
+}
+
+.cc-note-row {
+	font: var(--cc-fs-xs) / 1.5 var(--cc-font-mono);
+	color: var(--cc-text-faint);
+	padding: var(--cc-space-1) 0;
+}
+
+.cc-queue {
+	display: flex;
+	align-items: center;
+	gap: var(--cc-space-2);
+	padding: var(--cc-space-1) var(--cc-space-2);
+	border: 1px solid var(--cc-line);
+	border-radius: var(--cc-radius-sm);
+	background: var(--cc-surface-sunken);
+}
+
+.cc-queue[data-state='busy'] {
+	border-color: var(--cc-accent-dim);
+}
+
+.cc-queue-text {
+	font: var(--cc-fs-xs) / 1.5 var(--cc-font-mono);
+	color: var(--cc-text-dim);
+	min-width: 0;
+	word-break: break-all;
+}
+
+.cc-btn-mini {
+	flex: none;
+	padding: 2px var(--cc-space-2);
+	font-size: var(--cc-fs-xs);
+}
