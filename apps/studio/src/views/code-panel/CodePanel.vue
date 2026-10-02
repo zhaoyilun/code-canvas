@@ -21,15 +21,29 @@
  * 页脚那几句更是把已经看得见的事又说了一遍。
  */
 import { computed, nextTick, ref, watch } from 'vue';
-import { renderImplementation, type RenderedLine } from '@codecanvas/code-render';
+import { renderImplementation, type RenderedImplementation, type RenderedLine } from '@codecanvas/code-render';
 import { useStudioDocument } from '../../state/document';
 import { stepNumbersOf } from '../shared/sequence-badge';
 import SequenceBadge from '../shared/SequenceBadge.vue';
+import { PLAN_LAYER_NOTE, lineNodeId, planProgramOf, type PlanLine, type PlanProgram } from './branch-code';
 
 const doc = useStudioDocument();
 
+/**
+ * 面板上显示的两种东西：某个能力的**实现**，或一个分支节点的**计划层代码**。
+ * 两者行的形状一样（`RenderedLine`），所以渲染与联动只有一套；
+ * 判据不同、也不许混——见 `branch-code.ts` 的文件头。
+ */
+type PanelProgram = RenderedImplementation | PlanProgram;
+
 /** 当前显示的模块：选中的那个；没选中时退到第一个（不改共享状态）。 */
 const activeNode = computed(() => doc.selectedNode.value ?? doc.nodes.value[0] ?? null);
+
+/** 选中的是分支节点 → 它的计划层代码；否则 null（退回能力实现那条路）。 */
+const planProgram = computed<PlanProgram | null>(() => {
+	const node = activeNode.value;
+	return node === null ? null : planProgramOf(doc.declaration.value, node.id);
+});
 
 /*
  * 目录从 store 取（`declarationCatalog`），**不在这里写死哪一份**：
@@ -38,7 +52,8 @@ const activeNode = computed(() => doc.selectedNode.value ?? doc.nodes.value[0] ?
  * 其实是面板拿错了尺子（真机上「技能计划」四个字也永远显示不出来）。
  * 目录还没定下来（没导入过、也没选中设备）时按「没有模块」渲染，不编一份实现出来。
  */
-const program = computed(() =>
+const program = computed<PanelProgram>(() =>
+	planProgram.value ??
 	renderImplementation({
 		node: activeNode.value,
 		catalog: doc.declarationCatalog.value,
@@ -57,11 +72,14 @@ const warnings = computed(() => program.value.diagnostics);
 
 const scroller = ref<HTMLElement | null>(null);
 
+/** 面板上的一行：实现行与计划行是同一个形状（`PlanLine` 只是多带一个 `nodeId`）。 */
+type PanelLine = RenderedLine | PlanLine;
+
 /** 当前选中的是**哪一条顶层语句**（0 基）；null = 没选。 */
 const selectedStep = computed(() => doc.selectedStepIndex.value);
 
 /** 这一行属不属于当前选中步：属于就整行高亮（一个 `if` 的每一行都亮）。 */
-const isSelectedStep = (line: RenderedLine): boolean =>
+const isSelectedStep = (line: PanelLine): boolean =>
 	selectedStep.value !== null && line.stepIndex === selectedStep.value;
 
 /**
@@ -79,27 +97,53 @@ const stepHeads = computed(() => {
 	return heads;
 });
 
-const isStepHead = (line: RenderedLine): boolean => stepHeads.value.has(line.line);
+const isStepHead = (line: PanelLine): boolean => stepHeads.value.has(line.line);
 
 /**
- * 点一行 = 选中它所属的那一步。再点同一行收回选中（不然就没法「取消选中」了）——
- * 收回只动 `selectedStepIndex`，不动节点选中。
+ * 可点的行：有步可选（实现行），或有节点可进（计划行——臂里那一行说的是另一步）。
+ * 注释行一律不可点：它不占步骤号，点了也没有「第几步」可选。
  */
-const pickLine = (line: RenderedLine): void => {
+const isClickable = (line: PanelLine): boolean =>
+	line.kind !== 'comment' && (line.stepIndex !== null || lineNodeId(line) !== null);
+
+/**
+ * 点一行：实现行选中它所属的那一步；**计划行说的是另一步**时改成进那一步——
+ * 选中那一行指的那个节点，面板随之换成它的实现（这就是「从计划看进实现」那条路）。
+ * 再点同一行收回选中（不然就没法「取消选中」了）——收回只动 `selectedStepIndex`，不动节点选中。
+ */
+const pickLine = (line: PanelLine): void => {
+	const target = lineNodeId(line);
+	if (target !== null && target !== doc.selectedNodeId.value) {
+		doc.select(target);
+		return;
+	}
 	if (line.stepIndex === null) return;
 	doc.selectStep(selectedStep.value === line.stepIndex ? null : line.stepIndex);
 };
 
 /** 键盘走同一件事：回车/空格选中那一行所属的步。 */
-const pickLineByKey = (event: KeyboardEvent, line: RenderedLine): void => {
+const pickLineByKey = (event: KeyboardEvent, line: PanelLine): void => {
 	if (event.key !== 'Enter' && event.key !== ' ') return;
 	event.preventDefault();
 	pickLine(line);
 };
 
 /** 读屏用的整行说明：缩进说成「缩进 n 档」，比四个空格好懂。 */
-const describeLine = (line: RenderedLine): string =>
+const describeLine = (line: PanelLine): string =>
 	line.indent === 0 ? line.text.trim() : `缩进 ${line.indent} 档：${line.text.trim()}`;
+
+/** 这一行的锚点（跨栏连线只认 `data-node-id`）：计划行是它自己那一步，实现行是这个模块。 */
+const lineAnchorId = (line: PanelLine): string | undefined => lineNodeId(line) ?? activeNode.value?.id ?? undefined;
+
+/** 行的提示：进另一步的行说「进哪一步」，其余说「选中第几步」。 */
+const lineTitle = (line: PanelLine): string | undefined => {
+	const target = lineNodeId(line);
+	if (target !== null && target !== doc.selectedNodeId.value) {
+		return `进这一步的实现：${doc.nodes.value.find((node) => node.id === target)?.name ?? target}`;
+	}
+	if (line.stepIndex === null) return undefined;
+	return `选中第 ${line.stepIndex + 1} 步（${describeLine(line)}）`;
+};
 
 // 换模块时视线回到实现的第一行，并清掉上一步的选中（跨模块谈「第几步」没有意义，
 // 这半件事 `state/document.ts` 的 `select()` 已经做了；这里只负责滚动）。
@@ -139,6 +183,12 @@ watch(selectedStep, async (index) => {
 		</div>
 
 		<template v-else>
+			<!--
+				分支节点显示的是**计划层**的代码（臂里是技能调用），与「某个能力的实现」是两件事。
+				这句话必须说出来：不说的话，`close_gripper_skill()` 看着就像这个模块的实现。
+			-->
+			<p v-if="planProgram !== null" class="cp-plan-note" data-testid="code-plan-note">{{ PLAN_LAYER_NOTE }}</p>
+
 			<div v-if="program.lines.length === 0" class="cp-empty" data-testid="code-empty-module">
 				<p>还没有选中模块——在流程画布或积木里点一个，这里显示它的实现。</p>
 			</div>
@@ -150,6 +200,7 @@ watch(selectedStep, async (index) => {
 						（4 个空格一档，见 code-render 的 INDENT_UNIT），所以复制出去的文本与看到的一致。
 						`data-step` 是**顶层**语句下标（0 基，界面联动只认它）；
 						`data-path` 是精确树路径（`1.then.0`），高亮到具体那一行。
+						计划行另外带一个 `data-node-id`（它说的那一步）：点它 = 进那一步的实现。
 					-->
 					<li
 						v-for="line in program.lines"
@@ -161,7 +212,7 @@ watch(selectedStep, async (index) => {
 							'is-branch': line.kind === 'if' || line.kind === 'else',
 							'is-unsupported': line.kind === 'unsupported',
 							'is-selected': isSelectedStep(line),
-							'is-clickable': line.stepIndex !== null,
+							'is-clickable': isClickable(line),
 						}"
 						:data-line="line.line"
 						:data-kind="line.kind"
@@ -171,10 +222,10 @@ watch(selectedStep, async (index) => {
 						:data-step-head="isStepHead(line) ? (line.stepIndex ?? undefined) : undefined"
 						:data-primitive="line.primitiveRef ?? undefined"
 						:data-selected="isSelectedStep(line) ? 'true' : 'false'"
-						:data-node-id="activeNode?.id ?? undefined"
-						:role="line.stepIndex !== null ? 'button' : undefined"
-						:tabindex="line.stepIndex !== null ? 0 : undefined"
-						:title="line.stepIndex !== null ? `选中第 ${line.stepIndex + 1} 步（${describeLine(line)}）` : undefined"
+						:data-node-id="lineAnchorId(line)"
+						:role="isClickable(line) ? 'button' : undefined"
+						:tabindex="isClickable(line) ? 0 : undefined"
+						:title="lineTitle(line)"
 						@click="pickLine(line)"
 						@keydown="pickLineByKey($event, line)"
 					>
@@ -244,6 +295,20 @@ watch(selectedStep, async (index) => {
 	padding: var(--cc-space-5);
 	color: var(--cc-text-dim);
 	text-align: center;
+}
+
+/*
+ * 计划层那句注记（只在选中分支节点时出现）：它说的是「你看的是哪一层的代码」，
+ * 所以跟代码放在一起、用强调色的面把它和下面的代码分开，但**不占代码的高度**（一行，可折行）。
+ */
+.cp-plan-note {
+	margin: 0;
+	padding: var(--cc-space-2) var(--cc-space-4);
+	font-size: var(--cc-fs-sm);
+	line-height: 1.6;
+	color: var(--cc-accent-strong);
+	background: var(--cc-accent-veil);
+	border-bottom: 1px solid var(--cc-accent-dim);
 }
 
 .cp-code {

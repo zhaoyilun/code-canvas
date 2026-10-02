@@ -4,36 +4,25 @@
  *
  * 只回答三件事：顺序是什么、每步的参数落在什么范围里、哪一步带着诊断。
  * **这里没有一条写回路径**——真相只从 `useStudioDocument()` 读，改参数是积木画布的事。
+ *
+ * 「顺序」不是声明里 `nodes` 的排列，而是 **`connections` 推出来的图**（见 `plan-structure.ts`）：
+ * 链头（没有入边的节点）出发走到底，遇到分支节点就展开成两条臂（then / else），
+ * 各自缩进一级；`main[2]` 的后续回到分支所在那一层的缩进继续。
+ * 从前按声明顺序竖排一列，是因为那时只可能是一条链；分支一来，「声明顺序」与「执行的顺序」
+ * 就不是同一件事了（臂里的节点在声明里排在分支后面，但它们在画布上属于臂里）。
+ *
+ * 图推不出来时（悬空引用、环、多个链头）不崩、也不静默少画：能画的照画，
+ * 问题摆在画布顶上那一条里（`flow-graph-diagnostics`）。
  */
 import { computed } from 'vue';
-import { LIMIT_LABELS, type Diagnostic, type NumericLimitName, type WorkflowNode } from '@codecanvas/contracts';
+import { LIMIT_LABELS, type NumericLimitName } from '@codecanvas/contracts';
 import { useStudioDocument } from '../../state/document';
-import SequenceBadge from '../shared/SequenceBadge.vue';
-import {
-	actionLabel,
-	declarationLimits,
-	nodeAction,
-	nodeActionName,
-	nodeDiagnostics,
-	nodeStepId,
-	summarizeNodeParameters,
-	type NodeLimits,
-	type ParameterSummary,
-} from './summary';
+import FlowSequence from './FlowSequence.vue';
+import { declarationLimits, type NodeLimits } from './summary';
+import { planStructureOf } from './plan-structure';
+import { buildFlowRows } from './rows';
 
 const store = useStudioDocument();
-
-interface FlowCard {
-	readonly node: WorkflowNode;
-	readonly index: number;
-	/** 卡头显示的中文动作名。 */
-	readonly action: string;
-	/** 协议里的动作名，只进 `data-action`。 */
-	readonly actionName: string;
-	readonly stepId: string | null;
-	readonly parameters: readonly ParameterSummary[];
-	readonly diagnostics: readonly Diagnostic[];
-}
 
 const limits = computed<NodeLimits>(() => declarationLimits(store.declaration.value?.meta));
 
@@ -47,27 +36,13 @@ const limitChips = computed<readonly string[]>(() =>
 		.map(([name, value]) => `${LIMIT_LABELS[name]} ≤ ${String(value)}`),
 );
 
-const cards = computed<readonly FlowCard[]>(() =>
-	store.nodes.value.map((node, index) => ({
-		node,
-		index,
-		action: actionLabel(node),
-		actionName: nodeActionName(node),
-		stepId: nodeStepId(node),
-		parameters: summarizeNodeParameters(node.parameters, nodeAction(node), limits.value),
-		diagnostics: nodeDiagnostics(store.diagnostics.value, node, index),
-	})),
-);
+/** 这份声明的结构：一列步骤，分支自带两条臂。 */
+const plan = computed(() => planStructureOf(store.declaration.value));
 
-/** 卡片之间的连线：链上两个节点之间恰好一条，所以是 `节点数 - 1`。 */
-const connectorCount = computed(() => Math.max(cards.value.length - 1, 0));
+const rows = computed(() => buildFlowRows(plan.value.steps, store.diagnostics.value, limits.value));
 
-/** 选中是共享状态，不在这里另存一份：点卡片只把 nodeId 推给真相。 */
-function selectNode(nodeId: string): void {
-	store.select(nodeId);
-}
-
-const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === nodeId;
+/** 图本身的问题（悬空引用、环、多个链头）。有才画那一条，没有时一个像素都不多。 */
+const graphDiagnostics = computed(() => plan.value.diagnostics);
 </script>
 
 <template>
@@ -80,85 +55,25 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 		</header>
 
 		<div v-if="store.hasDeclaration.value" class="flow-body" data-testid="flow-canvas">
+			<!--
+				图自己的毛病：说出来，但**不影响画**。下面能画的部分照画，
+				所以这条在画布顶上，而不是把整块替换成一句错误。
+			-->
+			<ul v-if="graphDiagnostics.length > 0" class="flow-graph" data-testid="flow-graph-diagnostics">
+				<li
+					v-for="diagnostic in graphDiagnostics"
+					:key="`${diagnostic.code}:${diagnostic.nodeId ?? ''}`"
+					class="graph-row"
+					:data-code="diagnostic.code"
+					:data-node-id="diagnostic.nodeId ?? undefined"
+				>
+					<span class="graph-code">{{ diagnostic.code }}</span>
+					{{ diagnostic.message }}
+				</li>
+			</ul>
+
 			<div class="flow-chain" role="list" data-testid="flow-chain">
-				<template v-for="(card, position) in cards" :key="`${card.node.id}:${position}`">
-					<article
-						class="node-card"
-						:class="{ selected: isSelected(card.node.id) }"
-						role="listitem"
-						tabindex="0"
-						data-testid="flow-node-card"
-						:data-node-id="card.node.id"
-						:data-selected="isSelected(card.node.id) ? 'true' : 'false'"
-						:aria-current="isSelected(card.node.id) ? 'true' : undefined"
-						@click="selectNode(card.node.id)"
-						@keydown.enter.prevent="selectNode(card.node.id)"
-						@keydown.space.prevent="selectNode(card.node.id)"
-					>
-						<header class="card-head">
-							<!--
-								序号徽标（M3）：`card.index + 1` 就是这一步在声明里的序数，
-								与积木上的徽标、代码行的徽标是同一个数（三处同一个组件/同一组变量）。
-							-->
-							<SequenceBadge
-								:index="card.index + 1"
-								:active="isSelected(card.node.id)"
-								testid="flow-node-index"
-							/>
-							<div class="card-headings">
-								<span class="card-action" data-testid="flow-node-action" :data-action="card.actionName">
-									{{ card.action }}
-								</span>
-								<span v-if="card.stepId !== null" class="card-step" data-testid="flow-node-step">
-									{{ card.stepId }}
-								</span>
-							</div>
-						</header>
-
-						<dl v-if="card.parameters.length > 0" class="card-params" data-testid="flow-node-params">
-							<!--
-								一行一个字段，但宽了就并成多列：名字在左、读数与范围在右。
-								显示的是描述表里的中文名，`data-param` 留协议字段名给机器对账。
-							-->
-							<div v-for="parameter in card.parameters" :key="parameter.name" class="param-row">
-								<dt class="param-name" :data-label="parameter.name" :title="`${parameter.name} · ${parameter.description}`">
-									{{ parameter.label }}
-								</dt>
-								<dd class="param-value" :class="{ missing: parameter.missing }">
-									<span class="param-number" :data-param="parameter.name" :data-value="parameter.value">
-										{{ parameter.value }}{{ parameter.unit }}
-									</span>
-									<span v-if="parameter.constraint !== ''" class="param-range">
-										{{ parameter.constraint }}
-									</span>
-								</dd>
-							</div>
-						</dl>
-						<p v-else class="card-params-empty">这个动作没有参数</p>
-
-						<ul v-if="card.diagnostics.length > 0" class="card-diagnostics" data-testid="flow-node-diagnostics">
-							<li
-								v-for="diagnostic in card.diagnostics"
-								:key="`${diagnostic.code}:${diagnostic.path ?? ''}`"
-								class="diagnostic"
-								:class="diagnostic.severity"
-								:title="diagnostic.path ?? ''"
-							>
-								<span class="diagnostic-code">{{ diagnostic.code }}</span>
-								{{ diagnostic.message }}
-							</li>
-						</ul>
-					</article>
-
-					<div
-						v-if="position < connectorCount"
-						class="node-connector"
-						data-testid="flow-connector"
-						aria-hidden="true"
-					>
-						<span class="connector-line" />
-					</div>
-				</template>
+				<FlowSequence :rows="rows" />
 			</div>
 		</div>
 
@@ -219,6 +134,32 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 	border-radius: var(--cc-radius);
 }
 
+/* 图的问题条：与卡片同一套语言，但用危险色的面与描边，摆在画布最上面一条。 */
+.flow-graph {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cc-space-1);
+	margin: 0;
+	padding: var(--cc-space-2) var(--cc-space-3);
+	list-style: none;
+	background: var(--cc-danger-veil);
+	border-bottom: 1px solid var(--cc-danger);
+}
+
+.graph-row {
+	font-size: var(--cc-fs-sm);
+	line-height: 1.5;
+	color: var(--cc-text);
+	overflow-wrap: anywhere;
+}
+
+.graph-code {
+	display: block;
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-danger-strong);
+}
+
 /* 自上而下的链：卡片等宽撑满中栏，一条列排版。 */
 .flow-chain {
 	display: flex;
@@ -226,198 +167,6 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 	align-items: stretch;
 	width: 100%;
 	padding: var(--cc-space-3);
-}
-
-/* 连线是定高的一小段：卡片之间的呼吸，也是那条向下的箭头。留白压到刚好，一屏才装得下几个步骤。 */
-.node-connector {
-	display: flex;
-	justify-content: center;
-	flex: 0 0 auto;
-	height: var(--cc-space-3);
-}
-
-.connector-line {
-	position: relative;
-	width: 2px;
-	height: 100%;
-	background: var(--cc-line-strong);
-}
-
-/* 箭头用两条边框转 135° 画出来（顶边 + 右边 → 尖朝下），不给这个深色画布塞第二位色。 */
-.connector-line::after {
-	position: absolute;
-	bottom: 0;
-	left: 50%;
-	width: 7px;
-	height: 7px;
-	border-top: 2px solid var(--cc-line-strong);
-	border-right: 2px solid var(--cc-line-strong);
-	content: '';
-	transform: translateX(-50%) rotate(135deg);
-}
-
-.node-card {
-	display: flex;
-	flex-direction: column;
-	gap: var(--cc-space-1);
-	flex: 0 0 auto;
-	width: 100%;
-	padding: var(--cc-space-2) var(--cc-space-3);
-	background: var(--cc-surface-raised);
-	border: 1px solid var(--cc-line);
-	border-radius: var(--cc-radius);
-	cursor: pointer;
-	transition:
-		border-color 0.15s ease,
-		box-shadow 0.15s ease;
-}
-
-.node-card:hover {
-	border-color: var(--cc-line-strong);
-}
-
-.node-card:focus-visible {
-	outline: 2px solid var(--cc-accent);
-	outline-offset: 2px;
-}
-
-/*
- * 卡片高亮（M3）：**与另外两栏同一套**——同一条强调色（`--cc-highlight`）、同一个描边粗细
- * （`--cc-highlight-border-width`）、同一个辉光，都不写字面值。
- *
- * 不直接把 border-color 改掉而是加 box-shadow 内描边：卡片本来就带 1px 边框，
- * 直接换色只是「变亮了一点」，说不上「选中」；内描边叠上去，边框仍占 1px、观感上多出一圈 2px 强调色。
- */
-.node-card.selected {
-	border-color: var(--cc-highlight);
-	box-shadow:
-		inset 0 0 0 var(--cc-highlight-border-width) var(--cc-highlight),
-		var(--cc-highlight-glow);
-}
-
-.card-head {
-	display: flex;
-	align-items: center;
-	gap: var(--cc-space-2);
-}
-
-.card-headings {
-	display: flex;
-	align-items: baseline;
-	gap: var(--cc-space-2);
-	flex: 1 1 auto;
-	min-width: 0;
-}
-
-.card-action {
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-md);
-	font-weight: 600;
-	color: var(--cc-text);
-	overflow-wrap: anywhere;
-}
-
-/* 有宽度了：动作名靠左，step_id 推到行尾，一眼能对齐着读。 */
-.card-step {
-	margin-left: auto;
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-text-faint);
-}
-
-.card-params {
-	/* 宽了就并成多列：三个参数的卡片从三行压到两行，七关节的从七行压到四行，信息一行没少。 */
-	display: grid;
-	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-	gap: var(--cc-space-1) var(--cc-space-4);
-	margin: 0;
-	padding-top: var(--cc-space-1);
-	border-top: 1px dashed var(--cc-line);
-}
-
-/* 一行一个字段：名字与读数分居两端，读数后面跟着范围标签。 */
-.param-row {
-	display: flex;
-	align-items: baseline;
-	justify-content: space-between;
-	gap: var(--cc-space-2);
-	min-width: 0;
-	padding: 1px var(--cc-space-2);
-	background: var(--cc-surface-sunken);
-	border-radius: var(--cc-radius-sm);
-}
-
-.param-name {
-	font-size: var(--cc-fs-sm);
-	color: var(--cc-text-dim);
-	min-width: 0;
-	/* 中文名很短，正常情况一行放得下；协议不认识的字段名再长也让它折行，不许顶破格子。 */
-	overflow-wrap: anywhere;
-}
-
-.param-value {
-	display: flex;
-	align-items: baseline;
-	justify-content: flex-end;
-	flex-wrap: wrap;
-	gap: var(--cc-space-2);
-	margin: 0;
-	min-width: 0;
-	text-align: right;
-}
-
-.param-number {
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-md);
-	color: var(--cc-text);
-}
-
-.param-value.missing .param-number {
-	color: var(--cc-text-faint);
-}
-
-.param-range {
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-text-faint);
-}
-
-.card-params-empty {
-	margin: 0;
-	padding-top: var(--cc-space-1);
-	font-size: var(--cc-fs-sm);
-	color: var(--cc-text-faint);
-	border-top: 1px dashed var(--cc-line);
-}
-
-.card-diagnostics {
-	display: flex;
-	flex-direction: column;
-	gap: var(--cc-space-1);
-	margin: 0;
-	padding: var(--cc-space-2);
-	list-style: none;
-	background: var(--cc-danger-veil);
-	border: 1px solid var(--cc-danger);
-	border-radius: var(--cc-radius-sm);
-}
-
-.diagnostic {
-	font-size: var(--cc-fs-sm);
-	line-height: 1.5;
-	color: var(--cc-text);
-	overflow-wrap: anywhere;
-}
-
-.diagnostic.warning {
-	color: var(--cc-text-dim);
-}
-
-.diagnostic-code {
-	display: block;
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-danger-strong);
 }
 
 .flow-empty {

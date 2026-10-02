@@ -24,26 +24,41 @@
  */
 import * as Blockly from 'blockly';
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch, type ComputedRef, type Ref } from 'vue';
-import type { CapabilityCatalog, Diagnostic, WorkflowDeclaration } from '@codecanvas/contracts';
-import { findCapability } from '@codecanvas/contracts';
+import type { CapabilityCatalog, Diagnostic, WorkflowDeclaration, WorkflowNode } from '@codecanvas/contracts';
+import { createUlidIdFactory, findCapability } from '@codecanvas/contracts';
 import {
+	ELSE_INPUT_NAME,
 	PARAMETER_EVENT_TYPES,
+	THEN_INPUT_NAME,
 	activeNodeOf,
 	capabilityRefFromParameters,
 	compileWorkspace,
+	createBlockIndex,
 	createCanvasWorkspace,
 	fitWorkspaceToContent,
 	highlightBlock,
 	paletteFromDocument,
 	renderDeclaration,
 	resolveSelection,
+	serializeBlockData,
+	stepIdFromParameters,
 	topLevelStepIndexOf,
+	truncateLiteralText,
+	type BlockIdentity,
 	type BlockIndex,
 	type ThemePalette,
 } from '@codecanvas/blockly-toolkit';
 import { DEVICES } from '../../shell/devices';
 import { findTaskFormat } from '@codecanvas/task-import';
 import { useStudioDocument } from '../../state/document';
+import {
+	branchPlanOf,
+	conditionViewOf,
+	isBranchNode,
+	planCallTextOf,
+	type PlanArm,
+	type PlanStep,
+} from '../flow/plan-structure';
 import {
 	NODE_ID_ATTRIBUTE,
 	badgeOfBlockElement,
@@ -63,7 +78,7 @@ export const NODE_TAG_ATTRIBUTE = 'data-cc-node-tag';
 /** 当前选中步的那块顶层积木上的标记（高亮语言与另外两栏同源）。 */
 export const STEP_ACTIVE_ATTRIBUTE = 'data-cc-step-active';
 
-export type CanvasStatus = 'idle' | 'synced' | 'written' | 'rejected' | 'broken' | 'failed';
+export type CanvasStatus = 'idle' | 'plan' | 'synced' | 'written' | 'rejected' | 'broken' | 'failed';
 
 export interface DiagnosticRow {
 	readonly diagnostic: Diagnostic;
@@ -84,8 +99,10 @@ export interface UseBlocklyCanvasResult {
 	readonly decoratedBlocks: Ref<readonly DecoratedBlock[]>;
 	/** 画布当前显示的模块（节点 id）与它的标题。 */
 	readonly activeNodeId: ComputedRef<string | null>;
-	/** 顶部标题：「<能力的 label> · 实现」。 */
+	/** 顶部标题：「<能力的 label> · 实现」，分支节点是「<节点名> · 计划」。 */
 	readonly moduleTitle: ComputedRef<string>;
+	/** 现在画的是不是**计划视图**（选中的是分支节点）：它只读，且「第几步」数的是计划里的步。 */
+	readonly planView: ComputedRef<boolean>;
 	/** 此刻选中的是模块内部第几步（顶层语句下标）；没选中就没有。 */
 	readonly activeStepIndex: ComputedRef<number | null>;
 	/** 此刻被点亮的积木（顶层那一步的块）。 */
@@ -111,6 +128,278 @@ function deviceCatalogs(): readonly CapabilityCatalog[] {
 	for (const device of DEVICES) byRef.set(device.catalog.catalogRef, device.catalog);
 	return [...byRef.values()];
 }
+
+// ---------------------------------------------------------------------------
+// 计划视图：选中一个**分支节点**时画什么
+// ---------------------------------------------------------------------------
+
+/**
+ * 分支节点没有 `parameters.action`，按「能力实现」那条路走只会得到一句
+ * `blockly.render.unknown_capability`——那是把「这是个判断」说成「查不到这个能力」，误导。
+ *
+ * 所以分支节点走**计划视图**：画的是这一层的判断结构——`如果 <条件> 那么 … 否则 …`，
+ * 两臂里各是臂内步骤的**计划块**（一步一块，写的就是那一步的技能调用）。
+ * 它和代码面板说的是同一件事（同一个口径的调用写法），与「某个能力的实现」是两层。
+ *
+ * 结构只读、**没有可写字段**：分支本身没有参数（它的参数只有条件，条件不是可编辑的配置），
+ * 计划块也只用只读标签写「这是哪一步」——画布在这一层没有可写的东西，就不该摆出可改的样子。
+ * 想看那一步的实现：点它的块（选中那一步，画布换成它的实现）。
+ */
+export const PLAN_BRANCH_BLOCK_TYPE = 'cc_plan_branch';
+export const PLAN_BRANCH_NO_ELSE_BLOCK_TYPE = 'cc_plan_branch_no_else';
+export const PLAN_STEP_BLOCK_TYPE = 'cc_plan_step';
+/** 分支块上那格只读的条件文字。 */
+export const PLAN_CONDITION_FIELD = 'condition';
+/** 计划块上那格只读的「哪一步」。 */
+export const PLAN_STEP_FIELD = 'step';
+/** 计划块的节点标签：进 `block.data`，选中联动靠它区分「计划块」与「实现块」。 */
+export const PLAN_BRANCH_NODE_TAG = 'plan_branch';
+export const PLAN_STEP_NODE_TAG = 'plan_step';
+
+/** 计划块是只读的，所以块色不按能力分（它不是某个能力的实现），用主题里那两档现成的色。 */
+const PLAN_BRANCH_BLOCK_STYLE = 'logic_blocks';
+const PLAN_STEP_BLOCK_STYLE = 'procedure_blocks';
+
+/**
+ * 计划块的 Blockly 定义：注册与验收读的是**同一份**。
+ *
+ * 为什么导出而不是藏在注册函数里：Blockly 把 `message0` 烘进 `init` 闭包，
+ * 注册完之后 `Blockly.Blocks[type]` 上只剩一个 `init`——**块面上那句话在运行时读不回来**。
+ * 于是「这块积木看起来是『如果…那么…否则』」这句断言只能对着定义说；
+ * 定义与注册是同一份，测试再把它和画出来的块上的字段/语句口对一遍，两边就扣上了。
+ */
+export const PLAN_BLOCK_DEFINITIONS: readonly Record<string, unknown>[] = [
+	{
+		type: PLAN_BRANCH_BLOCK_TYPE,
+		message0: '如果 %1 那么 %2 否则 %3',
+		args0: [
+			{ type: 'field_label', name: PLAN_CONDITION_FIELD, text: '' },
+			{ type: 'input_statement', name: THEN_INPUT_NAME },
+			{ type: 'input_statement', name: ELSE_INPUT_NAME },
+		],
+		previousStatement: null,
+		nextStatement: null,
+		style: PLAN_BRANCH_BLOCK_STYLE,
+		tooltip: '计划里的一条判断：条件成立走「那么」那一边，不成立走「否则」那一边（结构只读）',
+		helpUrl: '',
+	},
+	{
+		// 没有否则时**不画**那只空手，直接说没有——空着的一格会让人以为画漏了。
+		type: PLAN_BRANCH_NO_ELSE_BLOCK_TYPE,
+		message0: '如果 %1 那么 %2（没有否则）',
+		args0: [
+			{ type: 'field_label', name: PLAN_CONDITION_FIELD, text: '' },
+			{ type: 'input_statement', name: THEN_INPUT_NAME },
+		],
+		previousStatement: null,
+		nextStatement: null,
+		style: PLAN_BRANCH_BLOCK_STYLE,
+		tooltip: '计划里的一条判断：条件成立走「那么」那一边，不成立时这一步什么都不做（结构只读）',
+		helpUrl: '',
+	},
+	{
+		type: PLAN_STEP_BLOCK_TYPE,
+		message0: '%1',
+		args0: [{ type: 'field_label', name: PLAN_STEP_FIELD, text: '' }],
+		previousStatement: null,
+		nextStatement: null,
+		style: PLAN_STEP_BLOCK_STYLE,
+		tooltip: '计划里的一步：调一个技能（点它进这一步的实现）',
+		helpUrl: '',
+	},
+];
+
+/**
+ * 注册计划块。与工具包同一个幂等判据（`Blockly.Blocks[type] === undefined`）：
+ * 同一个 Blockly 实例上重复注册不会覆盖，也不用会跨测试实例漂的模块级开关。
+ */
+export const registerPlanBlocks = (): readonly string[] => {
+	const fresh = PLAN_BLOCK_DEFINITIONS.filter((definition) => Blockly.Blocks[definition['type'] as string] === undefined);
+	if (fresh.length > 0) Blockly.defineBlocksWithJsonArray([...fresh]);
+	return fresh.map((definition) => definition['type'] as string);
+};
+
+interface PlanBuildContext {
+	readonly declaration: WorkflowDeclaration;
+	readonly catalog: CapabilityCatalog | null;
+	readonly idFactory: ReturnType<typeof createUlidIdFactory>;
+	/** blockKey → blockId：与实现视图共用同一张分配表，重画时块 id 才稳定。 */
+	readonly blockIds: Map<string, string>;
+	readonly identities: BlockIdentity[];
+}
+
+const planBlockKey = (nodeId: string): string => `plan#${nodeId}`;
+
+const planBlockId = (context: PlanBuildContext, nodeId: string): string => {
+	const key = planBlockKey(nodeId);
+	const existing = context.blockIds.get(key);
+	if (existing !== undefined) return existing;
+	const allocated = context.idFactory.blockId();
+	context.blockIds.set(key, allocated);
+	return allocated;
+};
+
+/**
+ * 计划块的身份：`stepPath` 用**它在声明里的位置**（`"3"` 这种），不是实现树里的路径——
+ * 计划块不属于任何能力的实现树。于是 `stepIndex` = 声明里的第几步，
+ * 徽标上的数字与流程卡片、代码行是同一个（三处同一个数）。
+ */
+const planIdentityOf = (context: PlanBuildContext, node: WorkflowNode, nodeTag: string): BlockIdentity => {
+	const index = context.declaration.nodes.findIndex((candidate) => candidate.id === node.id);
+	const stepPath = String(index < 0 ? 0 : index);
+	return {
+		blockId: planBlockId(context, node.id),
+		nodeId: node.id,
+		stepId: stepIdFromParameters(node.parameters, node.id),
+		// 分支节点没有能力引用；写它的**节点类型**——那是个真名字，不编一个假能力顶上。
+		capabilityRef: capabilityRefFromParameters(node.parameters) ?? node.type,
+		stepPath,
+		stepIndex: topLevelStepIndexOf(stepPath) ?? 0,
+		nodeTag,
+		primitiveRef: null,
+	};
+};
+
+/** 计划块上写的字：`关闭夹爪 close_gripper_skill()`；与代码面板同一个口径（见 planCallTextOf）。 */
+const planStepText = (context: PlanBuildContext, node: WorkflowNode): string => {
+	const ref = capabilityRefFromParameters(node.parameters);
+	const label = ref === null || context.catalog === null ? null : (findCapability(context.catalog, ref)?.label ?? null);
+	const call = planCallTextOf(node);
+	const text = label === null || label === ref ? call : `${label} ${call}`;
+	// 积木是画出来的东西：参数长到读不下去时截断**并写明**，全文在 tooltip 里。
+	return truncateLiteralText(text);
+};
+
+/** 一串计划步骤 → 用 `next` 串起来的链（与工具包的 `statementChain` 同一个形状；那个没导出）。 */
+const planChainState = (
+	context: PlanBuildContext,
+	steps: readonly PlanStep[],
+): Blockly.serialization.blocks.State | null => {
+	const states = steps.map((step) => planStepState(context, step));
+	for (let index = states.length - 1; index > 0; index -= 1) {
+		const previous = states[index - 1];
+		const current = states[index];
+		if (previous === undefined || current === undefined) continue;
+		previous['next'] = { block: current };
+	}
+	return states[0] ?? null;
+};
+
+/** 一个分支节点 → 一块「如果…那么…否则…」，两臂里各自挂着臂内步骤的块（嵌套分支递归下去）。 */
+const planBranchState = (
+	context: PlanBuildContext,
+	node: WorkflowNode,
+	arms: readonly PlanArm[],
+): Blockly.serialization.blocks.State => {
+	const identity = planIdentityOf(context, node, PLAN_BRANCH_NODE_TAG);
+	context.identities.push(identity);
+
+	const thenSteps = arms.find((arm) => arm.kind === 'then')?.steps ?? [];
+	const elseSteps = arms.find((arm) => arm.kind === 'else')?.steps ?? [];
+
+	const inputs: Record<string, Blockly.serialization.blocks.ConnectionState> = {};
+	const thenHead = planChainState(context, thenSteps);
+	if (thenHead !== null) inputs[THEN_INPUT_NAME] = { block: thenHead };
+	// 没有否则：块型不一样（消息里直接写着「（没有否则）」），不是留个空格子。
+	if (elseSteps.length > 0) {
+		const elseHead = planChainState(context, elseSteps);
+		if (elseHead !== null) inputs[ELSE_INPUT_NAME] = { block: elseHead };
+	}
+
+	const condition = conditionViewOf(node);
+	const state: Blockly.serialization.blocks.State = {
+		id: identity.blockId,
+		type: elseSteps.length > 0 ? PLAN_BRANCH_BLOCK_TYPE : PLAN_BRANCH_NO_ELSE_BLOCK_TYPE,
+		data: serializeBlockData({
+			nodeId: node.id,
+			stepId: identity.stepId,
+			capabilityRef: identity.capabilityRef,
+			stepPath: identity.stepPath,
+			nodeTag: identity.nodeTag,
+			primitiveRef: null,
+		}),
+		// 块面上那一格只写条件本身：`如果` 两个字在 `message0` 里（见 `PLAN_BLOCK_DEFINITIONS`），
+		// 这里再加一次，块上就会读成「如果 如果 …」。
+		fields: { [PLAN_CONDITION_FIELD]: condition.text },
+	};
+	if (Object.keys(inputs).length > 0) state.inputs = inputs;
+	return state;
+};
+
+const planStepState = (context: PlanBuildContext, step: PlanStep): Blockly.serialization.blocks.State => {
+	if (step.isBranch) return planBranchState(context, step.node, step.arms);
+
+	const identity = planIdentityOf(context, step.node, PLAN_STEP_NODE_TAG);
+	context.identities.push(identity);
+	return {
+		id: identity.blockId,
+		type: PLAN_STEP_BLOCK_TYPE,
+		data: serializeBlockData({
+			nodeId: step.node.id,
+			stepId: identity.stepId,
+			capabilityRef: identity.capabilityRef,
+			stepPath: identity.stepPath,
+			nodeTag: identity.nodeTag,
+			primitiveRef: null,
+		}),
+		fields: { [PLAN_STEP_FIELD]: planStepText(context, step.node) },
+	};
+};
+
+export interface PlanRenderOptions {
+	readonly workspace: Blockly.Workspace;
+	readonly declaration: WorkflowDeclaration;
+	readonly catalog: CapabilityCatalog | null;
+	/** 当前选中的分支节点。 */
+	readonly branchNodeId: string;
+	readonly blockIds?: ReadonlyMap<string, string>;
+}
+
+export interface PlanRenderResult {
+	readonly index: BlockIndex;
+	readonly diagnostics: readonly Diagnostic[];
+	readonly blockCount: number;
+}
+
+/**
+ * 一个分支节点 → 工作区。调用方（`render`）已经确认它是分支节点。
+ *
+ * 返回 `null` 表示「这个节点不是分支节点」，调用方据此走能力实现那条路——
+ * 判据只有一处（`branchPlanOf` 认的是节点类型），不在这里重写一遍。
+ */
+export const renderPlanInto = (options: PlanRenderOptions): PlanRenderResult | null => {
+	const plan = branchPlanOf(options.declaration, options.branchNodeId);
+	if (plan === null) return null;
+
+	registerPlanBlocks();
+	const context: PlanBuildContext = {
+		declaration: options.declaration,
+		catalog: options.catalog,
+		idFactory: createUlidIdFactory(),
+		blockIds: new Map(options.blockIds ?? []),
+		identities: [],
+	};
+
+	options.workspace.clear();
+	const head = planBranchState(context, plan.node, plan.arms);
+	// 画布只显示这一个节点的计划，位置不来自流程画布——链自己会顺着 `next` 排。
+	head['x'] = 32;
+	head['y'] = 32;
+	Blockly.serialization.blocks.append(head, options.workspace);
+	// 结构只读：块删不掉（没有垃圾桶），字段一个都没有可写的。
+	for (const block of options.workspace.getAllBlocks(false)) block.setDeletable(false);
+
+	return {
+		index: createBlockIndex(context.identities),
+		diagnostics: plan.diagnostics.map((diagnostic) => ({
+			code: diagnostic.code,
+			severity: 'warning' as const,
+			message: diagnostic.message,
+			...(diagnostic.nodeId === undefined ? {} : { ref: diagnostic.nodeId }),
+		})),
+		blockCount: options.workspace.getAllBlocks(false).length,
+	};
+};
 
 export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 	const store = useStudioDocument();
@@ -171,6 +460,8 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 		switch (status.value) {
 			case 'idle':
 				return '还没有声明——导入一份任务 JSON，积木就会画在这里';
+			case 'plan':
+				return '计划视图：这是这一层的判断结构（只读），臂里是每一步的计划块——点它进那一步的实现';
 			case 'synced':
 				return '与声明一致';
 			case 'written':
@@ -186,8 +477,20 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 
 	const moduleTitle = computed<string>(() => {
 		if (store.declaration.value === null) return '还没有模块';
+		// 分支节点没有能力可查：它画的是**计划**（这一层的判断结构），标题就照实说「计划」。
+		const node = activeNode.value;
+		if (node !== null && isBranchNode(node)) return `${node.name} · 计划`;
 		const capability = activeCapability.value;
 		return capability === null ? '未知模块 · 实现' : `${capability.label} · 实现`;
+	});
+
+	/**
+	 * 现在画的是不是计划视图（选中的那个节点是分支节点）。
+	 * 判据只读声明（不看画布起没起来）：标题、页脚与验收在这一层就能核对。
+	 */
+	const planView = computed<boolean>(() => {
+		const node = activeNode.value;
+		return node !== null && isBranchNode(node);
 	});
 
 	/** 当前该显示哪个模块：选中的那个，没选中就是第一个（与渲染器同一份口径）。 */
@@ -326,24 +629,42 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 		}
 		rendering = true;
 		try {
-			const result = renderDeclaration({
-				workspace: current,
-				declaration,
-				catalog,
-				selectedNodeId: store.selectedNodeId.value,
-				blockIds,
-			});
-			for (const [key, blockId] of result.blockIds) blockIds.set(key, blockId);
-			blockIndex.value = result.index;
-			renderDiagnostics.value = [...result.diagnostics];
-			blockCount.value = result.index.order.length;
-			renderedNodeId = result.nodeId;
-			syncedDigest = declaration.digest;
-			status.value = writeSuspended.value ? 'broken' : 'synced';
-			Blockly.svgResize(current);
-			// 重画之后把这条实现链量一遍：按内容定一个装得下、又不会小到看不清的比例，并居中。
-			// 只在这里（以及第一次量到容器尺寸时）做——用户自己缩放/拖动过的视图不会被抢回去。
-			requestFit(current);
+			// 分支节点没有能力可查，走计划视图（见 `renderPlanInto` 的文件头）；
+			// 它不是分支节点时返回 null，接着走下面那条「能力实现」的路。
+			const candidate = activeNodeId.value;
+			const plan =
+				candidate === null
+					? null
+					: renderPlanInto({ workspace: current, declaration, catalog, branchNodeId: candidate, blockIds });
+			if (plan !== null) {
+				blockIndex.value = plan.index;
+				renderDiagnostics.value = [...plan.diagnostics];
+				blockCount.value = plan.blockCount;
+				renderedNodeId = candidate;
+				syncedDigest = declaration.digest;
+				status.value = 'plan';
+				Blockly.svgResize(current);
+				requestFit(current);
+			} else {
+				const result = renderDeclaration({
+					workspace: current,
+					declaration,
+					catalog,
+					selectedNodeId: store.selectedNodeId.value,
+					blockIds,
+				});
+				for (const [key, blockId] of result.blockIds) blockIds.set(key, blockId);
+				blockIndex.value = result.index;
+				renderDiagnostics.value = [...result.diagnostics];
+				blockCount.value = result.index.order.length;
+				renderedNodeId = result.nodeId;
+				syncedDigest = declaration.digest;
+				status.value = writeSuspended.value ? 'broken' : 'synced';
+				Blockly.svgResize(current);
+				// 重画之后把这条实现链量一遍：按内容定一个装得下、又不会小到看不清的比例，并居中。
+				// 只在这里（以及第一次量到容器尺寸时）做——用户自己缩放/拖动过的视图不会被抢回去。
+				requestFit(current);
+			}
 		} finally {
 			rendering = false;
 		}
@@ -442,8 +763,15 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 			identity.blockId === store.selectedBlockId.value &&
 			identity.stepIndex === store.selectedStepIndex.value;
 		if (already) return;
+		/*
+		 * 计划块（分支块与臂里那一步的块）说的是**计划里的第几步**，而 `selectedStepIndex` 说的是
+		 * 「当前这个模块的实现里的第几条顶层语句」——点臂里那一步会换模块，把计划的下标带过去
+		 * 就会在新模块里点亮一条根本不相干的语句。所以从计划块跳到另一步时只推节点，
+		 * 不推步号；点分支块自己（模块没换）时照旧推，它与代码面板那一行的下标是同一个。
+		 */
+		const navigation = identity.nodeTag.startsWith('plan_') && identity.nodeId !== store.selectedNodeId.value;
 		store.select(identity.nodeId, identity.blockId);
-		store.selectStep(identity.stepIndex);
+		if (!navigation) store.selectStep(identity.stepIndex);
 	}
 
 	/** store 的选中 → 画布高亮；没给 blockId 时按 nodeId 找（流程画布、代码面板点过来的那种）。 */
@@ -571,6 +899,7 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 		decoratedBlocks,
 		activeNodeId,
 		moduleTitle,
+		planView,
 		activeStepIndex,
 		highlightedBlockId,
 	};

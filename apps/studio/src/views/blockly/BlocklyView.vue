@@ -22,6 +22,7 @@ const {
 	writeSuspended,
 	selectedBlockId,
 	moduleTitle,
+	planView,
 	activeStepIndex,
 } = useBlocklyCanvas();
 
@@ -49,9 +50,14 @@ const taskName = computed(() => store.declaration.value?.name ?? '');
 				v-if="activeStepIndex !== null"
 				class="footer-hint footer-step"
 				data-testid="blockly-selected-step"
-				title="实现里的第几步（顶层语句）；点积木或点代码行都会改这一个数"
+				:data-plan="planView ? 'true' : 'false'"
+				:title="
+					planView
+						? '计划里的第几步（声明里的顺序）；点积木或点代码行都会改这一个数'
+						: '实现里的第几步（顶层语句）；点积木或点代码行都会改这一个数'
+				"
 			>
-				选中第 {{ activeStepIndex + 1 }} 步
+				选中{{ planView ? '计划' : '' }}第 {{ activeStepIndex + 1 }} 步
 			</span>
 			<span v-if="writeSuspended" class="footer-hint">画布不完整，写回已暂停</span>
 			<span v-else-if="selectedBlockId !== null" class="footer-hint" data-testid="blockly-selected">
@@ -178,6 +184,11 @@ const taskName = computed(() => store.declaration.value?.name ?? '');
 
 .write-state.written {
 	color: var(--cc-accent);
+}
+
+/* 计划视图：只读，与「已写回」区分开（那两件事不一样）。 */
+.write-state.plan {
+	color: var(--cc-accent-strong);
 }
 
 .write-state.rejected,

@@ -13,11 +13,16 @@
  * 真实目录只留冒烟断言，见 `views/catalog-smoke.test.ts`。
  */
 import { mount } from '@vue/test-utils';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeWorkflowDigest, type WorkflowDeclaration, type WorkflowNode } from '@codecanvas/contracts';
+import { TASK_BRANCH_NODE_TYPE } from '@codecanvas/task-import';
 import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import FlowView from '../flow/FlowView.vue';
+import { ARM_PARAMS_PLAN_JSON, BRANCH_PLAN_JSON, NESTED_NO_ELSE_PLAN_JSON } from '../flow/__fixtures__/branch-plan';
+import { normalizeRenderedHtml, readBaseline } from '../flow/__fixtures__/normalize-html';
 import RightPanel from '../right/RightPanel.vue';
 import CodePanel from './CodePanel.vue';
 
@@ -383,5 +388,199 @@ describe('接线：代码面板在右栏常驻（固定布局，不挑状态）'
 		const root = wrapper.get('[data-testid="right-panel"]');
 		expect(root.classes()).toContain('right-panel');
 		expect(root.find('.code-panel').exists()).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 分支节点：**计划层**的代码（臂里是技能调用），与「某个能力的实现」是两件事
+// ---------------------------------------------------------------------------
+
+/** 载入一份带分支的技能计划，并选中那个分支节点（面板就是靠共享选中切过去的）。 */
+const selectBranch = (json: string, pick: 'outer' | 'inner' = 'outer'): WorkflowNode => {
+	setSelectedDevice('so101_robot');
+	expect(doc.loadTaskJson(json)).toBe(true);
+	const current = declaration();
+	const branches = current.nodes.filter((node) => node.type === TASK_BRANCH_NODE_TYPE);
+	const branch = pick === 'inner' ? (branches[1] ?? branches[0]) : branches[0];
+	if (branch === undefined) throw new Error('这份素材里应当有分支节点');
+	doc.select(branch.id);
+	return branch;
+};
+
+describe('CodePanel · 分支节点显示的是计划层的代码', () => {
+	it('两条臂都写出来：if / 缩进的 then 臂 / else / 缩进的 else 臂', async () => {
+		selectBranch(BRANCH_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		expect(panel.get('[data-testid="code-title"]').text()).toBe('2. 分支 · 计划');
+		expect(lineTexts(panel)).toEqual([
+			'if last.success == False:',
+			'    close_gripper_skill()',
+			'else:',
+			'    open_gripper_skill()',
+		]);
+		expect(indents(panel)).toEqual(['0', '1', '0', '1']);
+		expect(panel.findAll('li.cp-line').map((line) => line.attributes('data-kind'))).toEqual([
+			'if',
+			'call',
+			'else',
+			'call',
+		]);
+		expect(stepPaths(panel)).toEqual(['0', '0.then.0', '0.else', '0.else.0']);
+		// 这一层只有一条顶层语句（那条 if），所以只有它挂步徽标
+		expect(panel.findAll('[data-testid="code-step-index"]').map((badge) => badge.text())).toEqual(['1']);
+		// 模块序号徽标仍是声明里的序数（与流程卡片同一个数）
+		expect(panel.get('[data-testid="code-node-index"]').text()).toBe('2');
+	});
+
+	it('说清这是计划层：注记在，且没有「查不到能力」那条红字', async () => {
+		selectBranch(BRANCH_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		const note = panel.get('[data-testid="code-plan-note"]');
+		expect(note.text()).toContain('计划层');
+		expect(note.text()).toContain('技能调用');
+		expect(note.text()).toContain('不是那个能力的实现');
+		// 从前这里走的是「按 action 查能力」那条路，于是分支节点显示一句「查不到能力」——
+		// 那是把「这是个判断」说成「这个能力不存在」。现在一个字都不该有。
+		expect(panel.text()).not.toContain('查不到能力');
+		expect(panel.find('[data-testid="code-warnings"]').exists()).toBe(false);
+	});
+
+	it('臂里那一步按技能名调用，技能参数照计划写出来（timeoutSec 不是技能参数，不进调用）', async () => {
+		selectBranch(ARM_PARAMS_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		expect(lineTexts(panel)).toEqual([
+			'if last.success == False:',
+			'    move_relative_ee(motion_direction="forward", motion_distance=0.03)',
+			'else:',
+			'    rotate_gripper_cw(motion_distance=90.0)',
+		]);
+		// 超时留在流程卡片上（那一步的参数摘要里有），这里不冒充技能参数
+		expect(lineTexts(panel).join('\n')).not.toContain('timeoutSec');
+	});
+
+	it('没有否则：写一行说明，且那一行是注释（不可点、不占步号）', async () => {
+		selectBranch(NESTED_NO_ELSE_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		expect(lineTexts(panel)).toEqual([
+			'if last.success == False:',
+			'    close_gripper_skill()',
+			'    if last.success == True:',
+			'        nod_yes()',
+			'    else:',
+			'        shake_no()',
+			'    # 没有否则：条件不成立时这一步什么都不做',
+		]);
+		expect(indents(panel)).toEqual(['0', '1', '1', '2', '1', '2', '1']);
+		expect(panel.findAll('li.cp-line').map((line) => line.attributes('data-kind'))).toEqual([
+			'if',
+			'call',
+			'if',
+			'call',
+			'else',
+			'call',
+			'comment',
+		]);
+		const note = panel.findAll('li.cp-line').at(-1);
+		expect(note?.attributes('tabindex')).toBeUndefined();
+		expect(note?.classes()).not.toContain('is-clickable');
+	});
+
+	it('嵌套分支自己也是一个模块：选中它，面板写的是它那一层', async () => {
+		selectBranch(NESTED_NO_ELSE_PLAN_JSON, 'inner');
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		expect(panel.get('[data-testid="code-title"]').text()).toBe('4. 分支 · 计划');
+		expect(lineTexts(panel)).toEqual([
+			'if last.success == True:',
+			'    nod_yes()',
+			'else:',
+			'    shake_no()',
+		]);
+		expect(indents(panel)).toEqual(['0', '1', '0', '1']);
+	});
+
+	it('臂里每一行写着它说的是哪一步（跨栏连线认的那个 data-node-id）', async () => {
+		const branch = selectBranch(BRANCH_PLAN_JSON);
+		const current = declaration();
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		const lines = panel.findAll('li.cp-line');
+		// 分支头两行说的是分支自己；臂里的两行各说那一步——于是流程卡片、代码行与积木说得上是同一步。
+		expect(lines.map((line) => line.attributes('data-node-id'))).toEqual([
+			branch.id,
+			current.nodes[2]?.id,
+			branch.id,
+			current.nodes[3]?.id,
+		]);
+	});
+});
+
+describe('CodePanel · 计划层与实现层的联动', () => {
+	it('点臂里那一行 → 进那一步（选中的节点换成它，面板换成它的实现）', async () => {
+		selectBranch(BRANCH_PLAN_JSON);
+		const current = declaration();
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		await panel.findAll('li.cp-line')[1]?.trigger('click');
+		await panel.vm.$nextTick();
+
+		expect(doc.selectedNodeId.value).toBe(current.nodes[2]?.id);
+		// 换到实现层：标题换成能力的中文名，那句计划层注记随之消失（两件事不混）
+		expect(panel.get('[data-testid="code-title"]').text()).toContain('实现');
+		expect(panel.find('[data-testid="code-plan-note"]').exists()).toBe(false);
+		// 选中的那一步的实现画出来了（非空）
+		expect(panel.findAll('li.cp-line').length).toBeGreaterThan(0);
+		// 「进另一步」不推步号：跨模块谈第几步没有意义
+		expect(doc.selectedStepIndex.value).toBeNull();
+	});
+
+	it('点分支头那一行 → 选中的是这一步（模块不换，整段 if 都跟着亮）', async () => {
+		const branch = selectBranch(BRANCH_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		await panel.findAll('li.cp-line')[0]?.trigger('click');
+
+		expect(doc.selectedStepIndex.value).toBe(0);
+		expect(doc.selectedNodeId.value).toBe(branch.id);
+		// 一个 if 展开的四行是同一步：一起亮
+		expect(selectedLines(panel)).toEqual([1, 2, 3, 4]);
+	});
+
+	it('从流程卡片点分支 → 面板显示它的计划层代码（共享选中的那条老路）', async () => {
+		setSelectedDevice('so101_robot');
+		expect(doc.loadTaskJson(BRANCH_PLAN_JSON)).toBe(true);
+		doc.select(null);
+		const flow = mount(FlowView);
+		const panel = mount(CodePanel);
+
+		await clickFlowCard(flow, '分支');
+
+		expect(panel.get('[data-testid="code-title"]').text()).toBe('2. 分支 · 计划');
+		expect(lineTexts(panel)[0]).toBe('if last.success == False:');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 没有分支时一个像素都不许变：与改动前那一版的渲染逐字比一遍
+// ---------------------------------------------------------------------------
+
+describe('CodePanel · 没有分支时 渲染与从前逐字相同', () => {
+	it('一期样例的第一个模块：整棵 DOM 与改动前的基准一致', () => {
+		const panel = mount(CodePanel);
+		expect(normalizeRenderedHtml(panel.html())).toBe(
+			readBaseline('src/views/code-panel/__fixtures__/code-panel-baseline.html'),
+		);
 	});
 });
