@@ -1,16 +1,55 @@
 # CodeCanvas
 
-面向设备编排的可视化编程工作台。一份声明，两个视图，一个执行器。
+面向设备编排的可视化编程工作台。选一台设备，说一句人话，看着它变成机器真会执行的代码。
 
-- 写一段代码，或者用积木搭一段逻辑，或者直接说一句自然语言
-- 同一份声明同时呈现为**积木画布**和**流程画布**
-- 跑在本地，连局域网里的设备
+- 入口：**选设备 + 一句话 → 生成任务 JSON**
+- 同一份声明同时呈现为四个视图：**流程画布** / **积木画布** / **代码面板** / **任务 JSON**
+- 流程画布上的一个模块 = 一个**能力**（函数调用点）；点开它，积木与代码显示的是它的**实现**
+  （函数体）——机器为了执行它具体调了哪些接口、按什么顺序、带什么参数
 
 设计与格式见 [docs/spec.md](docs/spec.md)。
 
+## 目录是真的
+
+`packages/capabilities/src/roboframe/` 里的技能目录**不是手写的**，由
+`tools/import-roboframe/import.mjs` 从上游 RoboFrame 仓库机械转出：
+
+```bash
+ROBOFRAME_SRC=/path/to/IB_Robot node tools/import-roboframe/import.mjs
+```
+
+上游是 `gitcode.com/openeuler/IB_Robot` 的 `RoboFrame` 分支。转出来的是 16 个技能、
+`skill_library` 的 10 个原语白名单、命名位姿与中文别名，每个技能的
+`primitive_sequence` 就是它的实现。转换脚本读不懂的地方当场报错，不猜；
+`provenance` 里记着是哪一次 commit。
+
+## 跑起来
+
+```bash
+pnpm install
+pnpm --filter @codecanvas/studio dev      # http://localhost:5173
+```
+
+「生成」要调 LLM：dev server 把 `/llm/*` 反代到 LLM 服务并在**服务端**注入 key，
+所以 key 从不进浏览器。取 `LLM_API_KEY`，退到 `DEEPSEEK_API_KEY`；地址取 `LLM_BASE_URL`，
+退到 DeepSeek。
+
+```bash
+export DEEPSEEK_API_KEY=sk-...
+pnpm --filter @codecanvas/studio dev
+```
+
+## 测
+
+```bash
+pnpm -r test
+pnpm -r typecheck
+```
+
 ## 状态
 
-重写中。旧实现（基于 n8n 的 fork）保留在 `../code-canvas` 作为参考，本仓库不包含它的任何源码。
+重写中（旧实现是基于 n8n 的 fork，保留在 `../code-canvas` 作参考，本仓库不含它的源码）。
+设备执行与仿真还没接——右栏的虚拟设备目前只如实显示目录事实。
 
 ## 许可
 
