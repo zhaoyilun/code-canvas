@@ -1,12 +1,13 @@
 /**
  * 节点卡片上那几行参数摘要（spec §4.1：字段定义只有校验器一个来源）。
  *
- * 这里不写任何参数表：字段名、顺序、单位、范围全部来自 `describeActionFields(action)`，
+ * 这里不写任何参数表：字段名、**中文显示名**、顺序、单位、范围全部来自 `describeActionFields(action)`，
  * 值来自节点自己的 `parameters`。声明里多出来的字段（协议不认识的）照样显示，由协议校验器决定它们合不合法。
  */
 import {
 	ALLOWED_ACTIONS,
 	describeActionFields,
+	describeActionLabel,
 	LIMIT_NAMES,
 	canonicalJsonString,
 	isJsonObject,
@@ -23,8 +24,10 @@ import {
 export type NodeLimits = Partial<Record<NumericLimitName, number>>;
 
 export interface ParameterSummary {
-	/** 参数名（协议字段名）。 */
+	/** 参数名（协议字段名）。只进 `data-*` 与诊断，不当标签用。 */
 	readonly name: string;
+	/** 中文显示名，来自描述表；协议不认识的字段退回原字段名。 */
+	readonly label: string;
 	/** 取值的显示形态：数字保留原精度，数组逗号连接，缺省用 `—`。 */
 	readonly value: string;
 	/** 取值范围，例如 `≤ 0.3` / `1–6` / `> 0`；协议没给约束就是空串。 */
@@ -80,6 +83,7 @@ export const summarizeNodeParameters = (
 			const value = parameters[field.name];
 			rows.push({
 				name: field.name,
+				label: field.label,
 				value: displayValue(value),
 				constraint: constraintOf(field, limits),
 				unit: field.unit ?? '',
@@ -92,8 +96,10 @@ export const summarizeNodeParameters = (
 	for (const [name, value] of Object.entries(parameters)) {
 		// step_id / action 已经在卡头上了，不再占一行。
 		if (covered.has(name) || name === 'step_id' || name === 'action') continue;
+		// 协议不认识的字段没有中文名可给——照出原字段名，不编一个。
 		rows.push({
 			name,
+			label: name,
 			value: displayValue(value),
 			constraint: '',
 			unit: '',
@@ -111,11 +117,15 @@ export const nodeAction = (node: WorkflowNode): TaskAction | null => {
 	return isAction(action) ? action : null;
 };
 
-/** 动作名的显示形态：不认识就照出原值，不假装它是七种动作之一。 */
+/** 动作名的显示形态：中文名取自描述表；不认识的动作照出原值，不假装它是七种动作之一。 */
 export const actionLabel = (node: WorkflowNode): string => {
 	const action = node.parameters.action;
-	return isAction(action) ? action : displayValue(action);
+	return isAction(action) ? describeActionLabel(action) : displayValue(action);
 };
+
+/** 动作的协议名（`move` 这类）。卡头显示中文名，这个只进 `data-action`，留给机器对账。 */
+export const nodeActionName = (node: WorkflowNode): string =>
+	isAction(node.parameters.action) ? node.parameters.action : displayValue(node.parameters.action);
 
 /** 节点上的语义身份（`parameters.step_id`，spec §1.2 保留它是为了映射）。 */
 export const nodeStepId = (node: WorkflowNode): string | null => {

@@ -6,12 +6,13 @@
  * **这里没有一条写回路径**——真相只从 `useStudioDocument()` 读，改参数是积木画布的事。
  */
 import { computed } from 'vue';
-import type { Diagnostic, WorkflowNode } from '@codecanvas/contracts';
+import { LIMIT_LABELS, type Diagnostic, type NumericLimitName, type WorkflowNode } from '@codecanvas/contracts';
 import { useStudioDocument } from '../../state/document';
 import {
 	actionLabel,
 	declarationLimits,
 	nodeAction,
+	nodeActionName,
 	nodeDiagnostics,
 	nodeStepId,
 	summarizeNodeParameters,
@@ -24,7 +25,10 @@ const store = useStudioDocument();
 interface FlowCard {
 	readonly node: WorkflowNode;
 	readonly index: number;
+	/** 卡头显示的中文动作名。 */
 	readonly action: string;
+	/** 协议里的动作名，只进 `data-action`。 */
+	readonly actionName: string;
 	readonly stepId: string | null;
 	readonly parameters: readonly ParameterSummary[];
 	readonly diagnostics: readonly Diagnostic[];
@@ -35,9 +39,11 @@ const limits = computed<NodeLimits>(() => declarationLimits(store.declaration.va
 /** 声明的标题：任务里有 description 就用它（转换器就是这么起名的）。 */
 const taskTitle = computed(() => store.declaration.value?.name ?? '');
 
-/** 限值条：这几个数字决定参数摘要里的上界，摆在画布上比藏在声明里有用。 */
+/** 限值条：这几个数字决定参数摘要里的上界，摆在画布上比藏在声明里有用。名字同样取自协议描述表。 */
 const limitChips = computed<readonly string[]>(() =>
-	Object.entries(limits.value).map(([name, value]) => `${name} ≤ ${String(value)}`),
+	Object.entries(limits.value)
+		.filter((entry): entry is [NumericLimitName, number] => entry[1] !== undefined)
+		.map(([name, value]) => `${LIMIT_LABELS[name]} ≤ ${String(value)}`),
 );
 
 const cards = computed<readonly FlowCard[]>(() =>
@@ -45,6 +51,7 @@ const cards = computed<readonly FlowCard[]>(() =>
 		node,
 		index,
 		action: actionLabel(node),
+		actionName: nodeActionName(node),
 		stepId: nodeStepId(node),
 		parameters: summarizeNodeParameters(node.parameters, nodeAction(node), limits.value),
 		diagnostics: nodeDiagnostics(store.diagnostics.value, node, index),
@@ -92,7 +99,9 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 						<header class="card-head">
 							<span class="card-index" data-testid="flow-node-index">{{ card.index + 1 }}</span>
 							<div class="card-headings">
-								<span class="card-action" data-testid="flow-node-action">{{ card.action }}</span>
+								<span class="card-action" data-testid="flow-node-action" :data-action="card.actionName">
+									{{ card.action }}
+								</span>
 								<span v-if="card.stepId !== null" class="card-step" data-testid="flow-node-step">
 									{{ card.stepId }}
 								</span>
@@ -100,8 +109,14 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 						</header>
 
 						<dl v-if="card.parameters.length > 0" class="card-params" data-testid="flow-node-params">
-							<template v-for="parameter in card.parameters" :key="parameter.name">
-								<dt class="param-name" :title="parameter.description">{{ parameter.name }}</dt>
+							<!--
+								一行一个字段，但宽了就并成多列：名字在左、读数与范围在右。
+								显示的是描述表里的中文名，`data-param` 留协议字段名给机器对账。
+							-->
+							<div v-for="parameter in card.parameters" :key="parameter.name" class="param-row">
+								<dt class="param-name" :data-label="parameter.name" :title="`${parameter.name} · ${parameter.description}`">
+									{{ parameter.label }}
+								</dt>
 								<dd class="param-value" :class="{ missing: parameter.missing }">
 									<span class="param-number" :data-param="parameter.name" :data-value="parameter.value">
 										{{ parameter.value }}{{ parameter.unit }}
@@ -110,7 +125,7 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 										{{ parameter.constraint }}
 									</span>
 								</dd>
-							</template>
+							</div>
 						</dl>
 						<p v-else class="card-params-empty">这个动作没有参数</p>
 
@@ -200,60 +215,61 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 	color: var(--cc-text-dim);
 }
 
+/* 纵向滚动：链子长了就往下走，横向永远不滚（横向留给卡片自己撑满）。 */
 .flow-body {
 	flex: 1 1 auto;
 	min-height: 0;
-	overflow: auto;
+	overflow-x: hidden;
+	overflow-y: auto;
 	background: var(--cc-surface-sunken);
 	border: 1px solid var(--cc-line);
 	border-radius: var(--cc-radius);
 }
 
+/* 自上而下的链：卡片等宽撑满中栏，一条列排版。 */
 .flow-chain {
 	display: flex;
-	align-items: center;
-	gap: var(--cc-space-2);
-	min-width: min-content;
-	padding: var(--cc-space-5) var(--cc-space-4);
+	flex-direction: column;
+	align-items: stretch;
+	width: 100%;
+	padding: var(--cc-space-3);
 }
 
-/* 连线是可伸缩的 flex 项：链条换行/横向滚动时线跟着长，不会断开。 */
+/* 连线是定高的一小段：卡片之间的呼吸，也是那条向下的箭头。留白压到刚好，一屏才装得下几个步骤。 */
 .node-connector {
 	display: flex;
-	align-items: center;
-	flex: 1 1 var(--cc-space-4);
-	min-width: var(--cc-space-3);
-	max-width: 80px;
-	height: 10px;
+	justify-content: center;
+	flex: 0 0 auto;
+	height: var(--cc-space-3);
 }
 
 .connector-line {
 	position: relative;
-	width: 100%;
-	height: 2px;
+	width: 2px;
+	height: 100%;
 	background: var(--cc-line-strong);
 }
 
-/* 箭头用两条边框转 45° 画出来，不给这个深色画布塞第二位色。 */
+/* 箭头用两条边框转 135° 画出来（顶边 + 右边 → 尖朝下），不给这个深色画布塞第二位色。 */
 .connector-line::after {
 	position: absolute;
-	top: 50%;
-	right: 0;
+	bottom: 0;
+	left: 50%;
 	width: 7px;
 	height: 7px;
 	border-top: 2px solid var(--cc-line-strong);
 	border-right: 2px solid var(--cc-line-strong);
 	content: '';
-	transform: translateY(-50%) rotate(45deg);
+	transform: translateX(-50%) rotate(135deg);
 }
 
 .node-card {
 	display: flex;
 	flex-direction: column;
-	gap: var(--cc-space-2);
+	gap: var(--cc-space-1);
 	flex: 0 0 auto;
-	width: 200px;
-	padding: var(--cc-space-3);
+	width: 100%;
+	padding: var(--cc-space-2) var(--cc-space-3);
 	background: var(--cc-surface-raised);
 	border: 1px solid var(--cc-line);
 	border-radius: var(--cc-radius);
@@ -308,6 +324,7 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 	display: flex;
 	align-items: baseline;
 	gap: var(--cc-space-2);
+	flex: 1 1 auto;
 	min-width: 0;
 }
 
@@ -319,32 +336,53 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 	overflow-wrap: anywhere;
 }
 
+/* 有宽度了：动作名靠左，step_id 推到行尾，一眼能对齐着读。 */
 .card-step {
+	margin-left: auto;
 	font-family: var(--cc-font-mono);
 	font-size: var(--cc-fs-xs);
 	color: var(--cc-text-faint);
 }
 
 .card-params {
+	/* 宽了就并成多列：三个参数的卡片从三行压到两行，七关节的从七行压到四行，信息一行没少。 */
 	display: grid;
-	grid-template-columns: auto 1fr;
-	gap: var(--cc-space-2) var(--cc-space-2);
+	grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+	gap: var(--cc-space-1) var(--cc-space-4);
 	margin: 0;
-	padding-top: var(--cc-space-2);
+	padding-top: var(--cc-space-1);
 	border-top: 1px dashed var(--cc-line);
 }
 
+/* 一行一个字段：名字与读数分居两端，读数后面跟着范围标签。 */
+.param-row {
+	display: flex;
+	align-items: baseline;
+	justify-content: space-between;
+	gap: var(--cc-space-2);
+	min-width: 0;
+	padding: 1px var(--cc-space-2);
+	background: var(--cc-surface-sunken);
+	border-radius: var(--cc-radius-sm);
+}
+
 .param-name {
-	font-family: var(--cc-font-mono);
 	font-size: var(--cc-fs-sm);
 	color: var(--cc-text-dim);
+	min-width: 0;
+	/* 中文名很短，正常情况一行放得下；协议不认识的字段名再长也让它折行，不许顶破格子。 */
+	overflow-wrap: anywhere;
 }
 
 .param-value {
 	display: flex;
 	align-items: baseline;
+	justify-content: flex-end;
+	flex-wrap: wrap;
 	gap: var(--cc-space-2);
 	margin: 0;
+	min-width: 0;
+	text-align: right;
 }
 
 .param-number {
@@ -365,7 +403,7 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 
 .card-params-empty {
 	margin: 0;
-	padding-top: var(--cc-space-2);
+	padding-top: var(--cc-space-1);
 	font-size: var(--cc-fs-sm);
 	color: var(--cc-text-faint);
 	border-top: 1px dashed var(--cc-line);

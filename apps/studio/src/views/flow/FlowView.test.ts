@@ -42,7 +42,14 @@ describe('流程画布 · 链与连线', () => {
 
 		expect(cards(wrapper)).toHaveLength(4);
 		expect(connectorCount(wrapper)).toBe(3);
+		// 卡头上是中文名；协议名退到 data-action，机器对账还认得出来。
 		expect(wrapper.findAll('[data-testid="flow-node-action"]').map((node) => node.text())).toEqual([
+			'前进',
+			'避障停止',
+			'转向',
+			'停止',
+		]);
+		expect(wrapper.findAll('[data-testid="flow-node-action"]').map((node) => node.attributes('data-action'))).toEqual([
 			'move',
 			'stop_if_obstacle',
 			'turn',
@@ -50,6 +57,24 @@ describe('流程画布 · 链与连线', () => {
 		]);
 		expect(wrapper.findAll('[data-testid="flow-node-index"]').map((node) => node.text())).toEqual(['1', '2', '3', '4']);
 		expect(wrapper.find('[data-testid="flow-count"]').text()).toContain('4 步 · 3 条连线');
+	});
+
+	it('链是自上而下的：卡片与连线在链里交替出现，连线夹在两张卡片之间', () => {
+		const wrapper = mount(FlowView);
+		const chain = wrapper.find('[data-testid="flow-chain"]');
+
+		// DOM 顺序就是自上而下的顺序：一条连线前面必有一张卡片，后面必跟着下一张。
+		expect(
+			chain.findAll('[data-testid="flow-node-card"], [data-testid="flow-connector"]').map((node) => node.attributes('data-testid')),
+		).toEqual([
+			'flow-node-card',
+			'flow-connector',
+			'flow-node-card',
+			'flow-connector',
+			'flow-node-card',
+			'flow-connector',
+			'flow-node-card',
+		]);
 	});
 
 	it('每张卡片的参数行就是校验器给的字段（顺序一致，不是手抄的一份）', () => {
@@ -65,6 +90,24 @@ describe('流程画布 · 链与连线', () => {
 
 		expect(paramValues(move!)).toEqual({ linear: '0.2', angular: '0', duration: '5' });
 		expect(paramValues(obstacle!)).toEqual({ sensors: '/scan0', distance: '0.5' });
+	});
+
+	it('参数名显示的是描述表里的中文名，一个都没有在视图里另写映射', () => {
+		const wrapper = mount(FlowView);
+		const [move, obstacle, turn] = cards(wrapper);
+
+		const labels = (card: { findAll: (selector: string) => { text: () => string }[] }) =>
+			card.findAll('.param-name').map((node) => node.text());
+
+		expect(labels(move!)).toEqual(describeActionFields('move').map((field) => field.label));
+		expect(labels(obstacle!)).toEqual(describeActionFields('stop_if_obstacle').map((field) => field.label));
+		expect(labels(turn!)).toEqual(describeActionFields('turn').map((field) => field.label));
+		expect(labels(move!)).toEqual(['线速度', '角速度', '时长']);
+
+		// 英文原名只留在 data-* 上，不进画面。
+		expect(move!.text()).not.toContain('linear');
+		expect(move!.text()).not.toContain('duration');
+		expect(move!.find('[data-label="linear"]').attributes('data-label')).toBe('linear');
 	});
 
 	it('七种动作都能渲染，字段多寡都来自校验器', async () => {
@@ -100,10 +143,11 @@ describe('流程画布 · 链与连线', () => {
 		// 没有字段的动作给出说明，而不是一片空白。
 		expect(cards(wrapper)[2]!.text()).toContain('这个动作没有参数');
 		expect(cards(wrapper)[4]!.text()).toContain('这个动作没有参数');
-		// 默认值/单位都从校验器推导：time 的单位是 ms，duration 是 s。
+		// 默认值/单位都从校验器推导：time 的单位是 ms，duration 是 s，角度的单位是度。
 		expect(cards(wrapper)[0]!.find('[data-param="duration"]').text()).toBe('5s');
 		expect(cards(wrapper)[5]!.find('[data-param="time"]').text()).toBe('1500ms');
-		expect(cards(wrapper)[6]!.find('[data-param="joint6"]').text()).toBe('60deg');
+		expect(cards(wrapper)[5]!.find('[data-param="joint"]').text()).toBe('90度');
+		expect(cards(wrapper)[6]!.find('[data-param="joint6"]').text()).toBe('60度');
 	});
 
 	it('限值类的上界从声明的 meta 来，不在视图里重写一遍', () => {
@@ -113,6 +157,14 @@ describe('流程画布 · 链与连线', () => {
 
 		// max_linear / max_angular 走的是「绝对值」那两条（协议里方向的符号单独表达），> 0 来自校验器。
 		expect(ranges).toEqual(['|值| ≤ 0.3', '|值| ≤ 1.2', '> 0']);
+	});
+
+	it('脚注的限值 chip 用中文名，数字仍来自声明', () => {
+		const chips = mount(FlowView)
+			.findAll('.footer-chip')
+			.map((node) => node.text());
+
+		expect(chips).toEqual(['最大线速度 ≤ 0.3', '最大角速度 ≤ 1.2', '总时长上限 ≤ 30']);
 	});
 });
 

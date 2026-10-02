@@ -91,6 +91,8 @@ export interface FieldMessages {
 export interface NumericFieldSpec {
 	readonly kind: 'number';
 	readonly name: string;
+	/** 中文显示名。视图只许读它，不许自带一份 action/字段 → 中文 的映射表。 */
+	readonly label: string;
 	readonly code: string;
 	readonly required: boolean;
 	readonly defaultValue?: number;
@@ -115,6 +117,8 @@ export interface NumericFieldSpec {
 export interface SensorArrayFieldSpec {
 	readonly kind: 'sensors';
 	readonly name: string;
+	/** 中文显示名，同 `NumericFieldSpec.label`。 */
+	readonly label: string;
 	readonly code: string;
 	readonly required: true;
 	readonly description: string;
@@ -125,11 +129,14 @@ export type FieldSpec = NumericFieldSpec | SensorArrayFieldSpec;
 
 export interface ActionSpec {
 	readonly action: TaskAction;
+	/** 中文显示名（流程画布卡头、提示词共用）。 */
+	readonly label: string;
 	readonly summary: string;
 	readonly fields: readonly FieldSpec[];
 }
 
 interface NumericFieldOptions {
+	readonly label: string;
 	readonly required?: boolean;
 	readonly defaultValue?: number;
 	readonly min?: number;
@@ -147,6 +154,7 @@ interface NumericFieldOptions {
 const numericField = (action: TaskAction, name: string, options: NumericFieldOptions): NumericFieldSpec => ({
 	kind: 'number',
 	name,
+	label: options.label,
 	code: `step.${action}.${name}`,
 	required: options.required ?? true,
 	defaultValue: options.defaultValue,
@@ -166,9 +174,16 @@ const numericField = (action: TaskAction, name: string, options: NumericFieldOpt
 	},
 });
 
-const sensorArrayField = (action: TaskAction, name: string, message: string, description: string): SensorArrayFieldSpec => ({
+const sensorArrayField = (
+	action: TaskAction,
+	name: string,
+	label: string,
+	message: string,
+	description: string,
+): SensorArrayFieldSpec => ({
 	kind: 'sensors',
 	name,
+	label,
 	code: `step.${action}.${name}`,
 	required: true,
 	description,
@@ -177,6 +192,7 @@ const sensorArrayField = (action: TaskAction, name: string, message: string, des
 
 const armTimeField = (action: TaskAction): NumericFieldSpec =>
 	numericField(action, 'time', {
+		label: '时长',
 		required: false,
 		defaultValue: DEFAULT_ARM_TIME_MS,
 		min: 100,
@@ -189,9 +205,11 @@ const armTimeField = (action: TaskAction): NumericFieldSpec =>
 export const ACTION_SPECS: Readonly<Record<TaskAction, ActionSpec>> = {
 	move: {
 		action: 'move',
+		label: '前进',
 		summary: '以线速度 linear、角速度 angular 持续 duration 秒',
 		fields: [
 			numericField('move', 'linear', {
+				label: '线速度',
 				abs: true,
 				limit: 'max_linear',
 				unit: 'm/s',
@@ -199,6 +217,7 @@ export const ACTION_SPECS: Readonly<Record<TaskAction, ActionSpec>> = {
 				description: '线速度，符号表示前后方向',
 			}),
 			numericField('move', 'angular', {
+				label: '角速度',
 				abs: true,
 				limit: 'max_angular',
 				unit: 'rad/s',
@@ -206,6 +225,7 @@ export const ACTION_SPECS: Readonly<Record<TaskAction, ActionSpec>> = {
 				description: '角速度，符号表示转向',
 			}),
 			numericField('move', 'duration', {
+				label: '时长',
 				exclusiveMin: 0,
 				countsTowardTotalDuration: true,
 				unit: 's',
@@ -216,9 +236,11 @@ export const ACTION_SPECS: Readonly<Record<TaskAction, ActionSpec>> = {
 	},
 	turn: {
 		action: 'turn',
+		label: '转向',
 		summary: '原地以角速度 angular 转 duration 秒',
 		fields: [
 			numericField('turn', 'angular', {
+				label: '角速度',
 				abs: true,
 				limit: 'max_angular',
 				unit: 'rad/s',
@@ -226,6 +248,7 @@ export const ACTION_SPECS: Readonly<Record<TaskAction, ActionSpec>> = {
 				description: '角速度，符号表示转向',
 			}),
 			numericField('turn', 'duration', {
+				label: '时长',
 				exclusiveMin: 0,
 				countsTowardTotalDuration: true,
 				unit: 's',
@@ -236,25 +259,30 @@ export const ACTION_SPECS: Readonly<Record<TaskAction, ActionSpec>> = {
 	},
 	stop: {
 		action: 'stop',
+		label: '停止',
 		summary: '立即停止',
 		fields: [],
 	},
 	get_status: {
 		action: 'get_status',
+		label: '读取状态',
 		summary: '查询当前状态',
 		fields: [],
 	},
 	stop_if_obstacle: {
 		action: 'stop_if_obstacle',
+		label: '避障停止',
 		summary: '指定传感器在 distance 米内检测到障碍时停止',
 		fields: [
 			sensorArrayField(
 				'stop_if_obstacle',
 				'sensors',
+				'传感器',
 				'sensors must be an array of /scan0 or /scan1',
 				'参与避障的传感器，取值 /scan0 或 /scan1',
 			),
 			numericField('stop_if_obstacle', 'distance', {
+				label: '距离',
 				exclusiveMin: 0,
 				max: MAX_OBSTACLE_DISTANCE_METERS,
 				unit: 'm',
@@ -265,9 +293,11 @@ export const ACTION_SPECS: Readonly<Record<TaskAction, ActionSpec>> = {
 	},
 	arm_joint: {
 		action: 'arm_joint',
+		label: '单关节',
 		summary: '把单个关节转到 joint 度',
 		fields: [
 			numericField('arm_joint', 'joint_id', {
+				label: '关节号',
 				min: 1,
 				max: 6,
 				integer: true,
@@ -275,9 +305,10 @@ export const ACTION_SPECS: Readonly<Record<TaskAction, ActionSpec>> = {
 				description: '关节编号',
 			}),
 			numericField('arm_joint', 'joint', {
+				label: '角度',
 				min: 0,
 				max: 180,
-				unit: 'deg',
+				unit: '度',
 				rangeMessage: 'joint must be between 0 and 180 degrees',
 				description: '目标角度',
 			}),
@@ -286,13 +317,16 @@ export const ACTION_SPECS: Readonly<Record<TaskAction, ActionSpec>> = {
 	},
 	arm6_joints: {
 		action: 'arm6_joints',
+		label: '六关节',
 		summary: '六轴同时转到各自目标角度',
 		fields: [
-			...ARM_JOINT_PARAMETER_NAMES.map((name) =>
+			...ARM_JOINT_PARAMETER_NAMES.map((name, position) =>
 				numericField('arm6_joints', name, {
+					// `joint1`…`joint6` → 关节1…关节6：名字里的序号就是下标 + 1。
+					label: `关节${position + 1}`,
 					min: 0,
 					max: 180,
-					unit: 'deg',
+					unit: '度',
 					rangeMessage: `${name} must be between 0 and 180 degrees`,
 					description: '目标角度',
 				}),
@@ -302,8 +336,17 @@ export const ACTION_SPECS: Readonly<Record<TaskAction, ActionSpec>> = {
 	},
 };
 
+/** 限值的中文显示名（视图脚注那几枚 chip 用），与 `LIMIT_NAMES` 一一对应。 */
+export const LIMIT_LABELS: Readonly<Record<NumericLimitName, string>> = {
+	max_linear: '最大线速度',
+	max_angular: '最大角速度',
+	max_duration: '总时长上限',
+};
+
 export interface ProtocolFieldSummary {
 	readonly name: string;
+	/** 中文显示名：视图拿来当标签，`name` 只留给机器对账（`data-*`、诊断、代码面板）。 */
+	readonly label: string;
 	readonly kind: FieldSpec['kind'];
 	readonly required: boolean;
 	readonly defaultValue?: number;
@@ -326,6 +369,7 @@ export const describeActionFields = (action: TaskAction): readonly ProtocolField
 		field.kind === 'number'
 			? {
 					name: field.name,
+					label: field.label,
 					kind: field.kind,
 					required: field.required,
 					defaultValue: field.defaultValue,
@@ -340,11 +384,15 @@ export const describeActionFields = (action: TaskAction): readonly ProtocolField
 				}
 			: {
 					name: field.name,
+					label: field.label,
 					kind: field.kind,
 					required: field.required,
 					description: field.description,
 				},
 	);
+
+/** 动作的中文显示名。凡是要显示动作名的地方都从这里取，不许各写一份映射。 */
+export const describeActionLabel = (action: TaskAction): string => ACTION_SPECS[action].label;
 
 // ---------------------------------------------------------------------------
 // 由描述表生成的 zod schema
