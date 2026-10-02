@@ -428,3 +428,28 @@ export const planWaitCallTextOf = (node: WorkflowNode): string => {
 	const seconds = waitSecondsOf(node.parameters['seconds']);
 	return `wait(${seconds === null ? '?' : formatNumberLiteral(seconds)})`;
 };
+
+// ---------------------------------------------------------------------------
+// 技能步的失败处置（`onFailure`）：一句人话，判据从节点参数读
+// ---------------------------------------------------------------------------
+
+/**
+ * 这一步**失败之后还往下走吗**。
+ *
+ * 判据**从节点参数读**（`onFailure` 与 `timeoutSec` 一样：它不是技能参数，是这一步自己的属性，
+ * 由 `@codecanvas/task-import` 按原名平铺进 `parameters`），视图里**不另立一份字段表**——
+ * 那张表一写就是第二份真相，导入侧改了键名这边就静默失准。
+ *
+ * 只有 `'continue'` 才算数：缺省、`'stop'` 与任何读不出来的值都按缺省（停）处理——
+ * 与执行侧同一个口径（`apps/robot3d/src/roboframe/plan.ts`），也与契约里那条安全立场一致。
+ */
+export const continuesOnFailure = (node: WorkflowNode): boolean => node.parameters['onFailure'] === 'continue';
+
+/**
+ * 那句人话：`失败也往下走`。
+ *
+ * 写在流程卡上（分支卡的条件、等待卡的「等待 N 秒」都是这个位置上的同类东西）：
+ * 一句话，说的是这一步的失败处置——不把 `'continue'` 这种机器词摆给人看，
+ * 也不解释「后面的分叉因此能分到 false 那条臂」（那是读计划的人顺着往下看就知道的事）。
+ */
+export const CONTINUE_ON_FAILURE_NOTE = '失败也往下走';

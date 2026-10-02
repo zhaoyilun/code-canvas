@@ -22,6 +22,7 @@ import {
 	type CapabilityCatalog,
 	type Diagnostic,
 	type JsonObject,
+	type JsonValue,
 	type StableIdFactory,
 	type WorkflowDeclaration,
 	type WorkflowNode,
@@ -139,8 +140,12 @@ const isTaskNode = (node: WorkflowNode): boolean =>
 /**
  * 声明还原成技能计划。
  *
- * 技能参数就是节点参数里除了 `action` / `timeoutSec` 之外的那些——
- * 当初导入时把它们平铺进来的，还原时原样收回去。
+ * 技能参数就是节点参数里除了 `action` / `timeoutSec` / `onFailure` 之外的那些——
+ * 当初导入时把它们平铺进来的，还原时原样收回去。后两个**不是技能参数**，各回自己那一栏。
+ *
+ * 失败处置（`onFailure`）**原样收回、不在这里判取值**：判据只有校验器一个来源
+ * （`plan.step.onfailure_invalid`），这里替它丢掉一个不认的取值，就等于把一份被改坏的声明
+ * 悄悄还原成「缺省＝停」，第二道闸再也看不见那个问题。
  *
  * 分支（`task.branch`）倒着走回去，同样三格出边：两条臂各自递归，
  * 而 `main[2]` 接在**分支节点自己**身上，不是从两条臂的链尾走回来的——
@@ -161,10 +166,17 @@ export const declarationToSkillPlan = (declaration: WorkflowDeclaration): JsonOb
 	const skillStep = (node: WorkflowNode): JsonObject => {
 		const params: JsonObject = {};
 		let timeoutSec: number | undefined;
+		// 失败处置先收着、最后再写进 `step`：这样它的**键序**与冻结的形状一致
+		// （step / skill / params / timeoutSec / onFailure），声明被改坏时也不会跑到别处去。
+		let onFailure: JsonValue | undefined;
 		for (const [key, value] of Object.entries(node.parameters)) {
 			if (key === 'action' || value === undefined) continue;
 			if (key === 'timeoutSec') {
 				if (typeof value === 'number') timeoutSec = value;
+				continue;
+			}
+			if (key === 'onFailure') {
+				onFailure = value;
 				continue;
 			}
 			params[key] = value;
@@ -172,6 +184,7 @@ export const declarationToSkillPlan = (declaration: WorkflowDeclaration): JsonOb
 		const step: JsonObject = { step: 'skill', skill: String(node.parameters['action'] ?? '') };
 		if (Object.keys(params).length > 0) step['params'] = params;
 		if (timeoutSec !== undefined) step['timeoutSec'] = timeoutSec;
+		if (onFailure !== undefined) step['onFailure'] = onFailure;
 		return step;
 	};
 

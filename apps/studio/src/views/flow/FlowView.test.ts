@@ -21,7 +21,7 @@ import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import FlowView from './FlowView.vue';
 import { planStructureOf } from '../shared/plan-structure';
-import { BRANCH_PLAN_JSON, BRANCH_WAIT_PLAN_JSON, NESTED_NO_ELSE_PLAN_JSON, WAIT_PLAN_JSON } from './__fixtures__/branch-plan';
+import { BRANCH_PLAN_JSON, BRANCH_WAIT_PLAN_JSON, CONTINUE_ON_FAILURE_PLAN_JSON, NESTED_NO_ELSE_PLAN_JSON, WAIT_PLAN_JSON } from './__fixtures__/branch-plan';
 import { normalizeRenderedHtml, readBaseline } from './__fixtures__/normalize-html';
 
 const store = useStudioDocument();
@@ -790,5 +790,55 @@ describe('流程画布 · 等待步', () => {
 			'等待 2 秒@then/0',
 			'等待 0.5 秒@else/0',
 		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 失败处置（`onFailure`）：带 continue 的那张卡上标一句「失败也往下走」
+// ---------------------------------------------------------------------------
+
+describe('流程画布 · 失败也往下走', () => {
+	beforeEach(() => {
+		loadPlan(CONTINUE_ON_FAILURE_PLAN_JSON);
+	});
+
+	it('带 continue 的技能卡标一句；缺省的与显式 stop 的都不标', () => {
+		const wrapper = mount(FlowView);
+
+		// 卡片顺序：挪一点 / 分支 / 回原位（then，显式 stop）/ 庆祝（else，缺省）/ 打招呼（缺省）
+		expect(cards(wrapper).map((card) => card.find('[data-testid="flow-node-continue"]').exists())).toEqual([
+			true,
+			false,
+			false,
+			false,
+			false,
+		]);
+		const marked = cards(wrapper)[0];
+		if (marked === undefined) throw new Error('没有第一张卡');
+		expect(marked.get('[data-testid="flow-node-continue"]').text()).toBe('失败也往下走');
+		// 分支卡上也不许有（这一栏不属于它）
+		expect(cards(wrapper)[1]?.find('[data-testid="flow-node-continue"]').exists()).toBe(false);
+	});
+
+	it('那句话是**从节点参数读出来的**：把声明里那一栏改掉，卡片上的标记跟着消失', async () => {
+		const wrapper = mount(FlowView);
+		expect(cards(wrapper)[0]?.find('[data-testid="flow-node-continue"]').exists()).toBe(true);
+
+		// 走真实写回通道：把第一步的 `onFailure` 从节点参数里去掉（缺省＝停）
+		const declaration = currentDeclaration();
+		const head = declaration.nodes[0];
+		if (head === undefined) throw new Error('应当有第一步');
+		const { onFailure: _dropped, ...restParameters } = head.parameters;
+		const edited: WorkflowDeclaration = {
+			...declaration,
+			nodes: declaration.nodes.map((node, index) => (index === 0 ? { ...node, parameters: restParameters } : node)),
+		};
+		const { digest: _stale, ...draft } = edited;
+		expect(store.applyDeclaration({ ...draft, digest: computeWorkflowDigest(draft) })).toBe(true);
+		await wrapper.vm.$nextTick();
+
+		// 视图里没有第二份「哪个键算 continue」的表：参数没了，那句话就没了
+		expect(cards(wrapper)[0]?.find('[data-testid="flow-node-continue"]').exists()).toBe(false);
+		expect(wrapper.findAll('[data-testid="flow-node-continue"]')).toHaveLength(0);
 	});
 });

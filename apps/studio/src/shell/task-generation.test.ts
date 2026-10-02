@@ -150,6 +150,18 @@ describe('任务生成 · 技能计划的提示词', () => {
 		expect(skillPlanSystemPrompt(ROBOFRAME_SO101_CATALOG)).not.toContain('arm6_joints');
 		expect(SYSTEM_PROMPT).not.toContain('inspect_scene');
 	});
+
+	it('失败处置写清楚了：取值只有两个，**缺省是停**，只在「失败也有下一步可走」时才写 continue', () => {
+		const prompt = skillPlanSystemPrompt(ROBOFRAME_SO101_CATALOG);
+
+		expect(prompt).toContain('onFailure');
+		expect(prompt).toContain('"stop"');
+		expect(prompt).toContain('"continue"');
+		// 「缺省是停」必须说出来：模型不写这一栏时的行为由这一句定，含糊它就只会两种都写
+		expect(prompt).toContain('缺省是"stop"');
+		// 只有技能调用那一步能带它（等待与分叉带上会被拒）
+		expect(prompt).toContain('只能写在技能调用那一步');
+	});
 });
 
 describe('任务生成 · 请求与结果', () => {

@@ -339,4 +339,71 @@ describe('技能计划：声明 ↔ 技能计划 JSON', () => {
 			],
 		});
 	});
+
+	// ------------------------------------------------------------------
+	// 失败处置（`onFailure`）：计划 → 声明 → 计划
+	// ------------------------------------------------------------------
+
+	it('失败处置来回一趟等价：显式 continue、显式 stop 与缺省三种都在，且与分支、等待混排', () => {
+		const declaration = expectRoundTrip({
+			schemaVersion: 1,
+			robot: 'so101_single_arm',
+			description: '可能不成的一步，没成就走补救那一臂',
+			plan: [
+				{
+					step: 'skill',
+					skill: 'move_relative_ee',
+					params: { motion_direction: 'forward', motion_distance: 0.1 },
+					timeoutSec: 10,
+					onFailure: 'continue',
+				},
+				{ step: 'wait', seconds: 0.5 },
+				{
+					step: 'if',
+					condition: { field: 'last.success', op: '==', value: false },
+					// 臂里也带：显式 stop 与缺省各一步——两个都该原样回来（缺省不补键）
+					then: [{ step: 'skill', skill: 'inspect_scene', onFailure: 'stop' }],
+					else: [{ step: 'skill', skill: 'wave_hello' }],
+				},
+			],
+		});
+
+		// 节点参数里那一栏是**原名**（不是技能参数），值原样带过去
+		const first = declaration.nodes[0];
+		expect(first?.parameters).toEqual({
+			action: 'move_relative_ee',
+			motion_direction: 'forward',
+			motion_distance: 0.1,
+			timeoutSec: 10,
+			onFailure: 'continue',
+		});
+		const branchId = declaration.nodes.find((node) => node.type === TASK_BRANCH_NODE_TYPE)?.id;
+		if (branchId === undefined) throw new Error('应当有一个分支节点');
+		expect(parametersAt(declaration, portHead(declaration, branchId, 0))).toEqual({ action: 'inspect_scene', onFailure: 'stop' });
+		// 缺省那一步：参数里没有这一栏（缺省是停，不许在执行侧看不见的地方写一个 stop 进去）
+		expect(parametersAt(declaration, portHead(declaration, branchId, 1))).toEqual({ action: 'wave_hello' });
+	});
+
+	it('第二道闸认得出被改坏的那一栏：节点里写了一个不认的取值，还原出来照旧交给校验器判', () => {
+		const imported = importSkillPlan(
+			{ schemaVersion: 1, robot: 'so101_single_arm', plan: [{ step: 'skill', skill: 'wave_hello', onFailure: 'continue' }] },
+			context,
+		);
+		if (!imported.ok) throw new Error('计划应当能导入');
+		const declaration = imported.declaration;
+		const head = declaration.nodes[0];
+		if (head === undefined) throw new Error('应当有一步');
+
+		const broken: WorkflowDeclaration = {
+			...declaration,
+			nodes: [{ ...head, parameters: { ...head.parameters, onFailure: 'keep_going' } }],
+		};
+		// 逆映射**不替校验器丢掉**这个取值：丢了就等于把它悄悄还原成「缺省＝停」，第二道闸再也看不见问题
+		expect(declarationToSkillPlan(broken).plan).toEqual([{ step: 'skill', skill: 'wave_hello', onFailure: 'keep_going' }]);
+		const result = findTaskFormat('skill_plan').validateDeclaration(broken, context);
+		expect(result.ok).toBe(false);
+		expect(result.diagnostics.map((item) => `${item.code}@${item.path ?? ''}`)).toEqual([
+			'plan.step.onfailure_invalid@plan[0].onFailure',
+		]);
+	});
 });

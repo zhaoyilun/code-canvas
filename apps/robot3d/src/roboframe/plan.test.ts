@@ -516,3 +516,206 @@ describe('runPlan · 等待步', () => {
 		expect(planStepLabel({ step: 'if', condition: { field: 'last.success', op: '==', value: true }, then: [] })).toBe('分支');
 	});
 });
+
+// ---------------------------------------------------------------------------
+// 失败处置（`onFailure`）：`continue` 让「上一步没成」那条臂真的可达
+// ---------------------------------------------------------------------------
+
+/**
+ * 这一组钉住的是**语义**，不是视图：在这一版之前，任何技能步失败都会结束整条计划，
+ * 所以 `if (last.success == false)` 在求值时 `last.success` 恒为 `true`——那一半分支是死的。
+ * `onFailure: 'continue'` 之后：计划接着走、`last.success` 记 `false`、那一步照报 `failed`
+ * 且不算进 `completed`；缺省（与显式 `'stop'`）一个字不变，还是失败即停。
+ */
+describe('runPlan · 失败处置', () => {
+	/** 一条技能步；`onFailure` 只在这一栏有值时才写（缺省不补键，与计划层同一个口径）。 */
+	const call = (skill: string, onFailure?: 'stop' | 'continue'): SkillPlanStep => ({
+		step: 'skill',
+		skill,
+		...(onFailure === undefined ? {} : { onFailure }),
+	});
+
+	const wait = (seconds: number): SkillPlanStep => ({ step: 'wait', seconds });
+
+	/** 一棵分支：条件照契约的口径写（只有 `last.success`，只有 `==`）。 */
+	const branch = (value: boolean, then: readonly SkillPlanStep[], other?: readonly SkillPlanStep[]): SkillPlanStep => ({
+		step: 'if',
+		condition: { field: 'last.success', op: '==', value },
+		then,
+		...(other === undefined ? {} : { else: other }),
+	});
+
+	const planOf = (steps: readonly SkillPlanStep[]): SkillPlan => ({
+		schemaVersion: 1,
+		robot: 'so101_single_arm',
+		plan: steps,
+	});
+
+	/** 计划步事件压成一行：`所属顶层步@路径 臂 状态 步型`（与上面那张表同一个写法）。 */
+	const traceOf = (e: Extract<PlanStepEvent, { kind: 'plan-step' }>): string =>
+		`${String(e.index)}@${e.path} ${e.arm ?? '-'} ${e.state} ${e.step.step}`;
+
+	/** 不等的那条 sleep：这一组不测「等多久」，别让单测真的等一秒。 */
+	const instantSleep: PlanSleep = async () => {};
+
+	it('① continue 失败之后计划继续跑完后面的步：每一步的状态都在这儿', async () => {
+		const { runner, ran } = fakeRunner('move_relative_ee');
+		const trace: string[] = [];
+		const outcome = await runPlan(
+			planOf([call('inspect_scene'), call('move_relative_ee', 'continue'), call('wave_hello')]),
+			{ catalog, runner, onPlanStep: (e) => trace.push(traceOf(e)) },
+		);
+
+		// 三步全跑了：失败那一步没有把计划拦下来
+		expect(ran).toEqual(['inspect_scene', 'move_relative_ee', 'wave_hello']);
+		expect(outcome.ok).toBe(true);
+		expect(outcome.total).toBe(3);
+		// 那一步照报 `failed`（不粉饰成 done），后面那一步照报 done
+		expect(trace).toEqual([
+			'1@0 - running skill',
+			'1@0 - done skill',
+			'2@1 - running skill',
+			'2@1 - failed skill',
+			'3@2 - running skill',
+			'3@2 - done skill',
+		]);
+	});
+
+	it('② 失败之后 if (last.success == false) 真的走 then：false 那条臂这一次可达', async () => {
+		const { runner, ran } = fakeRunner('move_relative_ee');
+		const trace: string[] = [];
+		// 挪一点（会失败，但失败也往下走）→ 上一步没成？→ 是：回原位；否：庆祝
+		const outcome = await runPlan(
+			planOf([
+				call('move_relative_ee', 'continue'),
+				branch(false, [call('recover_safe_pose')], [call('celebrate')]),
+			]),
+			{ catalog, runner, onPlanStep: (e) => trace.push(traceOf(e)) },
+		);
+
+		expect(outcome.ok).toBe(true);
+		// 走了 then：设备真的收到了「回原位」，而 else 那一臂一步没动
+		expect(ran).toEqual(['move_relative_ee', 'recover_safe_pose']);
+		expect(trace.filter((line) => line.includes(' if'))).toEqual(['2@1 then running if', '2@1 then done if']);
+		expect(trace.some((line) => line.includes('1.else'))).toBe(false);
+	});
+
+	it('③ 去掉 onFailure（或写显式 stop）：计划在那一步就停，后面的步一步没跑', async () => {
+		// 同一份计划，只把那一步的失败处置拿掉——行为必须与改动前一个字不差
+		for (const steps of [
+			[call('move_relative_ee'), branch(false, [call('recover_safe_pose')], [call('celebrate')])],
+			[call('move_relative_ee', 'stop'), branch(false, [call('recover_safe_pose')], [call('celebrate')])],
+		]) {
+			const { runner, ran } = fakeRunner('move_relative_ee');
+			const trace: string[] = [];
+			const outcome = await runPlan(planOf(steps), { catalog, runner, onPlanStep: (e) => trace.push(traceOf(e)) });
+
+			expect(outcome.ok).toBe(false);
+			expect(outcome.completed).toBe(0);
+			expect(outcome.reason).toContain('设备说这一步没做成');
+			// 失败那一步之后一步都没跑：连那个 if 都没求值
+			expect(ran).toEqual(['move_relative_ee']);
+			expect(trace).toEqual(['1@0 - running skill', '1@0 - failed skill']);
+			expect(trace.some((line) => line.includes('if'))).toBe(false);
+		}
+	});
+
+	it('④ completed 的口径：被容忍的那一步不算完成（走完了也不记它）', async () => {
+		const { runner } = fakeRunner('move_relative_ee');
+		// 三步：成功的一步、被容忍失败的一步、成功的一步 → 只记两分
+		const outcome = await runPlan(
+			planOf([call('inspect_scene'), call('move_relative_ee', 'continue'), call('wave_hello')]),
+			{ catalog, runner },
+		);
+		expect(outcome.completed).toBe(2);
+		expect(outcome.total).toBe(3);
+
+		// 整条计划只有那一步：一步都没完成（`ok` 仍是 true——计划走完了，只是那一步没成）
+		const only = await runPlan(planOf([call('move_relative_ee', 'continue')]), { catalog, runner: fakeRunner('move_relative_ee').runner });
+		expect(only.ok).toBe(true);
+		expect(only.completed).toBe(0);
+		expect(only.total).toBe(1);
+
+		// 反证：同样三步、同样的失败，但不带这一栏 → 停在那儿，completed 只数前面那一步
+		const stopped = await runPlan(
+			planOf([call('inspect_scene'), call('move_relative_ee'), call('wave_hello')]),
+			{ catalog, runner: fakeRunner('move_relative_ee').runner },
+		);
+		expect(stopped.ok).toBe(false);
+		expect(stopped.completed).toBe(1);
+	});
+
+	it('⑤ wait 与 if 都不改 last.success：失败那一步记下的 false 一路传到后面的分叉', async () => {
+		const { runner, ran } = fakeRunner('move_relative_ee');
+		/*
+		 * 没成（但往下走）→ 停一下 → 上一步没成？→ 再问一次同样的问题。
+		 * 两次分叉的臂里都**不放技能步**（只放等待）：技能步会照自己的结局改写 `last.success`
+		 * （那是对的，见下面那一条），这一条要单独量的是「`wait` 与 `if` 不改它」。
+		 * 若 `wait` 或第一个 `if` 把它改成 true，两次分叉都会翻到 else 那一臂。
+		 */
+		const outcome = await runPlan(
+			planOf([
+				call('move_relative_ee', 'continue'),
+				wait(1),
+				branch(false, [wait(2)], [call('celebrate')]),
+				branch(false, [call('nod_yes')], [call('shake_no')]),
+			]),
+			{ catalog, runner, sleep: instantSleep },
+		);
+
+		expect(outcome.ok).toBe(true);
+		expect(ran).toEqual(['move_relative_ee', 'nod_yes']);
+		// 那一步等待与两个 if 都走完了（3 分）；被容忍失败的那一步不算完成
+		expect(outcome.completed).toBe(3);
+		expect(outcome.total).toBe(4);
+
+		// 反过来说：成功的技能步照记 true —— 条件翻到 else 那一臂
+		const other = fakeRunner();
+		const flipped = await runPlan(
+			planOf([call('inspect_scene'), wait(1), branch(false, [call('recover_safe_pose')], [call('celebrate')])]),
+			{ catalog, runner: other.runner, sleep: instantSleep },
+		);
+		expect(flipped.ok).toBe(true);
+		expect(other.ran).toEqual(['inspect_scene', 'celebrate']);
+	});
+
+	it('臂里的技能步照旧改写 last.success（「最近一次真正执行过的技能步」不分在不在臂里）', async () => {
+		const { runner, ran } = fakeRunner('move_relative_ee');
+		// 第 1 步没成（往下走）→ 走 then（上一步没成）→ 那一步**成了** → 再问同一个问题时答案翻了
+		const outcome = await runPlan(
+			planOf([
+				call('move_relative_ee', 'continue'),
+				branch(false, [call('recover_safe_pose')], [call('celebrate')]),
+				branch(false, [call('nod_yes')], [call('shake_no')]),
+			]),
+			{ catalog, runner },
+		);
+
+		expect(outcome.ok).toBe(true);
+		// 第一次走 then（回原位成了），第二次因此走 else（摇头）——臂里的技能步不是「不算数的一步」
+		expect(ran).toEqual(['move_relative_ee', 'recover_safe_pose', 'shake_no']);
+		expect(outcome.completed).toBe(2);
+	});
+
+	it('臂里的失败也能被容忍：外层分支照走完，那一步自己报 failed', async () => {
+		const { runner, ran } = fakeRunner('wave_hello');
+		const trace: string[] = [];
+		const outcome = await runPlan(
+			planOf([branch(true, [call('wave_hello', 'continue'), call('open_gripper_skill')], [call('shake_no')])]),
+			{ catalog, runner, onPlanStep: (e) => trace.push(traceOf(e)) },
+		);
+
+		expect(outcome.ok).toBe(true);
+		expect(ran).toEqual(['wave_hello', 'open_gripper_skill']);
+		// 顶层就一步（那个分支）：它走完了，所以算完成——失败的是臂里那一步，由它自己的事件说
+		expect(outcome.completed).toBe(1);
+		expect(trace).toEqual([
+			'1@0 then running if',
+			'1@0.then.0 - running skill',
+			'1@0.then.0 - failed skill',
+			'1@0.then.1 - running skill',
+			'1@0.then.1 - done skill',
+			'1@0 then done if',
+		]);
+	});
+});

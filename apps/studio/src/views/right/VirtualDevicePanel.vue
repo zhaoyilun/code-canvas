@@ -163,8 +163,18 @@ async function runPlan(): Promise<void> {
 		// 步骤行由挂载时订的那个监听器写（计划步事件一路推过来），这里不再照着结果重画一遍：
 		// 两个来源写同一块地方，早晚会有一处忘了更新。
 		const result = await target.run(plan);
+		/*
+		 * 「都走通了」这句话得对着**屏幕上的那几行**说，不能对着计划长度说。
+		 *
+		 * 一条带 `onFailure: 'continue'` 的计划里，某一步失败了但计划照样往下走完；
+		 * 拿 `plan.plan.length` 报「N 步都走通了」，就会跟同一块面板上那行红色 failed 打架。
+		 * 所以失败数从**步骤行**里数——它就是屏幕上看得见的那份账，两个数不可能不一致。
+		 */
+		const failed = stepLines.value.filter((line) => line.state === 'failed').length;
 		status.value = result.ok
-			? `计划完成：${String(plan.plan.length)} 步都走通了。`
+			? failed === 0
+				? `计划完成：${String(plan.plan.length)} 步都走通了。`
+				: `计划跑完了：有 ${String(failed)} 步失败（计划里标了失败也往下走），其余走通。`
 			: `计划中断：${result.reason ?? '某一步没做成'}（失败即停，不自动重试）`;
 	} finally {
 		busy.value = false;

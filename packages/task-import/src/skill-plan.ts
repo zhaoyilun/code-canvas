@@ -14,6 +14,8 @@
  *
  * `action` 这个键是三个视图的接缝（`findCapability` 认它），技能的参数就平铺在它旁边——
  * 于是「点开一个模块看它的实现」这条路，与一期任务那条完全一样，不用多一套机制。
+ * `timeoutSec` 与 `onFailure` 也平铺在这儿：两个都**不是技能参数**（目录里没这两栏），
+ * 按原名进 `parameters`，逆映射原样收回——它们只在任务 JSON 视图与流程卡上露面，来回一趟不丢。
  *
  * 一个 `if` 步 → 一个 `task.branch` 节点，**三格出边**（位置就是语义，空的那一格也要占着位置）：
  *
@@ -135,6 +137,9 @@ export const buildDeclarationFromPlan = (
 		// 超时**不**是技能参数（目录里没这一栏），所以它带着原名进节点参数：
 		// 技能自己声明的参数在三个视图里渲染，它只在任务 JSON 视图里露面，来回一趟不丢。
 		if (step.timeoutSec !== undefined) parameters['timeoutSec'] = step.timeoutSec;
+		// 失败处置跟超时同一个待遇：**不是技能参数**（目录里没这一栏），按原名进节点参数。
+		// 视图（流程卡上的「失败也往下走」）也从这一个键读，不另立一张字段表。
+		if (step.onFailure !== undefined) parameters['onFailure'] = step.onFailure;
 		return {
 			id: idFactory.nodeId(),
 			// 显示名用目录里的中文标签——「打招呼」比 `wave_hello` 更像这个界面上该有的东西。

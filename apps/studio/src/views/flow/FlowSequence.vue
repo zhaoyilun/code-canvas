@@ -110,6 +110,16 @@ const connectorAfter = (position: number): boolean => {
 			</dl>
 			<p v-else class="card-params-empty">{{ row.card.paramsNote ?? '这个动作没有参数' }}</p>
 
+			<!--
+				失败也往下走（`onFailure: 'continue'`）：这一步失败之后计划不停，后面那个分叉
+				因此真的能走到「上一步没成」那条臂。它画在卡片上而不是参数区——它说的是这一步的
+				**失败处置**，不是一次能力调用的参数；判据从节点参数读（见 `rows.ts`），这里只画那句话。
+				缺省（停）的卡片上什么都不写：默认行为不必在每一张卡上重复一遍。
+			-->
+			<p v-if="row.card.continueNote !== null" class="card-continue" data-testid="flow-node-continue">
+				{{ row.card.continueNote }}
+			</p>
+
 			<ul v-if="row.card.diagnostics.length > 0" class="card-diagnostics" data-testid="flow-node-diagnostics">
 				<li
 					v-for="diagnostic in row.card.diagnostics"
@@ -337,6 +347,18 @@ const connectorAfter = (position: number): boolean => {
 	padding-top: var(--cc-space-1);
 	font-size: var(--cc-fs-sm);
 	color: var(--cc-text-faint);
+	border-top: 1px dashed var(--cc-line);
+}
+
+/*
+ * 「失败也往下走」：一句小字，颜色比参数暗、比序号亮——它是这一步的一条备注，
+ * 不是读数，也不该抢卡头那个动作名。与条件那句同一段位置（动作名下面的一条信息）。
+ */
+.card-continue {
+	margin: 0;
+	padding-top: var(--cc-space-1);
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-dim);
 	border-top: 1px dashed var(--cc-line);
 }
 

@@ -92,6 +92,12 @@ ${
 plan的每一步要么是一次技能调用，要么是一次条件分叉，要么是一次等待。
 技能调用形如{"step":"skill","skill":"技能名","params":{…}}，skill只能从下面这份清单里选；
 这一步要限时就加"timeoutSec"（秒，正数），它跟"params"平级，不要放进params里。
+这一步失败之后怎么办，看"onFailure"，它也只能跟"params"平级，取值只有"stop"和"continue"。
+**缺省是"stop"**：这一步没成，整条计划就停在这里（这是默认，也是安全立场——机器不会在失败之后自己接着按计划动）。
+**只在「这一步失败也有下一步可走」时才写"continue"**：那时计划继续往下走，并且「上一步成没成」记成没成，
+所以后面可以跟一个 condition 为 {"field":"last.success","op":"==","value":false} 的分叉去补救。
+没想清楚就别写这一栏——不写就是停。
+"onFailure"只能写在技能调用那一步上：等待与分叉不许带它。
 params里的参数名与类型只能用下面列出的那些；标着「没有参数」的技能不要给params。
 条件分叉形如{"step":"if","condition":{…},"then":[…],"else":[…]}
 ——condition 只能是 {"field":"last.success","op":"=="或"!=","value":true或false}，

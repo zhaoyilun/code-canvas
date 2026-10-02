@@ -180,7 +180,7 @@ flowchart LR
 | 格式 | 谁用 | 长什么样 | 判据 |
 | --- | --- | --- | --- |
 | `phase1_task` | 一期设备（差速底盘 + 六轴臂） | §1.1 那份，七个固定动作 | `validateTask`（逐条对照 `task_protocol.py`） |
-| `skill_plan` | RoboFrame SO-101（真机 / 虚拟设备） | `{schemaVersion, robot, description?, plan:[Step, …]}`，其中 `Step` 是 `{step:'skill', skill, params?, timeoutSec?}` 或 `{step:'if', condition:{field:'last.success', op:'==' / '!=', value:boolean}, then:[Step, …], else?:[Step, …]}` | `validateSkillPlan`：**技能与参数照设备目录判**；分支照条件、臂与深度判 |
+| `skill_plan` | RoboFrame SO-101（真机 / 虚拟设备） | `{schemaVersion, robot, description?, plan:[Step, …]}`，其中 `Step` 是三员之一：`{step:'skill', skill, params?, timeoutSec?, onFailure?:'stop' / 'continue'}`、`{step:'if', condition:{field:'last.success', op:'==' / '!=', value:boolean}, then:[Step, …], else?:[Step, …]}`、`{step:'wait', seconds}` | `validateSkillPlan`：**技能与参数照设备目录判**；分支照条件、臂与深度判；等待照秒数判；失败处置照取值判 |
 
 三条规矩：
 
@@ -188,10 +188,11 @@ flowchart LR
   分叉点只有一处，见 `packages/task-import/src/format.ts`。
 - **尺子跟着声明走。** 第二道闸用「这份声明出生时那台设备的格式」量，不是用当前选中的设备。
   生成之后换设备，声明还是上一台产出的；这时拿新尺子量，改一个数字都会被莫名其妙拒掉。
-- **`skill_plan` 的形状沿用前作集成设计稿 §7.3 的 `RobotTaskPlan`**，三处偏离写在
+- **`skill_plan` 的形状沿用前作集成设计稿 §7.3 的 `RobotTaskPlan`**，几处偏离写在
   `packages/contracts/src/skill-plan.ts` 头上：参数名照抄上游（`motion_direction` 而不是示例里的
-  `motionDirection`），`step` 只认 `'skill'` 与 `'if'`（`primitive` / `wait` / `skipIf` 还没做，
-  遇到就明确报错，不静默当技能），以及 `if` 这一版的条件只认 `last.success`。
+  `motionDirection`）；`step` 只认 `'skill'` / `'if'` / `'wait'`（`primitive` 还没做，遇到就明确报错，
+  不静默当技能）；`if` 这一版的条件只认 `last.success`；设计稿的 `skipIf`（守卫挂在**后一步**上）
+  换成了技能步自己的 `onFailure`（见下）。
 
 **分支为什么长成这样（三条，都是被现实逼出来的）：**
 
@@ -206,6 +207,26 @@ flowchart LR
 - **嵌套深度上限定 8。** 校验器与三个视图都要走这棵树，一份恶意嵌套的 JSON 不该能把它们打爆；
   正常人也不会写九层条件。超了给 `plan.step.depth_exceeded`，且那一层不再往下递归——
   恶意嵌套的代价是一层诊断，不是一次爆栈。
+
+**等待（`wait`）与失败处置（`onFailure`）为什么是这个形状：**
+
+- **`wait` 是「停一下」，不是一次动作。** 技能自己带的时长管不了「两步之间停一下」
+  （抓起来、等它稳定两秒、再移动），所以计划层要有这一步：`{step:'wait', seconds}`，
+  秒数必须是正数、最多 `SKILL_PLAN_MAX_WAIT_SECONDS`（十分钟）——计划是送给机器执行的东西，
+  一个 `86400` 不是「等一天」，是把执行器挂在那儿过夜。
+  它**不改 `last.success`**：它没有「成」也没有「败」，所以它后面那个 `if` 看到的仍是
+  它**之前**那个技能步的结果（执行侧 `apps/robot3d/src/roboframe/plan.ts` 里钉着）。
+  它**不带 `onFailure`**（等不到点不是失败，是取消），给了报 `plan.step.onfailure_not_applicable`。
+- **`onFailure` 缺省是 `'stop'`——这是安全立场，不是省事。** 执行器一直是「失败即停、
+  不自动重试」（与 bridge 同一条纪律：重试与否由技能自己的 `recovery_policy` 决定）。
+  默认改成 `'continue'`，等于让**每一次**技能失败之后整台机器继续按计划动；要放宽必须是
+  **写计划的人显式说的**（他才知道后面有没有可走的路），所以缺省不许动。
+- **`'continue'` 只改两件事：计划继续往下走，`last.success` 记成 `false`。**
+  这是为了让 `if (last.success == false)` 那条臂**真的可达**：在它之前，任何技能步失败都会
+  结束整条计划，`last.success` 在 `if` 求值处恒为 `true`，一半的分支是死的。
+  它**不粉饰**：这一步照报 `failed`，也不算进 `completed`——失败是事实，被容忍也是事实。
+  只有技能步带这一栏（取值只认 `'stop'` / `'continue'`，别的给 `plan.step.onfailure_invalid`）：
+  `wait` 不会失败，`if` 走哪条臂由条件决定，两处带上都报错。
 
 设备这一层因此是「一份目录 + 一套任务格式 + 一个去处」。同一份 SO-101 技能库发给真机还是发给仿真，
 换的只是去处——这也是 RoboFrame 自己的分法。

@@ -28,7 +28,9 @@ import RightPanel from './RightPanel.vue';
  * 真正的挂载 / 跑一步 / 卸载契约在 `apps/robot3d/src/mount.test.ts` 里，那边用假舞台跑真执行器。
  */
 const mountVirtualDevice = vi.fn((_host: HTMLElement) => ({
-	run: vi.fn().mockResolvedValue({ ok: true, steps: [] }),
+	// 形状照真的 `PlanRunOutcome` 给全：状态行要用 completed/total 说话，
+	// 少一个字段就会把「跑通了 2 步」写成 undefined。
+	run: vi.fn().mockResolvedValue({ ok: true, completed: 1, total: 1 }),
 	reset: vi.fn(),
 	onStep: vi.fn(() => () => {}),
 	onPlanStep: vi.fn(() => () => {}),
@@ -497,5 +499,68 @@ describe('右栏 · 运行按钮的校验闸', () => {
 		expect(wrapper.get('[data-testid="virtual-device-status"]').text()).toContain('一步没跑');
 
 		wrapper.unmount();
+	});
+});
+
+describe('跑完之后那句话不许撒谎', () => {
+	/**
+	 * 装一块面板 + 切到虚拟设备 + 按下运行，返回挂载出来的那台假设备。
+	 * 这三步每一条用例都要走，抄一遍就会有四种写法。
+	 */
+	const runOnVirtualDevice = async (): Promise<{ instance: FakeDevice; status: string }> => {
+		const wrapper = panel();
+		setSelectedDevice('so101_sim');
+		await wrapper.vm.$nextTick();
+		const instance = lastMount();
+		expect(doc.loadTaskJson(SAMPLE_SKILL_PLAN_JSON)).toBe(true);
+		await wrapper.vm.$nextTick();
+		await wrapper.get('[data-testid="virtual-device-run"]').trigger('click');
+		await wrapper.vm.$nextTick();
+		const status = wrapper.get('[data-testid="virtual-device-status"]').text();
+		return { instance, status };
+	};
+
+	it('全部走通 → 「N 步都走通了」（N 是走通的步数）', async () => {
+		const { instance, status } = await runOnVirtualDevice();
+		expect(instance.run).toHaveBeenCalled();
+		expect(status).toContain('计划完成');
+		expect(status).toContain('都走通了');
+	});
+
+	it('有一步失败但被 onFailure 容忍 → 说清有几步失败，不许说「都走通了」', async () => {
+		// `ok: true` 但过程中有一步行是 failed：计划跑完了，其中一步失败了。
+		// 早先这里写的是「N 步都走通了」（N 取的是计划长度）——那是句假话，
+		// 屏幕上那行红色 failed 会直接跟它打架。
+		const wrapper = panel();
+		setSelectedDevice('so101_sim');
+		await wrapper.vm.$nextTick();
+		const instance = lastMount();
+		const emit = instance.onPlanStep.mock.calls[0]?.[0] as ((event: unknown) => void) | undefined;
+		expect(emit).toBeTypeOf('function');
+
+		// 真执行器是在跑的过程中推事件的，跑完 `run()` 才 resolve——
+		// 所以这里也让失败那一行在 resolve **之前**推出去。
+		instance.run.mockImplementation(async () => {
+			emit?.({
+				kind: 'plan-step',
+				path: '0',
+				index: 1,
+				total: 3,
+				state: 'failed',
+				arm: null,
+				taskId: 't1',
+				step: { step: 'skill', skill: 'x' },
+			});
+			return { ok: true, steps: [] };
+		});
+
+		expect(doc.loadTaskJson(SAMPLE_SKILL_PLAN_JSON)).toBe(true);
+		await wrapper.vm.$nextTick();
+		await wrapper.get('[data-testid="virtual-device-run"]').trigger('click');
+		await wrapper.vm.$nextTick();
+
+		const status = wrapper.get('[data-testid="virtual-device-status"]').text();
+		expect(status).toContain('失败');
+		expect(status).not.toContain('都走通了');
 	});
 });

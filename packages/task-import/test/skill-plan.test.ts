@@ -462,3 +462,90 @@ describe('技能计划的等待 → 声明', () => {
 		expect(declaration.connections[thenWait]?.main).toBeUndefined(); // 臂尾：没有出边
 	});
 });
+
+// ---------------------------------------------------------------------------
+// 失败处置（`onFailure`）：计划 → 声明 → 计划
+// ---------------------------------------------------------------------------
+
+describe('技能计划的失败处置 → 声明', () => {
+	it('跟 timeoutSec 一个待遇：**不是技能参数**，按原名进节点参数', () => {
+		const result = importSkillPlan(
+			{
+				schemaVersion: 1,
+				robot: 'so101_single_arm',
+				plan: [
+					{
+						step: 'skill',
+						skill: 'move_relative_ee',
+						params: { motion_direction: 'forward', motion_distance: 0.03 },
+						timeoutSec: 15,
+						onFailure: 'continue',
+					},
+				],
+			},
+			{ catalog, idFactory: ids },
+		);
+		if (!result.ok) throw new Error('计划应当能导入');
+		expect(result.declaration.nodes.map((node) => node.parameters)).toEqual([
+			{
+				action: 'move_relative_ee',
+				motion_direction: 'forward',
+				motion_distance: 0.03,
+				timeoutSec: 15,
+				onFailure: 'continue',
+			},
+		]);
+	});
+
+	it('缺省不补键：没说「失败也往下走」的步骤，节点参数里没有这一栏', () => {
+		const result = importSkillPlan({ schemaVersion: 1, robot: 'so101_single_arm', plan: [{ step: 'skill', skill: 'inspect_scene' }] }, {
+			catalog,
+			idFactory: ids,
+		});
+		if (!result.ok) throw new Error('计划应当能导入');
+		expect(result.declaration.nodes[0]?.parameters).toEqual({ action: 'inspect_scene' });
+	});
+
+	it('来回一趟字节等价：带 continue 的、缺省的、与分支和等待混排的', () => {
+		// 三种都过一遍：显式 continue（顶层 + 臂里）、显式 stop、缺省，再与 `if` / `wait` 混排。
+		const plans = [
+			{
+				schemaVersion: 1,
+				robot: 'so101_single_arm',
+				description: '这一步可能不成，成了就继续',
+				plan: [
+					{ step: 'skill', skill: 'move_relative_ee', params: { motion_direction: 'forward', motion_distance: 0.1 }, onFailure: 'continue' },
+					{
+						step: 'if',
+						condition: { field: 'last.success', op: '==', value: false },
+						then: [{ step: 'skill', skill: 'inspect_scene', onFailure: 'stop' }],
+						else: [{ step: 'wait', seconds: 0.5 }],
+					},
+					{ step: 'skill', skill: 'move_relative_ee', params: { motion_direction: 'back', motion_distance: 0.02 } },
+				],
+			},
+			{
+				schemaVersion: 1,
+				robot: 'so101_single_arm',
+				plan: [
+					{ step: 'skill', skill: 'inspect_scene' },
+					{ step: 'wait', seconds: 2 },
+					{ step: 'skill', skill: 'move_relative_ee', params: { motion_direction: 'up', motion_distance: 0.05 }, timeoutSec: 5, onFailure: 'continue' },
+				],
+			},
+		];
+
+		for (const plan of plans) {
+			const first = importSkillPlan(plan, { catalog, idFactory: ids });
+			if (!first.ok) throw new Error('计划应当能导入');
+			const restored = declarationToSkillPlan(first.declaration);
+			expect(restored).toEqual(plan);
+			// 深等价之外再钉一次字节：键序也照冻结的形状（… timeoutSec / onFailure 在最后）
+			expect(JSON.stringify(restored)).toBe(JSON.stringify(plan));
+			// 还原出来的计划再导一遍，声明的内容照旧
+			const second = importSkillPlan(restored, { catalog, idFactory: ids });
+			if (!second.ok) throw new Error('还原出来的计划应当能再导入');
+			expect(stripVolatile(second.declaration)).toEqual(stripVolatile(first.declaration));
+		}
+	});
+});

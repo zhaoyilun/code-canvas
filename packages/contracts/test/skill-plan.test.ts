@@ -1,7 +1,7 @@
 /**
  * 技能计划的校验器：**判据是目录**，不是写死的动作表。
  *
- * 这份测试要钉住的四件事：
+ * 这份测试要钉住的六件事：
  * 1. 合法计划原样通过，参数按目录里的类型判；
  * 2. 不合法的每一类都有**自己的码**（技能查不到 / 参数名不认 / 类型不对 / 步种类不支持），
  *    界面能据此指出是哪一步的哪个字段；
@@ -9,11 +9,13 @@
  * 4. 分支（`if` 步）的每一条规矩都是硬规矩：条件只认 `last.success`（字段 / 运算符 / 取值各自有码）、
  *    嵌套有深度上限、`then` 非空、`else` 给了就非空，且诊断的 `path` 要指到嵌套里的那一层；
  * 5. 等待（`wait` 步）的秒数必须是正数、不超十分钟，且**不参与**分支的深度计数——
- *    「等一会儿」不该占掉分支的表达空间。
+ *    「等一会儿」不该占掉分支的表达空间；
+ * 6. 失败处置（`onFailure`）只有技能步有：取值只认 `stop` / `continue`，缺省**不补键**
+ *    （缺省是停，不许在执行侧看不见的地方把它悄悄写成 `continue`），落在 `wait` / `if` 上报错。
  */
 import { describe, expect, it } from 'vitest';
 import { capabilityCatalogSchema, type CapabilityCatalog } from '../src/capability';
-import { validateSkillPlan, SKILL_PLAN_SCHEMA_VERSION } from '../src/skill-plan';
+import { SKILL_PLAN_ON_FAILURE, validateSkillPlan, SKILL_PLAN_SCHEMA_VERSION } from '../src/skill-plan';
 
 const CATALOG: CapabilityCatalog = capabilityCatalogSchema.parse({
 	catalogRef: 'roboframe_so101_single_arm',
@@ -405,5 +407,92 @@ describe('技能计划的等待', () => {
 		expect(codes(result)).toEqual([]);
 		if (!result.ok) throw new Error('应当通过');
 		expect(result.plan.plan.map((item) => item.step)).toEqual(['skill', 'wait', 'if', 'wait']);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 失败处置（`onFailure`）：只有技能步有，缺省是停
+// ---------------------------------------------------------------------------
+
+describe('技能计划的失败处置', () => {
+	it('两个取值都合法，原样带进结果（键序照冻结的形状：step / skill / params / timeoutSec / onFailure）', () => {
+		for (const value of SKILL_PLAN_ON_FAILURE) {
+			const result = validateSkillPlan(
+				step({ step: 'skill', skill: 'move_relative_ee', params: { motion_direction: 'forward', motion_distance: 0.03 }, timeoutSec: 10, onFailure: value }),
+				{ catalog: CATALOG },
+			);
+			expect(codes(result)).toEqual([]);
+			if (!result.ok) throw new Error('应当通过');
+			expect(result.plan.plan).toStrictEqual([
+				{
+					step: 'skill',
+					skill: 'move_relative_ee',
+					params: { motion_direction: 'forward', motion_distance: 0.03 },
+					timeoutSec: 10,
+					onFailure: value,
+				},
+			]);
+			expect(Object.keys(result.plan.plan[0] ?? {})).toEqual(['step', 'skill', 'params', 'timeoutSec', 'onFailure']);
+		}
+	});
+
+	it('缺省**不补键**：没写这一栏就什么都不写（缺省是停，不替执行侧把 stop 写进计划里）', () => {
+		const result = validateSkillPlan(step({ step: 'skill', skill: 'wave_hello' }), { catalog: CATALOG });
+		expect(codes(result)).toEqual([]);
+		if (!result.ok) throw new Error('应当通过');
+		expect(result.plan.plan).toStrictEqual([{ step: 'skill', skill: 'wave_hello' }]);
+		expect(result.plan.plan[0]).not.toHaveProperty('onFailure');
+	});
+
+	it('取值不认识就报错，且**不退回缺省**：keep_going / true / null / 数字各报同一个码', () => {
+		// 想写「往下走」的人写错了词，静默按「停」处理会让他的计划停在一步他以为不会停的地方。
+		for (const bad of ['keep_going', 'Stop', true, null, 1, { onFailure: 'continue' }]) {
+			const result = validateSkillPlan(step({ step: 'skill', skill: 'wave_hello', onFailure: bad }), { catalog: CATALOG });
+			expect(codes(result)).toEqual(['plan.step.onfailure_invalid']);
+			expect(result.ok).toBe(false);
+			const [first] = result.diagnostics;
+			expect(first?.path).toBe('plan[0].onFailure');
+			expect(first?.details?.['allowed']).toEqual(['stop', 'continue']);
+			expect(first?.details?.['default']).toBe('stop');
+		}
+	});
+
+	it('落在等待步上报错：`wait` 不会失败，这一栏没有对象', () => {
+		const result = validateSkillPlan(step({ step: 'wait', seconds: 2, onFailure: 'continue' }), { catalog: CATALOG });
+		expect(codes(result)).toEqual(['plan.step.onfailure_not_applicable']);
+		expect(result.ok).toBe(false);
+		const [first] = result.diagnostics;
+		expect(first?.path).toBe('plan[0].onFailure');
+		expect(first?.ref).toBe('wait');
+		expect(first?.details?.['applicable']).toEqual(['skill']);
+		// 秒数那个毛病照报：这一栏不对，不挡着别的问题
+		expect(codes(validateSkillPlan(step({ step: 'wait', seconds: 0, onFailure: 'stop' }), { catalog: CATALOG }))).toEqual([
+			'plan.step.onfailure_not_applicable',
+			'plan.step.wait.seconds_invalid',
+		]);
+	});
+
+	it('落在分支步上报错，臂里那一层也照报（走哪条臂由条件决定）', () => {
+		const top = validateSkillPlan(step(branch({ onFailure: 'continue' })), { catalog: CATALOG });
+		expect(codes(top)).toEqual(['plan.step.onfailure_not_applicable']);
+		expect(top.diagnostics[0]?.path).toBe('plan[0].onFailure');
+		expect(top.diagnostics[0]?.ref).toBe('if');
+
+		// 臂里的技能步带着它是**对的**（继续往下走是这一步的事），臂里的 `if` 带着才是错的
+		const nested = validateSkillPlan(
+			step(branch({ then: [{ step: 'skill', skill: 'wave_hello', onFailure: 'continue' }, branch({ onFailure: 'stop' })] })),
+			{ catalog: CATALOG },
+		);
+		expect(codes(nested)).toEqual(['plan.step.onfailure_not_applicable']);
+		expect(nested.diagnostics[0]?.path).toBe('plan[0].then[1].onFailure');
+	});
+
+	it('与别的毛病一起报：技能查不到归技能查不到，处置写错归处置写错', () => {
+		const result = validateSkillPlan(
+			planOf({ step: 'skill', skill: 'fly', onFailure: 'continue' }, { step: 'skill', skill: 'wave_hello', onFailure: 'later' }),
+			{ catalog: CATALOG },
+		);
+		expect(codes(result)).toEqual(['plan.step.skill.unknown', 'plan.step.onfailure_invalid']);
+		expect(result.diagnostics.map((item) => item.path)).toEqual(['plan[0].skill', 'plan[1].onFailure']);
 	});
 });

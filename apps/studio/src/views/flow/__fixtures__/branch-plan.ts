@@ -29,11 +29,13 @@ const skill = (
 	ref: string,
 	params?: Readonly<Record<string, string | number>>,
 	timeoutSec?: number,
+	onFailure?: 'stop' | 'continue',
 ): SkillPlanStep => ({
 	step: 'skill',
 	skill: ref,
 	...(params === undefined ? {} : { params }),
 	...(timeoutSec === undefined ? {} : { timeoutSec }),
+	...(onFailure === undefined ? {} : { onFailure }),
 });
 
 /** 看一眼桌面 → 按「上一步成没成」分叉（成/没成各一步）→ 往前走一点。 */
@@ -136,3 +138,27 @@ const BRANCH_WAIT_PLAN: SkillPlan = {
 };
 
 export const BRANCH_WAIT_PLAN_JSON = JSON.stringify(BRANCH_WAIT_PLAN, null, 2);
+
+/**
+ * 失败处置的素材：挪一点（**可能不成，但失败也往下走**）→ 按「上一步成没成」补救 → 打个招呼。
+ *
+ * 三张卡的处置各不相同，正好量「哪张卡该标那句话」：带 `continue` 的标，缺省（停）的不标，
+ * 显式写 `'stop'` 的也不标（它就是缺省，标出来是在每一张卡上重复默认行为）。
+ */
+const CONTINUE_ON_FAILURE_PLAN: SkillPlan = {
+	schemaVersion: 1,
+	robot: 'so101_single_arm',
+	description: '挪一点，没成就回原位，最后打个招呼',
+	plan: [
+		skill('move_relative_ee', { motion_direction: 'forward', motion_distance: 0.1 }, 10, 'continue'),
+		{
+			step: 'if',
+			condition: { field: 'last.success', op: '==', value: false },
+			then: [skill('recover_safe_pose', undefined, undefined, 'stop')],
+			else: [skill('celebrate')],
+		},
+		skill('wave_hello'),
+	],
+};
+
+export const CONTINUE_ON_FAILURE_PLAN_JSON = JSON.stringify(CONTINUE_ON_FAILURE_PLAN, null, 2);

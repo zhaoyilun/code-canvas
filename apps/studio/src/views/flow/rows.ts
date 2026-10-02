@@ -24,6 +24,8 @@ import {
 } from './summary';
 import {
 	conditionViewOf,
+	continuesOnFailure,
+	CONTINUE_ON_FAILURE_NOTE,
 	waitLabelOf,
 	type ConditionView,
 	type PlanStep,
@@ -47,6 +49,14 @@ export interface FlowCardModel {
 	 * 等待卡要自己说一句，因为「没有参数」在它身上是对的但没说清它是什么（它不是动作）。
 	 */
 	readonly paramsNote: string | null;
+	/**
+	 * 这一步失败了还往下走吗（`onFailure: 'continue'`）。只有技能卡可能是 `true`。
+	 * 那句话是**人话版本**：参数区里那个原样的 `onFailure` 行（与 `timeoutSec` 一样，
+	 * 由 `summarizeNodeParameters` 照「声明里多出来的字段」列出来）说的是同一件事的机器形态。
+	 */
+	readonly continuesOnFailure: boolean;
+	/** 上面那句话本身（`失败也往下走`）。不往下走就是 `null`，卡片上什么都不写。 */
+	readonly continueNote: string | null;
 }
 
 export interface FlowCardRow {
@@ -98,6 +108,11 @@ const cardOf = (
 		protocolAction !== null || catalog === null || typeof action !== 'string'
 			? null
 			: (findCapability(catalog, action) ?? null);
+	/*
+	 * 失败处置只有技能步有（契约那边就不让 `wait` / `if` 带它）。判据从节点参数读，
+	 * 见 `continuesOnFailure`——视图里不另立一份「哪个键、哪个值算 continue」的表。
+	 */
+	const continues = !step.isBranch && !step.isWait && continuesOnFailure(step.node);
 	return {
 		node: step.node,
 		index: step.index,
@@ -118,6 +133,8 @@ const cardOf = (
 		diagnostics: nodeDiagnostics(diagnostics, step.node, step.index),
 		condition: step.isBranch ? conditionViewOf(step.node) : null,
 		paramsNote: step.isWait ? '等待步没有参数：它只是停一下，不改动上一步的结果。' : null,
+		continuesOnFailure: continues,
+		continueNote: continues ? CONTINUE_ON_FAILURE_NOTE : null,
 	};
 };
 

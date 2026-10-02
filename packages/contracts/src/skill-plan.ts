@@ -16,6 +16,9 @@
  *   但**分支**要做：现实任务真的会分叉（上一步没成就换个法子再试），平铺的步骤列表
  *   表达不出来；**等待**也要做：技能自己带的时长管不了「两步之间停一下」
  *   （抓起来、等它稳定两秒、再移动）。遇到不认的 step 给明确诊断，不静默当技能处理。
+ *   设计稿的 `skipIf` 是「守卫挂在**后一步**上」，这一版换成技能步自己的 `onFailure`：
+ *   两件事回答的是同一个问题（这一步失败之后计划怎么办），而写在这一步自己身上，
+ *   读计划的人不必往后找那个守卫——**缺省仍是停**（见 `SkillStep.onFailure`）。
  * - **多一个 `description`**（可选）。设计稿的 plan 没有任务名（在 n8n 里节点自带名字），
  *   而这个界面上到处要显示「这是哪个任务」。不加就只能拿机器人名当任务名。
  *
@@ -57,6 +60,18 @@ export const SKILL_PLAN_MAX_BRANCH_DEPTH = 8;
  */
 export const SKILL_PLAN_MAX_WAIT_SECONDS = 600;
 
+/**
+ * 技能步失败之后怎么办的全集：`'stop'`（停）与 `'continue'`（往下走）。
+ *
+ * **只有这两个**：一个技能失败之后无非两种处置——整条计划停在这里，或者照计划往下走
+ * （后面那一步自己按 `last.success` 决定要不要补救）。「重试」不在这一栏里：
+ * 重试与否由技能自己的 `recovery_policy` 决定，不由计划替他拿主意（与 bridge 的纪律一致）。
+ */
+export const SKILL_PLAN_ON_FAILURE = ['stop', 'continue'] as const;
+
+/** `onFailure` 的取值。缺省（没写这一栏）等价于 `'stop'`。 */
+export type SkillPlanOnFailure = (typeof SKILL_PLAN_ON_FAILURE)[number];
+
 /** 一个计划步：调一个技能。 */
 export interface SkillStep {
 	readonly step: 'skill';
@@ -65,6 +80,20 @@ export interface SkillStep {
 	readonly params?: JsonObject;
 	/** 这一步的超时（秒）。缺省时由执行侧按技能自己的 `recovery_policy` 定。 */
 	readonly timeoutSec?: number;
+	/**
+	 * 这一步失败之后计划怎么办。**缺省是 `'stop'`**：失败即停，现在的行为一个字不变。
+	 *
+	 * **为什么默认是停**：这是安全立场，与 bridge「失败即停、不自动重试」同一条——
+	 * 计划是送给**机器**执行的东西，默认改成 `'continue'` 等于让每一次技能失败之后
+	 * 整台机器继续按计划动。要放宽必须是**写计划的人显式说的**（他才知道后面有没有可走的路）。
+	 *
+	 * `'continue'` 只改两件事：这一步失败之后计划继续往下走，且 `last.success` 记成 `false`
+	 * （于是后面的 `if` 真的能走到「没成」那条臂）。它**不粉饰**：这一步照报 `failed`，
+	 * 不算进 `completed`——失败是事实，被容忍也是事实，两件事各说各的。
+	 *
+	 * `wait` 与 `if` **不带**这一栏（等待不会失败；分支走哪条臂由条件决定），给了就报错。
+	 */
+	readonly onFailure?: SkillPlanOnFailure;
 }
 
 /** 分支条件：机器身上唯一可靠的可观测量——**上一步成没成**（见文件头）。 */
@@ -77,6 +106,7 @@ export interface BranchCondition {
 /**
  * 一个计划步：按条件走一条臂。
  * `then` 至少一步；`else` 要么不给，要么至少一步（空臂没有意义，只会让执行侧猜）。
+ * **没有 `onFailure`**：走哪条臂已经由条件说清了，再挂一个「失败怎么办」是无处安放的重复。
  */
 export interface BranchStep {
 	readonly step: 'if';
@@ -93,6 +123,9 @@ export interface BranchStep {
  *   `wait` **之前**那个技能步的结果（执行侧 `apps/robot3d/src/roboframe/plan.ts` 里钉着）；
  * - **秒数必须是正数**：0 秒的等待没有意义（那是在计划里塞一句废话），负数更不是等待；
  * - **有上限**（`SKILL_PLAN_MAX_WAIT_SECONDS`）：见那个常量的说明。
+ *
+ * **也没有 `onFailure`**：它不会失败（等不到点不是失败，是取消），所以「失败怎么办」这一栏
+ * 在它身上没有对象——给了就报错，不静默忽略。
  */
 export interface WaitStep {
 	readonly step: 'wait';
@@ -154,6 +187,58 @@ const matchesType = (spec: CapabilitySpec['parameters'][number], value: JsonValu
 
 /** 展示用的一小段值：报错时让人看懂收到的是什么。 */
 const show = (value: unknown): string => JSON.stringify(jsonDetail(value));
+
+/** 是不是一个认得的失败处置（`'stop'` / `'continue'`）。 */
+const isOnFailure = (value: unknown): value is SkillPlanOnFailure =>
+	typeof value === 'string' && SKILL_PLAN_ON_FAILURE.some((allowed) => allowed === value);
+
+/**
+ * 技能步的失败处置：`undefined`（没写这一栏＝缺省 `'stop'`）或两个认得的取值之一，别的一律报错。
+ *
+ * 不认的取值**不退回缺省**：写 `'keep_going'` 的人想说的是「往下走」，静默按 `'stop'` 处理
+ * 会让他的计划停在一步他以为不会停的地方——报出来，那句话才说得出口。
+ */
+const validateOnFailure = (
+	rawStep: Record<string, unknown>,
+	path: string,
+	ref: string,
+	collector: DiagnosticCollector,
+): SkillPlanOnFailure | undefined => {
+	const raw = rawStep['onFailure'];
+	if (raw === undefined) return undefined;
+	if (isOnFailure(raw)) return raw;
+	collector.error({
+		code: 'plan.step.onfailure_invalid',
+		message: `失败处置只能是 ${SKILL_PLAN_ON_FAILURE.join(' / ')}（缺省是 stop），收到 ${show(raw)}`,
+		path: `${path}.onFailure`,
+		ref,
+		details: { value: jsonDetail(raw), allowed: [...SKILL_PLAN_ON_FAILURE], default: 'stop' },
+	});
+	return undefined;
+};
+
+/**
+ * `wait` 与 `if` **不带**失败处置：给了就报错（码 `plan.step.onfailure_not_applicable`）。
+ *
+ * 为什么是错误而不是「收下但没用」：这一栏在它们身上没有对象——等待不会失败，
+ * 分支走哪条臂由条件决定。收下一个执行侧永远不会读的字段，等于让写计划的人以为它生效了。
+ */
+const rejectOnFailure = (
+	rawStep: Record<string, unknown>,
+	path: string,
+	ref: string,
+	message: string,
+	collector: DiagnosticCollector,
+): void => {
+	if (rawStep['onFailure'] === undefined) return;
+	collector.error({
+		code: 'plan.step.onfailure_not_applicable',
+		message,
+		path: `${path}.onFailure`,
+		ref,
+		details: { value: jsonDetail(rawStep['onFailure']), applicable: ['skill'] },
+	});
+};
 
 /**
  * 校验分支条件。
@@ -249,6 +334,15 @@ const validateBranchStep = (
 	collector: DiagnosticCollector,
 	catalog: CapabilityCatalog,
 ): BranchStep | undefined => {
+	// 有没有那一栏与深度无关，所以先说它：深度超限时也不该把它咽掉。
+	rejectOnFailure(
+		rawStep,
+		path,
+		BRANCH_STEP_REF,
+		'分支步不带 onFailure：走哪条臂由条件决定，「这一步失败了怎么办」在这儿没有对象',
+		collector,
+	);
+
 	if (depth + 1 > SKILL_PLAN_MAX_BRANCH_DEPTH) {
 		collector.error({
 			code: 'plan.step.depth_exceeded',
@@ -398,11 +492,15 @@ const validateSkillStep = (
 		return undefined;
 	}
 
+	// 失败处置：缺省不给这一栏（＝执行侧按 `'stop'` 走，那时结果里也没有这个键）。
+	const onFailure = validateOnFailure(rawStep, path, rawSkill, collector);
+
 	return {
 		step: 'skill',
 		skill: rawSkill,
 		...(Object.keys(validated).length === 0 ? {} : { params: validated }),
 		...(typeof timeoutSec === 'number' ? { timeoutSec } : {}),
+		...(onFailure === undefined ? {} : { onFailure }),
 	};
 };
 
@@ -419,6 +517,14 @@ const validateWaitStep = (
 	path: string,
 	collector: DiagnosticCollector,
 ): WaitStep | undefined => {
+	rejectOnFailure(
+		rawStep,
+		path,
+		WAIT_STEP_REF,
+		'等待步不带 onFailure：它不会失败（等多久由 seconds 决定）',
+		collector,
+	);
+
 	const rawSeconds = rawStep['seconds'];
 	if (typeof rawSeconds !== 'number' || !Number.isFinite(rawSeconds) || !(rawSeconds > 0)) {
 		collector.error({

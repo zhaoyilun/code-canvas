@@ -158,8 +158,12 @@ export type PlanStepEvent =
 export type PlanStepReport = Extract<PlanStepEvent, { kind: 'plan-step' }>;
 
 export interface PlanRunOutcome {
+	/** 计划有没有走完。有步骤被 `onFailure: 'continue'` 容忍失败时，计划走完了，所以仍是 `true`（见 `runPlan`）。 */
 	readonly ok: boolean;
-	/** 真正走完的**顶层**步数（0 ~ `total`）。臂里的步不单独记——它们算进所属的那一步。 */
+	/**
+	 * 真正走完的**顶层**步数（0 ~ `total`）。臂里的步不单独记——它们算进所属的那一步。
+	 * 被容忍失败的那一步**不算**：它报的是 `failed`，账上也不能记成完成。
+	 */
 	readonly completed: number;
 	/** **顶层**步数。与 `completed` 同一个口径：两个数说的是同一件事的两个端，所以「已完成 N / 共 M」不会出现 N > M。 */
 	readonly total: number;
@@ -208,23 +212,45 @@ export function planStepLabel(step: SkillPlanStep): string {
 const atPath = (path: string, reason: string, skill: string | null = null): string =>
 	path.includes('.') ? `失败在 ${path}${skill === null ? '' : `（${skill}）`}：${reason}` : reason;
 
-/** 一步跑完的结局：成了往下走，没成就把原因带出去（失败即停）。 */
-type StepResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
+/**
+ * 一步跑完的结局。
+ *
+ * - `ok: false`：**失败即停**，`reason` 原样往上带；
+ * - `ok: true` 且 `completed: true`：这一步成了，算进 `completed`；
+ * - `ok: true` 且 `completed: false`：这一步**失败了但被容忍**
+ *   （`onFailure: 'continue'`）——计划往下走，但这一步不算走完（见 `runStep` 里技能步那一段）。
+ */
+type StepResult = { readonly ok: true; readonly completed: boolean } | { readonly ok: false; readonly reason: string };
 
 /**
- * 逐步执行计划。失败即停——不自动重试（与 bridge 的纪律一致：是否重试由技能自己的
- * `recovery_policy` 决定，不由执行器替它拿主意）。
+ * 逐步执行计划。失败即停——**除非那一步自己写了 `onFailure: 'continue'`**。
+ * 两条都不自动重试（与 bridge 的纪律一致：是否重试由技能自己的 `recovery_policy` 决定，
+ * 不由执行器替它拿主意）。
+ *
+ * **失败处置（`onFailure`）**：技能步缺省（或写 `'stop'`）就是上面那句「失败即停」，一个字不变；
+ * 写了 `'continue'` 的那一步失败后，计划**继续往下走**，并且 `last.success` 记成 `false`——
+ * 后面那个 `if` 因此真的能走到「上一步没成」那条臂。
+ * 为什么缺省是停，见契约里 `SkillStep.onFailure` 那段（安全立场，与 bridge 同一条）。
+ * `wait` 与 `if` 不带这一栏（契约那边就报错），所以这里只有技能步看它。
  *
  * **分支真的跑**：走到 `step: 'if'` 就按 `last.success` 判条件、选一条臂、在臂里继续跑
  * （臂里还能再有 `if`，深度由契约挡在 8 层）。分支自己也算一步，照报 `running` → `done`/`failed`，
  * 并在事件里说清走了哪条臂（`arm`）与它在树的哪一格（`path`）。
  *
- * **`last.success` 的语义**：最近一次**真正执行过的技能步**成没成。三个要点：
- * ① 分支步自己不更新它——它不是技能步，没做成的事由臂里的那一步去说；
- * ② **`wait` 步也不更新它**——它什么也没「成」也没「败」，所以它后面那个 `if` 看到的
+ * **`last.success` 的语义**：最近一次**真正执行过的技能步**成没成。四个要点：
+ * ① **成功的技能步记 `true`，被容忍失败的技能步记 `false`**——两个都写在同一处
+ *    （技能步那段里的 `settle`，就一行 `lastSuccess = ok`），不散在两处各写一遍；
+ * ② 分支步自己不更新它——它不是技能步，没做成的事由臂里的那一步去说
+ *    （分支**走完**也不算「成」：`if` 自己不是一次执行）；
+ * ③ **`wait` 步也不更新它**——它什么也没「成」也没「败」，所以它后面那个 `if` 看到的
  *    仍是 `wait` **之前**那个技能步的结果（`plan.test.ts` 里钉着这一条）；
- * ③ **计划第一步之前没有上一步，那时算 `true`**（什么都还没失败），于是「第一步就是
- * `if`」的计划按条件成立那条路走。这个初值在 `plan.test.ts` 里钉着。
+ * ④ **计划第一步之前没有上一步，那时算 `true`**（什么都还没失败），于是「第一步就是
+ *    `if`」的计划按条件成立那条路走。这个初值在 `plan.test.ts` 里钉着。
+ *
+ * **整体的 `ok` 说的是「计划有没有走完」**：有步骤被容忍失败时，计划照样走完了，
+ * 所以 `ok` 仍是 `true`——那一步的失败由它自己的事件（`failed`）与 `completed` 不说谎
+ * （被容忍的那一步不算完成）说清。这里不把整条计划说成失败：`'continue'` 正是写计划的人
+ * 说的「这一步失败我也认」。
  *
  * **`wait` 步真的等**（`setTimeout` 那一层），但**可被打断**：`cancel()` 一订阅到就当场收摊，
  * 那一步照报 `failed`（原因「已取消」）——与「跑到一半被取消的技能步」同一个口径。
@@ -259,7 +285,11 @@ export async function runPlan(
 		cancelled.abort();
 	});
 
-	/** 跑一串步骤（顶层那一串，或某条臂里那一串）。任何一步没成就把原因原样往上带。 */
+	/**
+	 * 跑一串步骤（顶层那一串，或某条臂里那一串）。任何一步没成就把原因原样往上带。
+	 * 回来那个 `completed` 在这一层**只是占位**（整串的「算不算完成」不是一个数）：
+	 * 调用方（分支那一段）只看 `ok`，真正记账的是顶层那一步自己。
+	 */
 	const runSteps = async (steps: readonly SkillPlanStep[], basePath: string, topIndex: number): Promise<StepResult> => {
 		for (const [index, step] of steps.entries()) {
 			// 路径第一段是顶层下标（0 基）；臂里的步在父路径后面接 `.then.0` / `.else.1`
@@ -267,7 +297,7 @@ export async function runPlan(
 			const result = await runStep(step, path, topIndex);
 			if (!result.ok) return result;
 		}
-		return { ok: true };
+		return { ok: true, completed: true };
 	};
 
 	/** 跑一步：技能步下发一次能力调用，分支步判条件选一条臂再往下递归。 */
@@ -276,24 +306,36 @@ export async function runPlan(
 		const header = { kind: 'plan-step', index: topIndex, total, path, step, taskId } as const;
 
 		if (step.step === 'skill') {
+			/*
+			 * 这一步的失败处置（`onFailure`）。三种结局都从**这一处**出去：
+			 * - 成了：`last.success` 记 `true`，算完成；
+			 * - 没成且 `'continue'`：`last.success` 记 **`false`**、计划接着往下走，但**不算完成**
+			 *   ——这一步照报 `failed`（不粉饰成 done），`completed` 也不把它数进去；
+			 * - 没成且 `'stop'`（含缺省）：把原因带出去，失败即停（现在的行为一个字不变）。
+			 *
+			 * `lastSuccess` 只在这里写：成功的技能步与「失败但被容忍」的技能步是同一个赋值，
+			 * 所以「上一步成没成」永远等于**最近一次真正执行过的技能步**的结局。
+			 */
+			const onFailure = step.onFailure;
+			const settle = (ok: boolean, reason: string): StepResult => {
+				lastSuccess = ok;
+				options.onPlanStep?.({ ...header, arm: null, state: ok ? 'done' : 'failed' });
+				if (ok) return { ok: true, completed: true };
+				if (onFailure === 'continue') return { ok: true, completed: false };
+				return { ok: false, reason };
+			};
+
 			options.onPlanStep?.({ ...header, arm: null, state: 'running' });
 
 			// 判别在前：目录里没有这个技能就不假装调用过
 			const capability = catalog.capabilities.find((c) => c.capabilityRef === step.skill);
-			if (!capability) {
-				options.onPlanStep?.({ ...header, arm: null, state: 'failed' });
-				return { ok: false, reason: atPath(path, `目录里没有技能 ${step.skill}`) };
-			}
+			if (!capability) return settle(false, atPath(path, `目录里没有技能 ${step.skill}`));
+
 			const params: Record<string, unknown> = step.params ?? {};
 			// 换一步就重设上下文：这一步的原语事件因此带上「所属顶层步」与 task_id
 			runner.setPlanContext?.({ planIndex: topIndex, taskId });
 			const outcome = await runner.run(capability, params);
-			lastSuccess = outcome.ok;
-			options.onPlanStep?.({ ...header, arm: null, state: outcome.ok ? 'done' : 'failed' });
-			if (!outcome.ok) {
-				return { ok: false, reason: atPath(path, outcome.reason ?? `${step.skill} 未完成`, step.skill) };
-			}
-			return { ok: true };
+			return settle(outcome.ok, atPath(path, outcome.reason ?? `${step.skill} 未完成`, step.skill));
 		}
 
 		/*
@@ -312,7 +354,7 @@ export async function runPlan(
 				return { ok: false, reason: atPath(path, '已取消') };
 			}
 			options.onPlanStep?.({ ...header, arm: null, state: 'done' });
-			return { ok: true };
+			return { ok: true, completed: true };
 		}
 
 		/*
@@ -328,13 +370,18 @@ export async function runPlan(
 		options.onPlanStep?.({ ...header, arm, state: 'running' });
 		if (arm === null) {
 			options.onPlanStep?.({ ...header, arm, state: 'done' });
-			return { ok: true };
+			return { ok: true, completed: true };
 		}
 
 		// 臂里的步照常执行（臂里还能再有 if）：路径接着往下长，顶层步号不变
 		const nested = await runSteps(arm === 'then' ? step.then : (step.else ?? []), `${path}.${arm}`, topIndex);
 		options.onPlanStep?.({ ...header, arm, state: nested.ok ? 'done' : 'failed' });
-		return nested;
+		/*
+		 * 臂里那一步被容忍失败时，**分支这一步自己仍算走完了**（它的臂一路走到了尾）：
+		 * 「没完成」是臂里那一步的事，由它自己的事件说——把外面这一步也算成没完成，
+		 * 会让「第几步没走完」指向一个其实走完了的构造。
+		 */
+		return nested.ok ? { ok: true, completed: true } : nested;
 	};
 
 	try {
@@ -342,7 +389,9 @@ export async function runPlan(
 			// 顶层步号就是它自己的下标 + 1；臂里的步由 `runSteps` 把同一个号带下去
 			const result = await runStep(step, String(index), index + 1);
 			if (!result.ok) return { ok: false, completed, total, reason: result.reason };
-			completed += 1;
+			// 被容忍失败的那一步不算完成（它报的是 `failed`）——`completed` 因此可以小于 `total`，
+			// 而那正是「这一步没成、计划照走」这句话唯一的账目。
+			if (result.completed) completed += 1;
 		}
 		return { ok: true, completed, total };
 	} finally {
