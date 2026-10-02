@@ -41,6 +41,17 @@ const CATALOG: CapabilityCatalog = capabilityCatalogSchema.parse({
 			implementation: [{ kind: 'call', primitiveRef: 'move_to_named_pose', arguments: { pose_name: { kind: 'literal', value: 'home' } } }],
 		},
 		{
+			// 上游说必填的参数：缺了是**错误**，不是提醒（判据在技能的 JSON Schema 里）。
+			capabilityRef: 'grip',
+			label: '夹住',
+			kind: 'skill',
+			parameters: [
+				{ name: 'force', label: '力度', type: 'number', required: true, unit: 'newtons' },
+				{ name: 'hold', label: '保持', type: 'boolean' },
+			],
+			implementation: [{ kind: 'call', primitiveRef: 'move_to_named_pose', arguments: { pose_name: { kind: 'literal', value: 'home' } } }],
+		},
+		{
 			capabilityRef: 'tune_joints',
 			label: '调关节',
 			kind: 'skill',
@@ -90,7 +101,7 @@ describe('技能计划的校验', () => {
 		expect(codes(result)).toEqual(['plan.step.skill.unknown']);
 		const [first] = result.diagnostics;
 		expect(first?.path).toBe('plan[0].skill');
-		expect(first?.details?.['allowed']).toEqual(['wave_hello', 'move_relative_ee', 'tune_joints']);
+		expect(first?.details?.['allowed']).toEqual(['wave_hello', 'move_relative_ee', 'grip', 'tune_joints']);
 	});
 
 	it('参数名不是这个技能声明的：报出来，并列出它能收哪些', () => {
@@ -115,7 +126,20 @@ describe('技能计划的校验', () => {
 		expect(result.ok).toBe(true);
 	});
 
-	it('缺参数只提醒，不拦——目录里没有必填这一栏，执行侧有默认值', () => {
+	it('上游标了必填的参数缺了 → 报错（判据来自目录，不是我们自己定的）', () => {
+		const result = validateSkillPlan(step({ step: 'skill', skill: 'grip', params: { hold: true } }), { catalog: CATALOG });
+		expect(result.ok).toBe(false);
+		expect(codes(result)).toEqual(['plan.step.param.required']);
+		expect(result.diagnostics[0]?.details?.['param']).toBe('force');
+	});
+
+	it('必填的给了、可选的没给 → 通过，只对没标必填的那个提醒', () => {
+		const result = validateSkillPlan(step({ step: 'skill', skill: 'grip', params: { force: 3 } }), { catalog: CATALOG });
+		expect(result.ok).toBe(true);
+		expect(codes(result)).toEqual(['plan.step.param.missing']);
+	});
+
+	it('缺参数只提醒，不拦——目录里没标必填的，执行侧有默认值', () => {
 		const result = validateSkillPlan(step({ step: 'skill', skill: 'move_relative_ee', params: { motion_direction: 'forward' } }), {
 			catalog: CATALOG,
 		});

@@ -337,7 +337,18 @@ const validateSkillStep = (
 
 	for (const [name, spec] of declared) {
 		if (seen.has(name)) continue;
-		// 目录没标必填（`catalogParameterSchema` 没有 required 这一栏），所以缺参数只提醒不拦。
+		// 上游说必填就是必填（技能的 JSON Schema 里有 `required` 数组），缺了是错误。
+		if (spec.required === true) {
+			collector.error({
+				code: 'plan.step.param.required',
+				message: `技能「${rawSkill}」的「${name}」（${spec.label}）是必填的，这份计划没给`,
+				path: `${path}.params`,
+				ref: rawSkill,
+				details: { param: name, expected: spec.type },
+			});
+			continue;
+		}
+		// 没标必填的缺了只提醒：执行侧有默认值。
 		collector.warning({
 			code: 'plan.step.param.missing',
 			message: `技能「${rawSkill}」没给参数「${name}」（${spec.label}），执行侧会用默认值`,

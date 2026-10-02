@@ -9,7 +9,7 @@
  * 分支卡是唯一的例外：它没有 `action`，参数**只有条件本身**，所以卡头旁边画的是条件的人话，
  * 而不是「这个动作没有参数」——那句话在分支上是错的（它不是动作，也就谈不上没有参数）。
  */
-import type { Diagnostic, WorkflowNode } from '@codecanvas/contracts';
+import { findCapability, type CapabilityCatalog, type Diagnostic, type WorkflowNode } from '@codecanvas/contracts';
 import { TASK_BRANCH_NODE_TYPE } from '@codecanvas/task-import';
 import {
 	actionLabel,
@@ -68,36 +68,57 @@ const branchExtraParameters = (node: WorkflowNode, limits: NodeLimits): readonly
 	return Object.keys(rest).length === 0 ? [] : summarizeNodeParameters(rest, null, limits);
 };
 
-const cardOf = (step: PlanStep, diagnostics: readonly Diagnostic[], limits: NodeLimits): FlowCardModel => ({
-	node: step.node,
-	index: step.index,
-	action: step.isBranch ? '分支' : actionLabel(step.node),
-	actionName: step.isBranch ? TASK_BRANCH_NODE_TYPE : nodeActionName(step.node),
-	stepId: nodeStepId(step.node),
-	parameters: step.isBranch
-		? branchExtraParameters(step.node, limits)
-		: summarizeNodeParameters(step.node.parameters, nodeAction(step.node), limits),
-	diagnostics: nodeDiagnostics(diagnostics, step.node, step.index),
-	condition: step.isBranch ? conditionViewOf(step.node) : null,
-});
+const cardOf = (
+	step: PlanStep,
+	diagnostics: readonly Diagnostic[],
+	limits: NodeLimits,
+	catalog: CapabilityCatalog | null,
+): FlowCardModel => {
+	/*
+	 * 目录里的人话只在**协议不认识这个动作**时才用。
+	 *
+	 * 一期那七个动作的中文名、单位、取值范围、说明都在协议那张字段表里（而且比目录更全），
+	 * 目录那份只是它的一个子集——两条路都用就会把协议那边的单位与范围挤掉。
+	 * 所以：协议认得 → 走协议（一个字都不变）；协议不认得（技能计划里的技能名）→ 才问目录。
+	 */
+	const protocolAction = nodeAction(step.node);
+	const action = step.node.parameters.action;
+	const capability =
+		protocolAction !== null || catalog === null || typeof action !== 'string'
+			? null
+			: (findCapability(catalog, action) ?? null);
+	return {
+		node: step.node,
+		index: step.index,
+		action: step.isBranch ? '分支' : actionLabel(step.node, capability),
+		actionName: step.isBranch ? TASK_BRANCH_NODE_TYPE : nodeActionName(step.node),
+		stepId: nodeStepId(step.node),
+		parameters: step.isBranch
+			? branchExtraParameters(step.node, limits)
+			: summarizeNodeParameters(step.node.parameters, protocolAction, limits, capability),
+		diagnostics: nodeDiagnostics(diagnostics, step.node, step.index),
+		condition: step.isBranch ? conditionViewOf(step.node) : null,
+	};
+};
 
 /** 一串步骤 → 一串行。臂里的步骤走同一条路（`depth + 1`），只是包在自己的臂行里。 */
 export const buildFlowRows = (
 	steps: readonly PlanStep[],
 	diagnostics: readonly Diagnostic[],
 	limits: NodeLimits,
+	catalog: CapabilityCatalog | null,
 	depth = 0,
 ): readonly FlowRow[] =>
 	steps.map((step) => ({
 		kind: 'card' as const,
 		key: `card:${step.node.id}`,
-		card: cardOf(step, diagnostics, limits),
+		card: cardOf(step, diagnostics, limits, catalog),
 		arms: step.arms.map((arm) => ({
 			kind: 'arm' as const,
 			key: `arm:${step.node.id}:${arm.kind}`,
 			arm: arm.kind,
 			depth,
 			note: arm.note,
-			rows: buildFlowRows(arm.steps, diagnostics, limits, depth + 1),
+			rows: buildFlowRows(arm.steps, diagnostics, limits, catalog, depth + 1),
 		})),
 	}));

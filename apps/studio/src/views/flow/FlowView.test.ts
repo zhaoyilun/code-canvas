@@ -15,6 +15,7 @@ import {
 	type WorkflowDeclaration,
 	type WorkflowNode,
 } from '@codecanvas/contracts';
+import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import { TASK_BRANCH_NODE_TYPE } from '@codecanvas/task-import';
 import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
@@ -713,12 +714,14 @@ describe('流程画布 · 没有分支的声明与改动前逐字相同', () => 
 
 		expect(cards(wrapper)).toHaveLength(3);
 		expect(connectorCount(wrapper)).toBe(2);
-		// 卡头写的是这一步的技能名——**技能计划这一路一直如此**（卡头认的是协议动作表，
-		// 技能名不在那张表里就照原样显示）；中文名在节点名与另外两栏里，这一条不是这次改的。
+		// 卡头写中文名——协议那张字段表不认识技能名，所以这一路问的是**当前设备的目录**
+		// （`ROBOFRAME_SO101_CATALOG` 里 `inspect_scene` 的 label 就是「观察桌面」）。
+		// 早先这里照出的是标识符：一期那台显示中文、换成 SO-101 就成了英文，同一份界面两种样子。
+		// 名字仍然只有目录一个来源——视图里没有第二份映射表。
 		expect(structureOf(wrapper).map((row) => row.action)).toEqual([
-			'inspect_scene',
-			'move_relative_ee',
-			'open_gripper_skill',
+			ROBOFRAME_SO101_CATALOG.capabilities.find((c) => c.capabilityRef === 'inspect_scene')?.label,
+			ROBOFRAME_SO101_CATALOG.capabilities.find((c) => c.capabilityRef === 'move_relative_ee')?.label,
+			ROBOFRAME_SO101_CATALOG.capabilities.find((c) => c.capabilityRef === 'open_gripper_skill')?.label,
 		]);
 		expect(structureOf(wrapper).map((row) => nameOf(currentDeclaration(), row.nodeId))).toEqual([
 			'1. 观察桌面',

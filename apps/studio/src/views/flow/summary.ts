@@ -14,6 +14,7 @@ import {
 	type Diagnostic,
 	type JsonObject,
 	type JsonValue,
+	type CapabilitySpec,
 	type NumericLimitName,
 	type ProtocolFieldSummary,
 	type TaskAction,
@@ -73,9 +74,35 @@ export const summarizeNodeParameters = (
 	parameters: JsonObject,
 	action: TaskAction | null,
 	limits: NodeLimits = {},
+	capability: CapabilitySpec | null = null,
 ): readonly ParameterSummary[] => {
 	const rows: ParameterSummary[] = [];
 	const covered = new Set<string>();
+
+	/*
+	 * 目录里的人话优先。
+	 *
+	 * 一期协议那张字段表只认识那七种动作；换到 SO-101 之后，节点上的 `action` 是技能名
+	 * （`inspect_scene` 这类），协议表当然不认识，于是卡头显示标识符、参数行显示英文键名——
+	 * 而**目录里明明有中文名**（观察桌面 / 相对移动）。这里就是把它取出来的地方：
+	 * 谁是这台设备的目录，谁就有这套名字；没有目录（或查不到）才退回原样，不编一个。
+	 */
+	if (capability !== null) {
+		for (const parameter of capability.parameters) {
+			covered.add(parameter.name);
+			const value = parameters[parameter.name];
+			rows.push({
+				name: parameter.name,
+				label: parameter.label,
+				value: displayValue(value),
+				constraint: '',
+				// 单位来自目录（上游 YAML 里写着 meters / degrees），没有就不显示，不编一个。
+				unit: parameter.unit ?? '',
+				description: parameter.required === true ? '必填' : '',
+				missing: value === undefined,
+			});
+		}
+	}
 
 	if (action !== null) {
 		for (const field of describeActionFields(action)) {
@@ -118,7 +145,8 @@ export const nodeAction = (node: WorkflowNode): TaskAction | null => {
 };
 
 /** 动作名的显示形态：中文名取自描述表；不认识的动作照出原值，不假装它是七种动作之一。 */
-export const actionLabel = (node: WorkflowNode): string => {
+export const actionLabel = (node: WorkflowNode, capability: CapabilitySpec | null = null): string => {
+	if (capability !== null) return capability.label;
 	const action = node.parameters.action;
 	return isAction(action) ? describeActionLabel(action) : displayValue(action);
 };

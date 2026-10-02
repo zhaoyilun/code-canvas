@@ -246,6 +246,21 @@ describe('RoboFrame SO-101 目录的实情', () => {
 		expect(catalog.capabilities.find((item) => item.capabilityRef === 'wave_hello')?.label).toBe('打招呼');
 	});
 
+	it('参数的**单位**与**必填**来自上游 JSON Schema，不是我们补的', () => {
+		// 上游 `capability.parameters` 里 `motion_distance` 带 `unit: meters`、
+		// `required: [motion_direction, motion_distance]`。这两样曾经在导入时被丢掉，
+		// 结果是界面上没有单位、「必填」这条约束降级成一句含糊的提醒。
+		const relative = catalog.capabilities.find((item) => item.capabilityRef === 'move_relative_ee');
+		const byName = new Map((relative?.parameters ?? []).map((parameter) => [parameter.name, parameter]));
+		expect(byName.get('motion_distance')?.unit).toBe('meters');
+		expect(byName.get('motion_direction')?.required).toBe(true);
+		expect(byName.get('motion_distance')?.required).toBe(true);
+
+		// 单位跟着技能走：旋转那两个是「度」，不是「米」。
+		const rotate = catalog.capabilities.find((item) => item.capabilityRef === 'rotate_gripper_cw');
+		expect(rotate?.parameters[0]?.unit).toBe('degrees');
+	});
+
 	it('命名位姿来自上游 robot_config', () => {
 		expect(catalog.namedPoses).toEqual(['home', 'observe_table', 'zero']);
 	});

@@ -163,14 +163,28 @@ const statementsOf = (skillName, template, capabilityParameters) => {
 	return statements;
 };
 
-/** 能力参数：上游给的是 JSON Schema 片段，这里取我们认得的三种类型。 */
+/**
+ * 能力参数：上游给的是 JSON Schema 片段。
+ *
+ * 除了类型，还要把上游**写着的东西**带过来——`unit`、`required`。
+ * 早先这里只取了类型，于是「米 / 度」这种单位在界面上丢了，
+ * 而「这个参数必填」这条约束也没了，缺参数只能含糊地报一句提醒。
+ * 判据在上游，核心不自己发明。
+ */
 const parametersOf = (skillName, schema) => {
 	const properties = schema?.properties ?? {};
+	const required = new Set(Array.isArray(schema?.required) ? schema.required : []);
 	const types = { number: 'number', string: 'string', boolean: 'boolean' };
 	return Object.entries(properties).map(([name, spec]) => {
 		const type = types[spec?.type];
 		if (type === undefined) throw new Error(`技能 ${skillName}：参数 ${name} 的类型 ${spec?.type} 不认识`);
-		return { name, label: spec?.description ?? name, type };
+		return {
+			name,
+			label: spec?.description ?? name,
+			type,
+			...(typeof spec?.unit === 'string' && spec.unit !== '' ? { unit: spec.unit } : {}),
+			...(required.has(name) ? { required: true } : {}),
+		};
 	});
 };
 

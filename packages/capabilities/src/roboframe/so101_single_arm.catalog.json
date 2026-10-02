@@ -203,12 +203,15 @@
 					{
 						"name": "motion_direction",
 						"label": "motion_direction",
-						"type": "string"
+						"type": "string",
+						"required": true
 					},
 					{
 						"name": "motion_distance",
 						"label": "motion_distance",
-						"type": "number"
+						"type": "number",
+						"unit": "meters",
+						"required": true
 					}
 				],
 				"implementation": [
@@ -265,7 +268,9 @@
 					{
 						"name": "motion_distance",
 						"label": "motion_distance",
-						"type": "number"
+						"type": "number",
+						"unit": "degrees",
+						"required": true
 					}
 				],
 				"implementation": [
@@ -290,7 +295,9 @@
 					{
 						"name": "motion_distance",
 						"label": "motion_distance",
-						"type": "number"
+						"type": "number",
+						"unit": "degrees",
+						"required": true
 					}
 				],
 				"implementation": [

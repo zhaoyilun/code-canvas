@@ -70,7 +70,12 @@ export const skillPlanSystemPrompt = (catalog: CapabilityCatalog): string => {
 				capability.parameters.length === 0
 					? '没有参数'
 					: capability.parameters
-							.map((parameter) => `${parameter.name}(${parameter.type})`)
+							.map((parameter) => {
+								// 单位与必填也来自目录（上游 JSON Schema）：模型不该猜「米还是度」。
+								const unit = parameter.unit === undefined ? '' : `/${parameter.unit}`;
+								const must = parameter.required === true ? '，必填' : '';
+								return `${parameter.name}(${parameter.type}${unit}${must})`;
+							})
 							.join('、');
 			return `- ${capability.capabilityRef}（${capability.label}）：${parameters}`;
 		})

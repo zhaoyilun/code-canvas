@@ -47,6 +47,15 @@ export const catalogParameterSchema = z
 		 * 渲染层据此决定写 `3` 还是 `3.0`。
 		 */
 		integer: z.boolean().optional(),
+		/** 单位（上游 YAML 里写着，例如 `meters` / `degrees`）。有就显示，没有不编。 */
+		unit: z.string().trim().min(1).max(24).optional(),
+		/**
+		 * 这个参数**必须给**。
+		 *
+		 * 判据来自上游：技能的 `capability.parameters.required` 数组。缺了它就是缺陷，
+		 * 不再是「执行侧会用默认值」——上游说必填就是必填。
+		 */
+		required: z.boolean().optional(),
 	})
 	.strict();
 export type CatalogParameter = z.infer<typeof catalogParameterSchema>;

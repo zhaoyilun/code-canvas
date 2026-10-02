@@ -39,7 +39,11 @@ const limitChips = computed<readonly string[]>(() =>
 /** 这份声明的结构：一列步骤，分支自带两条臂。 */
 const plan = computed(() => planStructureOf(store.declaration.value));
 
-const rows = computed(() => buildFlowRows(plan.value.steps, store.diagnostics.value, limits.value));
+// 目录也从 store 取（声明出生时那台设备的）：卡头的中文名与参数名是**设备给**的，
+// 视图里写死任何一份都会在换设备之后显示成标识符。
+const rows = computed(() =>
+	buildFlowRows(plan.value.steps, store.diagnostics.value, limits.value, store.declarationCatalog.value),
+);
 
 /** 图本身的问题（悬空引用、环、多个链头）。有才画那一条，没有时一个像素都不多。 */
 const graphDiagnostics = computed(() => plan.value.diagnostics);
