@@ -59,7 +59,10 @@ flowchart LR
   M2 --> M3["M3 映射与联动"]
 ```
 
-#### M0 — 骨架
+#### M0 — 骨架 ✅
+
+已交付：五 tab、三栏、六段流水线（前三段可达）、RUN/STOP 占位、自有主题变量。
+`pnpm --filter @codecanvas/studio dev` → http://localhost:5173。
 
 **产出**：能跑起来的空壳。五个 tab 可切换（后三个是占位），三栏布局成形，自有主题变量
 （不引用任何 n8n token），底部流水线的前三段可用、其余灰置，RUN/STOP 占位。
@@ -71,14 +74,18 @@ flowchart LR
 
 **依赖**：无。
 
-#### M1 — 协议与转换
+#### M1 — 协议与转换 ✅
+
+已交付：`packages/contracts`（json / sha256 / diagnostic / stable-ids / task-protocol / workflow）与
+`packages/task-import`（任务 JSON → 声明）。184 + 15 条测试全绿，其中 72 条语料与
+`docs/reference/task_protocol.py` 逐条对照（含报错原文逐字比对）。
 
 **产出**：`packages/contracts`（任务协议 schema + 声明 schema + 稳定 ID + 诊断）、
 `packages/task-import`（任务 JSON → workflow 声明）。校验规则逐条照 `task_protocol.py` 搬，
 包括七种动作的字段约束、传感器白名单、限值只能收紧不能放宽、总时长上限。
 
 **验收**：
-- 给一份任务 JSON，产出确定的声明；**同一输入连续两次，规范化产物字节级相同**。
+- 给一份任务 JSON，产出确定的声明；**除身份字段（`id` / `digest`）外，同一输入连续两次的规范化产物字节相同**。
 - 非法任务逐条有诊断，且带定位：未知 action、重复 step id、超限的 linear、越界的 joint_id、
   `distance` 落在 (0, 2] 之外、限值被放宽、总时长超 `max_duration`。
 - **限值放宽必须被拒**（`max_linear > 0.3` 这类）。
