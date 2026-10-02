@@ -159,8 +159,8 @@ describe('任务生成 · 技能计划的提示词', () => {
 		expect(prompt).toContain('"continue"');
 		// 「缺省是停」必须说出来：模型不写这一栏时的行为由这一句定，含糊它就只会两种都写
 		expect(prompt).toContain('缺省是"stop"');
-		// 只有技能调用那一步能带它（等待与分叉带上会被拒）
-		expect(prompt).toContain('只能写在技能调用那一步');
+		// 只有「叫一个东西去做事」的那两种步能带它：技能调用与直接叫原语（等待与分叉带上会被拒）
+		expect(prompt).toContain('只能写在技能调用与直接叫原语那两种步上');
 	});
 });
 
@@ -309,5 +309,34 @@ describe('技能计划的提示词要说清怎么分叉', () => {
 		for (const capability of ROBOFRAME_SO101_CATALOG.capabilities) {
 			expect(prompt).toContain(capability.capabilityRef);
 		}
+	});
+});
+
+describe('技能计划的提示词要说清原语步', () => {
+	const prompt = skillPlanSystemPrompt(ROBOFRAME_SO101_CATALOG);
+
+	it('原语清单**照目录现生成**：名字、中文名、参数都在（不许手写一份）', () => {
+		expect(ROBOFRAME_SO101_CATALOG.primitives.length).toBeGreaterThan(0);
+		for (const primitive of ROBOFRAME_SO101_CATALOG.primitives) {
+			expect(prompt).toContain(primitive.primitiveRef);
+			expect(prompt).toContain(primitive.label);
+			for (const parameter of primitive.parameters) expect(prompt).toContain(parameter.name);
+		}
+	});
+
+	it('写出了 primitive 步的形状（与技能步同待遇的那三栏也说到）', () => {
+		expect(prompt).toContain('"step":"primitive"');
+		expect(prompt).toContain('"primitive"');
+		// 参数、超时、失败处置与技能步一样：这一步也会成会败，也参与「上一步成没成」
+		expect(prompt).toContain('与技能调用那一步完全同待遇');
+		expect(prompt).toContain('参与「上一步成没成」');
+	});
+
+	it('说清了**什么时候**用它：有对应技能就优先用技能，没有包装的原子动作才用原语', () => {
+		expect(prompt).toMatch(/已经有干这件事的技能时[^。\n]*一律用技能/);
+		expect(prompt).toMatch(/没有技能包装的原子动作/);
+		// 两头都堵上：不许编假技能，也不许把现成技能拆成原语
+		expect(prompt).toContain('不要为了少写一层就编一个假技能');
+		expect(prompt).toContain('也不要放着现成的技能不用去拆成原语');
 	});
 });

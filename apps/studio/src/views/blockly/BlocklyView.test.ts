@@ -26,14 +26,21 @@ import {
 	identityOfBlock,
 } from '@codecanvas/blockly-toolkit';
 import { findCapability, type WorkflowDeclaration } from '@codecanvas/contracts';
-import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE, importSkillPlan } from '@codecanvas/task-import';
+import {
+	TASK_BRANCH_NODE_TYPE,
+	TASK_PRIMITIVE_NODE_TYPE,
+	TASK_WAIT_NODE_TYPE,
+	importSkillPlan,
+} from '@codecanvas/task-import';
 import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import {
 	BRANCH_PLAN_JSON,
 	BRANCH_PLAN_SKILLS,
 	BRANCH_WAIT_PLAN_JSON,
+	MIXED_STEPS_PLAN_JSON,
 	NESTED_NO_ELSE_PLAN_JSON,
+	POSE_PRIMITIVE_PLAN_JSON,
 	WAIT_PLAN_JSON,
 } from '../flow/__fixtures__/branch-plan';
 import {
@@ -45,6 +52,8 @@ import {
 	PLAN_STEP_BLOCK_TYPE,
 	PLAN_STEP_FIELD,
 	PLAN_STEP_NODE_TAG,
+	PLAN_PRIMITIVE_BLOCK_TYPE,
+	PLAN_PRIMITIVE_FIELD,
 	PLAN_WAIT_BLOCK_TYPE,
 	PLAN_WAIT_FIELD,
 	renderPlanInto,
@@ -476,6 +485,92 @@ describe('积木画布 · 等待步的计划块', () => {
 		expect(hint.attributes('data-plan')).toBe('true');
 		// 收尾：别把选中留给下一个用例
 		store.selectStep(null);
+		store.select(null);
+		wrapper.unmount();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 原语步：计划层的另一块只读积木（`张开夹爪 open_gripper()`）
+// ---------------------------------------------------------------------------
+
+/** 一份带原语步的计划 → 声明 + 那个原语节点（原语名照真实目录写）。 */
+const primitiveDeclarationOf = (json: string): { declaration: WorkflowDeclaration; primitiveId: string } => {
+	const result = importSkillPlan(JSON.parse(json), { catalog: ROBOFRAME_SO101_CATALOG });
+	if (!result.ok) throw new Error(`素材不是合法计划：${JSON.stringify(result.diagnostics)}`);
+	const node = result.declaration.nodes.find((item) => item.type === TASK_PRIMITIVE_NODE_TYPE);
+	if (node === undefined) throw new Error('素材里应当有原语节点');
+	return { declaration: result.declaration, primitiveId: node.id };
+};
+
+describe('积木画布 · 原语步的计划块', () => {
+	it('选中原语节点：一块只读的「张开夹爪 open_gripper()」，没有可写字段、删不掉', () => {
+		const { declaration, primitiveId } = primitiveDeclarationOf(MIXED_STEPS_PLAN_JSON);
+		const workspace = new Blockly.Workspace();
+		const rendered = renderPlanInto({
+			workspace,
+			declaration,
+			catalog: ROBOFRAME_SO101_CATALOG,
+			planNodeId: primitiveId,
+		});
+		expect(rendered).not.toBeNull();
+
+		const tops = workspace.getTopBlocks(true);
+		expect(tops).toHaveLength(1);
+		const block = tops[0];
+		if (block === null || block === undefined) throw new Error('没有画出原语块');
+		expect(block.type).toBe(PLAN_PRIMITIVE_BLOCK_TYPE);
+		expect(definitionOf(PLAN_PRIMITIVE_BLOCK_TYPE).args0?.map((arg) => arg.name)).toEqual([PLAN_PRIMITIVE_FIELD]);
+		// 块上那句话：人话（目录里那个原语的标签）在前，代码写法（代码面板那一行）在后
+		expect(block.getFieldValue(PLAN_PRIMITIVE_FIELD)).toBe('张开夹爪 open_gripper()');
+
+		const fields = block.inputList.flatMap((input) => input.fieldRow);
+		for (const field of fields) expect(field).toBeInstanceOf(Blockly.FieldLabel);
+		expect(block.isDeletable()).toBe(false);
+		// 这块说的是那一步的**原语**（`data.primitiveRef`），而它没有能力可指
+		expect(identityOfBlock(block)?.primitiveRef).toBe('open_gripper');
+	});
+
+	it('有参数的原语照写实参（与代码面板同一行），并在链上跟技能块串起来', () => {
+		const { declaration } = primitiveDeclarationOf(MIXED_STEPS_PLAN_JSON);
+		const branches = declaration.nodes.filter((node) => node.type === TASK_BRANCH_NODE_TYPE);
+		const branch = branches[0];
+		if (branch === undefined) throw new Error('素材里应当有分支节点');
+		const workspace = new Blockly.Workspace();
+		renderPlanInto({ workspace, declaration, catalog: ROBOFRAME_SO101_CATALOG, planNodeId: branch.id });
+
+		const top = workspace.getTopBlocks(true)[0];
+		if (top === null || top === undefined) throw new Error('没有画出分支块');
+		const thenPrimitive = top.getInputTargetBlock(THEN_INPUT_NAME);
+		expect(thenPrimitive?.type).toBe(PLAN_PRIMITIVE_BLOCK_TYPE);
+		expect(thenPrimitive?.getFieldValue(PLAN_PRIMITIVE_FIELD)).toBe('闭合夹爪 close_gripper()');
+		// 臂尾就是它：没有下一块（臂不接回主干）
+		expect(thenPrimitive?.getNextBlock()).toBeFalsy();
+		// 别的一臂照旧是技能块
+		expect(top.getInputTargetBlock(ELSE_INPUT_NAME)?.getFieldValue(PLAN_STEP_FIELD)).toBe('打招呼 wave_hello()');
+	});
+
+	it('带参数的命名位姿原语：实参按声明的名字与顺序写出来', () => {
+		const { declaration, primitiveId } = primitiveDeclarationOf(POSE_PRIMITIVE_PLAN_JSON);
+		const workspace = new Blockly.Workspace();
+		renderPlanInto({ workspace, declaration, catalog: ROBOFRAME_SO101_CATALOG, planNodeId: primitiveId });
+
+		const block = workspace.getTopBlocks(true)[0];
+		expect(block?.getFieldValue(PLAN_PRIMITIVE_FIELD)).toBe('移动到命名位姿 move_to_named_pose(pose_name="home")');
+	});
+
+	it('选中原语节点时顶部标题说「计划」：原语不是能力，没有实现可看', async () => {
+		stubComputedStyle(themeVariables());
+		setSelectedDevice('so101_robot');
+		const store = useStudioDocument();
+		expect(store.loadTaskJson(MIXED_STEPS_PLAN_JSON)).toBe(true);
+		const primitive = store.nodes.value.find((node) => node.type === TASK_PRIMITIVE_NODE_TYPE);
+		if (primitive === undefined) throw new Error('素材里应当有原语节点');
+		store.select(primitive.id);
+		const wrapper = mount(BlocklyView, { attachTo: document.body });
+		await wrapper.vm.$nextTick();
+
+		expect(wrapper.get('[data-testid="blockly-module-title"]').text()).toBe('2. 张开夹爪 · 计划');
 		store.select(null);
 		wrapper.unmount();
 	});

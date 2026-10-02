@@ -31,6 +31,7 @@ const asSkill = (step: SkillPlanStep | undefined): SkillStep => {
 };
 
 function fakeRunner(failOn?: string) {
+	/** 设备**真的收到**的那些调用：技能名与原语名混在一张表里（两者都是「叫了一个东西」）。 */
 	const ran: string[] = [];
 	const calls: { ref: string; params: Record<string, unknown> }[] = [];
 	/**
@@ -38,6 +39,12 @@ function fakeRunner(failOn?: string) {
 	 * 所以这张假替身必须能通知——不然「取消能打断等待」那条测试测的就是一张不会取消的替身。
 	 */
 	const cancelListeners = new Set<() => void>();
+	const outcome = (ref: string, params: Record<string, unknown>): RunOutcome => {
+		ran.push(ref);
+		calls.push({ ref, params });
+		if (ref === failOn) return { ok: false, steps: [], reason: '设备说这一步没做成' };
+		return { ok: true, steps: [] };
+	};
 	const runner: PlanRunner = {
 		// 只是清取消标记——连续执行时不该动机械臂，这里记一笔好断言
 		beginRun: () => {},
@@ -50,14 +57,10 @@ function fakeRunner(failOn?: string) {
 				cancelListeners.delete(listener);
 			};
 		},
-		run: async (capability: CapabilitySpec, params: Record<string, unknown>): Promise<RunOutcome> => {
-			ran.push(capability.capabilityRef);
-			calls.push({ ref: capability.capabilityRef, params });
-			if (capability.capabilityRef === failOn) {
-				return { ok: false, steps: [], reason: '设备说这一步没做成' };
-			}
-			return { ok: true, steps: [] };
-		},
+		run: async (capability: CapabilitySpec, params: Record<string, unknown>): Promise<RunOutcome> =>
+			outcome(capability.capabilityRef, params),
+		runPrimitiveCommand: async (primitiveRef: string, params: Record<string, unknown>): Promise<RunOutcome> =>
+			outcome(primitiveRef, params),
 	};
 	return { runner, ran, calls, cancel: () => runner.cancel() };
 }
@@ -140,6 +143,7 @@ describe('runPlan', () => {
 			cancel: () => {},
 			onCancel: () => () => {},
 			run: async () => ({ ok: true, steps: [] }),
+			runPrimitiveCommand: async () => ({ ok: true, steps: [] }),
 		};
 		await runPlan({ schemaVersion: 1, robot: 'so101_single_arm', plan: [{ step: 'skill', skill: 'inspect_scene' }] }, { catalog, runner });
 		expect(events).toEqual(['beginRun']);
@@ -717,5 +721,173 @@ describe('runPlan · 失败处置', () => {
 			'1@0.then.1 - done skill',
 			'1@0 then done if',
 		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 原语步（`primitive`）：真的叫那一个原语，成败照记 `last.success`
+// ---------------------------------------------------------------------------
+
+/**
+ * 这一组钉住四件事：
+ * 1. `primitive` 步**真的跑那一个原语**（设备收到的就是它，不是某个技能）；
+ * 2. 事件口径与技能步完全一样（plan-step 的 `running` → `done`/`failed`，带 `path` 与步型）；
+ * 3. 失败处置（`onFailure`）与技能步**同一条路**：缺省停、`'continue'` 往下走且不算完成；
+ * 4. 它**参与 `last.success`**——后面那个 `if` 真的能按它的成败分叉。
+ */
+describe('runPlan · 原语步', () => {
+	/** 一条技能步。 */
+	const call = (skill: string, onFailure?: 'stop' | 'continue'): SkillPlanStep => ({
+		step: 'skill',
+		skill,
+		...(onFailure === undefined ? {} : { onFailure }),
+	});
+
+	/** 一条原语步。 */
+	const primitive = (
+		ref: string,
+		params?: JsonObject,
+		onFailure?: 'stop' | 'continue',
+	): SkillPlanStep => ({
+		step: 'primitive',
+		primitive: ref,
+		...(params === undefined ? {} : { params }),
+		...(onFailure === undefined ? {} : { onFailure }),
+	});
+
+	/** 一棵分支：条件照契约的口径写。 */
+	const branch = (value: boolean, then: readonly SkillPlanStep[], other?: readonly SkillPlanStep[]): SkillPlanStep => ({
+		step: 'if',
+		condition: { field: 'last.success', op: '==', value },
+		then,
+		...(other === undefined ? {} : { else: other }),
+	});
+
+	const planOf = (steps: readonly SkillPlanStep[]): SkillPlan => ({ schemaVersion: 1, robot: 'so101_single_arm', plan: steps });
+
+	/** 计划步事件压成一行：`所属顶层步@路径 臂 状态 步型`（与上面几张表同一个写法）。 */
+	const traceOf = (e: Extract<PlanStepEvent, { kind: 'plan-step' }>): string =>
+		`${String(e.index)}@${e.path} ${e.arm ?? '-'} ${e.state} ${e.step.step}`;
+
+	it('真的叫了那一个原语：设备收到的是原语，报的是计划步事件（带 path 与步型）', async () => {
+		const { runner, ran, calls } = fakeRunner();
+		const trace: string[] = [];
+		const outcome = await runPlan(planOf([primitive('open_gripper'), call('wave_hello')]), {
+			catalog,
+			runner,
+			onPlanStep: (e) => trace.push(traceOf(e)),
+		});
+
+		expect(outcome.ok).toBe(true);
+		expect(outcome.completed).toBe(2);
+		// 设备那侧收到的第一个调用就是原语本身（没有经过任何技能）
+		expect(ran).toEqual(['open_gripper', 'wave_hello']);
+		expect(calls[0]).toEqual({ ref: 'open_gripper', params: {} });
+		expect(trace).toEqual([
+			'1@0 - running primitive',
+			'1@0 - done primitive',
+			'2@1 - running skill',
+			'2@1 - done skill',
+		]);
+	});
+
+	it('参数原样交给执行器（不在计划层翻译），事件里的步就是那一步', async () => {
+		const { runner, calls } = fakeRunner();
+		await runPlan(planOf([primitive('move_to_named_pose', { pose_name: 'home' })]), { catalog, runner });
+		expect(calls[0]?.params).toEqual({ pose_name: 'home' });
+	});
+
+	it('失败且缺省（或显式 stop）：计划停在那一步，后面的步一步没跑', async () => {
+		for (const step of [primitive('open_gripper'), primitive('open_gripper', undefined, 'stop')]) {
+			const { runner, ran } = fakeRunner('open_gripper');
+			const trace: string[] = [];
+			const outcome = await runPlan(planOf([step, call('wave_hello')]), {
+				catalog,
+				runner,
+				onPlanStep: (e) => trace.push(traceOf(e)),
+			});
+
+			expect(outcome.ok).toBe(false);
+			expect(outcome.completed).toBe(0);
+			expect(outcome.reason).toContain('设备说这一步没做成');
+			expect(ran).toEqual(['open_gripper']);
+			expect(trace).toEqual(['1@0 - running primitive', '1@0 - failed primitive']);
+		}
+	});
+
+	it('失败但写了 continue：计划继续往下走，那一步照报 failed 且不算完成（与技能步同一套账）', async () => {
+		const { runner, ran } = fakeRunner('open_gripper');
+		const trace: string[] = [];
+		const outcome = await runPlan(planOf([primitive('open_gripper', undefined, 'continue'), call('wave_hello')]), {
+			catalog,
+			runner,
+			onPlanStep: (e) => trace.push(traceOf(e)),
+		});
+
+		expect(outcome.ok).toBe(true);
+		expect(outcome.total).toBe(2);
+		expect(outcome.completed).toBe(1); // 被容忍的那一步不算完成
+		expect(ran).toEqual(['open_gripper', 'wave_hello']);
+		expect(trace).toEqual([
+			'1@0 - running primitive',
+			'1@0 - failed primitive',
+			'2@1 - running skill',
+			'2@1 - done skill',
+		]);
+	});
+
+	it('参与 last.success：后面的 if 按**原语的成败**分叉（成 → 另一条臂）', async () => {
+		// 成功：条件「上一步成功」成立 → 走 then
+		const hit = fakeRunner();
+		const then = await runPlan(planOf([primitive('open_gripper'), branch(true, [call('wave_hello')], [call('nod_yes')])]), {
+			catalog,
+			runner: hit.runner,
+		});
+		expect(then.ok).toBe(true);
+		expect(hit.ran).toEqual(['open_gripper', 'wave_hello']);
+
+		// 失败（但往下走）：`last.success` 记成 false —— 「上一步没成」那条臂这一次真的可达
+		const miss = fakeRunner('open_gripper');
+		const trace: string[] = [];
+		const outcome = await runPlan(
+			planOf([
+				primitive('open_gripper', undefined, 'continue'),
+				branch(false, [call('recover_safe_pose')], [call('celebrate')]),
+			]),
+			{ catalog, runner: miss.runner, onPlanStep: (e) => trace.push(traceOf(e)) },
+		);
+		expect(outcome.ok).toBe(true);
+		expect(miss.ran).toEqual(['open_gripper', 'recover_safe_pose']);
+		expect(trace.filter((line) => line.includes(' if'))).toEqual(['2@1 then running if', '2@1 then done if']);
+		expect(trace.some((line) => line.includes('1.else'))).toBe(false);
+	});
+
+	it('臂里的原语步照报路径与所属顶层步（与技能步同一个口径）', async () => {
+		const { runner, ran } = fakeRunner();
+		const trace: string[] = [];
+		const outcome = await runPlan(planOf([branch(true, [primitive('open_gripper'), call('wave_hello')])]), {
+			catalog,
+			runner,
+			onPlanStep: (e) => trace.push(traceOf(e)),
+		});
+
+		expect(outcome.ok).toBe(true);
+		expect(outcome.completed).toBe(1); // 顶层就一步（那个分支）
+		expect(ran).toEqual(['open_gripper', 'wave_hello']);
+		expect(trace).toEqual([
+			'1@0 then running if',
+			'1@0.then.0 - running primitive',
+			'1@0.then.0 - done primitive',
+			'1@0.then.1 - running skill',
+			'1@0.then.1 - done skill',
+			'1@0 then done if',
+		]);
+	});
+
+	it('面板上那行写的是原语的标签（目录里那个），没给目录就退回原语名', () => {
+		expect(planStepLabel({ step: 'primitive', primitive: 'open_gripper' }, catalog)).toBe('张开夹爪');
+		expect(planStepLabel({ step: 'primitive', primitive: 'move_to_named_pose' })).toBe('move_to_named_pose');
+		// 目录里查不到也退回原名——那是设备真收到的东西，不编一个中文名
+		expect(planStepLabel({ step: 'primitive', primitive: 'not_in_catalog' }, catalog)).toBe('not_in_catalog');
 	});
 });

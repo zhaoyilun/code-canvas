@@ -1,14 +1,17 @@
 /**
  * 技能计划 → 声明的转换。
  *
- * 钉住五件事：
+ * 钉住六件事：
  * 1. 每个 plan 步变一个节点，`action` 是技能名、技能参数平铺在它旁边——
  *    三个视图靠 `action` 找能力，这条路与一期任务**完全一样**；
  * 2. 节点按顺序串成一条链，坐标依次右移；
  * 3. 目录说了算：技能查不到、参数名不认、类型不对，都在这一步被拦下，且带路径；
  * 4. 超时不是技能参数，带着原名进节点参数，来回一趟不丢；
  * 5. `if` 步变一个 `task.branch` 节点，条件原样进参数，**三格出边**（then / else / 这一层后面的步骤）
- *    位置就是语义——空的那一格也要占着位置，臂的链尾不接回主干。
+ *    位置就是语义——空的那一格也要占着位置，臂的链尾不接回主干；
+ * 6. `primitive` 步变一个 `task.primitive` 节点：参数平铺的做法与技能步同一套，
+ *    只是指名的那一栏是 `primitive`（**不是 `action`**——那个键是「能力」的接缝），
+ *    单格出边；四类步混排时来回一趟逐字等价。
  */
 import { describe, expect, it } from 'vitest';
 import {
@@ -19,7 +22,13 @@ import {
 	type WorkflowDeclaration,
 } from '@codecanvas/contracts';
 import { declarationToSkillPlan } from '../src/format';
-import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE, importSkillPlan, importSkillPlanJson } from '../src/skill-plan';
+import {
+	TASK_BRANCH_NODE_TYPE,
+	TASK_PRIMITIVE_NODE_TYPE,
+	TASK_WAIT_NODE_TYPE,
+	importSkillPlan,
+	importSkillPlanJson,
+} from '../src/skill-plan';
 
 const catalog: CapabilityCatalog = capabilityCatalogSchema.parse({
 	catalogRef: 'roboframe_so101_single_arm',
@@ -31,6 +40,12 @@ const catalog: CapabilityCatalog = capabilityCatalogSchema.parse({
 			primitiveRef: 'move_to_named_pose',
 			label: '移动到命名位姿',
 			parameters: [{ name: 'pose_name', label: '命名位姿', type: 'pose' }],
+		},
+		{ primitiveRef: 'open_gripper', label: '张开夹爪', parameters: [] },
+		{
+			primitiveRef: 'rotate_gripper_cw',
+			label: '顺时针旋转夹爪',
+			parameters: [{ name: 'motion_distance', label: '旋转角度', type: 'number', required: true, unit: 'degrees' }],
 		},
 	],
 	capabilities: [
@@ -547,5 +562,160 @@ describe('技能计划的失败处置 → 声明', () => {
 			if (!second.ok) throw new Error('还原出来的计划应当能再导入');
 			expect(stripVolatile(second.declaration)).toEqual(stripVolatile(first.declaration));
 		}
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 原语步（`primitive` → `task.primitive` 节点）：直接叫一个原子动作
+// ---------------------------------------------------------------------------
+
+/** 「张开夹爪 → 挪一点 → 顺时针转 90 度」：原语步与技能步混在同一条链上。 */
+const PRIMITIVE_PLAN = {
+	schemaVersion: 1,
+	robot: 'so101_single_arm',
+	description: '张开夹爪，挪一点，再转 90 度',
+	plan: [
+		{ step: 'primitive', primitive: 'open_gripper' },
+		{
+			step: 'skill',
+			skill: 'move_relative_ee',
+			params: { motion_direction: 'forward', motion_distance: 0.03 },
+			timeoutSec: 10,
+			onFailure: 'continue',
+		},
+		{ step: 'primitive', primitive: 'move_to_named_pose', params: { pose_name: 'home' } },
+		{ step: 'primitive', primitive: 'rotate_gripper_cw', params: { motion_distance: 90 }, onFailure: 'stop' },
+	],
+};
+
+const primitiveIdOf = (declaration: WorkflowDeclaration): string | undefined =>
+	declaration.nodes.find((node) => node.type === TASK_PRIMITIVE_NODE_TYPE)?.id;
+
+describe('技能计划的原语步 → 声明', () => {
+	it('一个 primitive 步一个 `task.primitive` 节点：指名的是 `primitive`，参数平铺在它旁边', () => {
+		const result = importSkillPlan(PRIMITIVE_PLAN, { catalog, idFactory: ids });
+		if (!result.ok) throw new Error('应当通过');
+		expect(result.declaration.nodes.map((node) => node.parameters)).toEqual([
+			{ primitive: 'open_gripper' },
+			{
+				action: 'move_relative_ee',
+				motion_direction: 'forward',
+				motion_distance: 0.03,
+				timeoutSec: 10,
+				onFailure: 'continue',
+			},
+			{ primitive: 'move_to_named_pose', pose_name: 'home' },
+			{ primitive: 'rotate_gripper_cw', motion_distance: 90, onFailure: 'stop' },
+		]);
+		// **不用 `action`**：那个键是「能力」的接缝（视图据此去 catalog.capabilities 里查），
+		// 原语不是能力——借用它，三个视图都会报「查不到这个能力」，而这一步压根不经过能力。
+		for (const node of result.declaration.nodes.filter((item) => item.type === TASK_PRIMITIVE_NODE_TYPE)) {
+			expect(node.parameters).not.toHaveProperty('action');
+		}
+	});
+
+	it('节点类型与版本：`task.primitive` / 1，与另外三种并列', () => {
+		const result = importSkillPlan(PRIMITIVE_PLAN, { catalog, idFactory: ids });
+		if (!result.ok) throw new Error('应当通过');
+		const primitiveNodes = result.declaration.nodes.filter((node) => node.type === TASK_PRIMITIVE_NODE_TYPE);
+		expect(primitiveNodes).toHaveLength(3);
+		expect(new Set(primitiveNodes.map((node) => node.typeVersion))).toEqual(new Set([1]));
+		expect(result.declaration.nodes.map((node) => node.type)).toEqual([
+			TASK_PRIMITIVE_NODE_TYPE,
+			'task.action',
+			TASK_PRIMITIVE_NODE_TYPE,
+			TASK_PRIMITIVE_NODE_TYPE,
+		]);
+	});
+
+	it('显示名用目录里那个原语的标签，查不到就退回原名', () => {
+		const result = importSkillPlan(PRIMITIVE_PLAN, { catalog, idFactory: ids });
+		if (!result.ok) throw new Error('应当通过');
+		expect(result.declaration.nodes.map((node) => node.name)).toEqual([
+			'1. 张开夹爪',
+			'2. 相对移动',
+			'3. 移动到命名位姿',
+			'4. 顺时针旋转夹爪',
+		]);
+	});
+
+	it('照常占**一格**出边（下一步），与技能步同一套规矩', () => {
+		const result = importSkillPlan(PRIMITIVE_PLAN, { catalog, idFactory: ids });
+		if (!result.ok) throw new Error('应当通过');
+		const declaration = result.declaration;
+		const openGripper = primitiveIdOf(declaration);
+		if (openGripper === undefined) throw new Error('应当有原语节点');
+
+		expect(declaration.connections[openGripper]?.main).toHaveLength(1);
+		// 那一格装的是它的下一步（挪一点），不是臂或后续
+		expect(parametersAt(declaration, portHead(declaration, openGripper, 0))).toEqual({
+			action: 'move_relative_ee',
+			motion_direction: 'forward',
+			motion_distance: 0.03,
+			timeoutSec: 10,
+			onFailure: 'continue',
+		});
+		// 它自己的父亲是前面那一步：整条计划还是一条链
+		expect(parentsOf(declaration, openGripper)).toEqual([]);
+	});
+
+	it('原语不在目录里：转换这一层不重复判，把契约的诊断原样交回去', () => {
+		const result = importSkillPlan(
+			{ schemaVersion: 1, robot: 'so101_single_arm', plan: [{ step: 'primitive', primitive: 'fly' }] },
+			{ catalog, idFactory: ids },
+		);
+		expect(result.ok).toBe(false);
+		expect(result.diagnostics.map((diagnostic) => `${diagnostic.code}@${diagnostic.path ?? ''}`)).toEqual([
+			'plan.step.primitive.unknown@plan[0].primitive',
+		]);
+	});
+
+	it('来回一趟字节等价：四类步混排（技能 / 分支 / 等待 / 原语），臂里也放原语', () => {
+		const mixed = {
+			schemaVersion: 1,
+			robot: 'so101_single_arm',
+			description: '四类步都有的计划',
+			plan: [
+				{ step: 'skill', skill: 'inspect_scene' },
+				{ step: 'primitive', primitive: 'open_gripper' },
+				{ step: 'wait', seconds: 1 },
+				{
+					step: 'if',
+					condition: { field: 'last.success', op: '==', value: false },
+					then: [
+						{ step: 'primitive', primitive: 'move_to_named_pose', params: { pose_name: 'home' }, timeoutSec: 5 },
+						{ step: 'wait', seconds: 0.5 },
+					],
+					else: [
+						{ step: 'primitive', primitive: 'rotate_gripper_cw', params: { motion_distance: 90 }, onFailure: 'continue' },
+					],
+				},
+				{ step: 'primitive', primitive: 'open_gripper', onFailure: 'stop' },
+			],
+		};
+		const first = importSkillPlan(mixed, { catalog, idFactory: ids });
+		if (!first.ok) throw new Error('计划应当能导入');
+
+		const restored = declarationToSkillPlan(first.declaration);
+		expect(restored).toEqual(mixed);
+		// 深等价之外再钉一次字节：键序也照冻结的形状
+		// （schemaVersion / robot / description / plan，以及 step / primitive / params / timeoutSec / onFailure）
+		expect(JSON.stringify(restored)).toBe(JSON.stringify(mixed));
+
+		const second = importSkillPlan(restored, { catalog, idFactory: ids });
+		if (!second.ok) throw new Error('还原出来的计划应当能再导入');
+		expect(stripVolatile(second.declaration)).toEqual(stripVolatile(first.declaration));
+
+		// 臂里那个原语步也是单格出边，且它的下一步是臂里的下一步——不接到臂外去
+		const declaration = first.declaration;
+		const branchId = branchIdOf(declaration);
+		if (branchId === undefined) throw new Error('应当有一个分支节点');
+		const thenHead = portHead(declaration, branchId, 0);
+		if (thenHead === undefined) throw new Error('then 臂里应当有一步');
+		expect(parametersAt(declaration, thenHead)).toEqual({ primitive: 'move_to_named_pose', pose_name: 'home', timeoutSec: 5 });
+		const thenWait = portHead(declaration, thenHead, 0);
+		if (thenWait === undefined) throw new Error('then 臂里应当还有一步等待');
+		expect(parametersAt(declaration, thenWait)).toEqual({ seconds: 0.5 });
+		expect(declaration.connections[thenWait]?.main).toBeUndefined(); // 臂尾：没有出边
 	});
 });

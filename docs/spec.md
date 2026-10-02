@@ -180,7 +180,7 @@ flowchart LR
 | 格式 | 谁用 | 长什么样 | 判据 |
 | --- | --- | --- | --- |
 | `phase1_task` | 一期设备（差速底盘 + 六轴臂） | §1.1 那份，七个固定动作 | `validateTask`（逐条对照 `task_protocol.py`） |
-| `skill_plan` | RoboFrame SO-101（真机 / 虚拟设备） | `{schemaVersion, robot, description?, plan:[Step, …]}`，其中 `Step` 是三员之一：`{step:'skill', skill, params?, timeoutSec?, onFailure?:'stop' / 'continue'}`、`{step:'if', condition:{field:'last.success', op:'==' / '!=', value:boolean}, then:[Step, …], else?:[Step, …]}`、`{step:'wait', seconds}` | `validateSkillPlan`：**技能与参数照设备目录判**；分支照条件、臂与深度判；等待照秒数判；失败处置照取值判 |
+| `skill_plan` | RoboFrame SO-101（真机 / 虚拟设备） | `{schemaVersion, robot, description?, plan:[Step, …]}`，其中 `Step` 是四员之一：`{step:'skill', skill, params?, timeoutSec?, onFailure?:'stop' / 'continue'}`、`{step:'if', condition:{field:'last.success', op:'==' / '!=', value:boolean}, then:[Step, …], else?:[Step, …]}`、`{step:'wait', seconds}`、`{step:'primitive', primitive, params?, timeoutSec?, onFailure?:'stop' / 'continue'}` | `validateSkillPlan`：**技能与参数照设备目录判**（原语照 `catalog.primitives` 那份白名单判）；分支照条件、臂与深度判；等待照秒数判；失败处置照取值判 |
 
 三条规矩：
 
@@ -190,9 +190,26 @@ flowchart LR
   生成之后换设备，声明还是上一台产出的；这时拿新尺子量，改一个数字都会被莫名其妙拒掉。
 - **`skill_plan` 的形状沿用前作集成设计稿 §7.3 的 `RobotTaskPlan`**，几处偏离写在
   `packages/contracts/src/skill-plan.ts` 头上：参数名照抄上游（`motion_direction` 而不是示例里的
-  `motionDirection`）；`step` 只认 `'skill'` / `'if'` / `'wait'`（`primitive` 还没做，遇到就明确报错，
-  不静默当技能）；`if` 这一版的条件只认 `last.success`；设计稿的 `skipIf`（守卫挂在**后一步**上）
-  换成了技能步自己的 `onFailure`（见下）。
+  `motionDirection`）；`step` 认 `'skill'` / `'if'` / `'wait'` / `'primitive'`（设计稿的 `skipIf`
+  还没做，遇到就明确报错，不静默当技能）；`if` 这一版的条件只认 `last.success`；而 `skipIf`
+  （守卫挂在**后一步**上）换成了技能步自己的 `onFailure`（见下）。
+
+**原语步（`primitive`）为什么有、以及那条约束：**
+
+- **它是一条直路，不是一个新能力。** 目录里有些原子动作**没有**技能包装（SO-101 的 `open_gripper` /
+  `close_gripper` 就是这样），计划里想直接叫它只能编一个假技能——假技能不在目录里，校验器当场拒。
+  `primitive` 步就是给这些动作留的直路，落到执行侧就是上游的 `/embodied/execute_primitive`
+  （`PrimitiveCommand.action` 那条路）。
+- **约束：`primitive` 必须是当前设备目录 `catalog.primitives` 里的名字。** 判据是**目录**，不是写死的表——
+  设备报上来的原语可以随时增删，写死一张表等于让「能生成什么」与「能执行什么」分家。
+  查不到报 `plan.step.primitive.unknown`，并把目录里有什么一并给上（与 `skill.unknown` 同一个写法）。
+  `params` 里每个键必须是那个原语声明的参数名、类型要对得上；标了 `required: true` 的缺了是错误
+  （`plan.step.param.required`），没标必填的缺了只提醒——**这一段与技能步共用同一个校验函数**
+  （同一份坏参数在两条路上给的是同一个码）。
+- **待遇与技能步完全一样**：`timeoutSec` 与 `onFailure`（缺省 `'stop'`）都收，且它真的会成会败，
+  所以**参与 `last.success`**——它后面那个 `if` 能按它的成败分叉。
+- **什么时候用它**：目录里有对应技能时**优先用技能**（技能带着自己的守卫与恢复策略），
+  没有包装的原子动作才用 `primitive`。提示词里也是这么写的（`apps/studio/src/shell/task-generation.ts`）。
 
 **分支为什么长成这样（三条，都是被现实逼出来的）：**
 

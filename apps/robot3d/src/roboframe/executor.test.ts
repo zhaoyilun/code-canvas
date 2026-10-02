@@ -40,7 +40,8 @@ const primitives: PrimitiveSpec[] = [
 	{ primitiveRef: 'move_relative_ee', label: '相对末端', parameters: [{ name: 'motion_direction', label: '方向', type: 'string' }, { name: 'motion_distance', label: '距离', type: 'number' }] },
 	{ primitiveRef: 'open_gripper', label: '张开夹爪', parameters: [] },
 	{ primitiveRef: 'close_gripper', label: '闭合夹爪', parameters: [] },
-	{ primitiveRef: 'rotate_gripper_cw', label: '顺时针', parameters: [{ name: 'motion_distance', label: '角度', type: 'number' }] },
+	// 上游说必填的原语参数：缺了是错误（判据在目录里）
+	{ primitiveRef: 'rotate_gripper_cw', label: '顺时针', parameters: [{ name: 'motion_distance', label: '角度', type: 'number', required: true }] },
 	{ primitiveRef: 'rotate_gripper_ccw', label: '逆时针', parameters: [{ name: 'motion_distance', label: '角度', type: 'number' }] },
 ];
 
@@ -294,5 +295,96 @@ describe('RoboFrameExecutor', () => {
 		expect(seen.map((e) => e.state)).toEqual(['running', 'done']);
 		expect(seen[0]?.total).toBe(1);
 		expect(seen[1]?.index).toBe(1);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 公开的单原语入口（`runPrimitiveCommand`）：上游 `/embodied/execute_primitive` 那条路
+// ---------------------------------------------------------------------------
+
+/**
+ * 这一组钉住四件事（与 `run()` 同一套口径）：
+ * 1. 它**真的把那一个原语下发给设备**（设备收到的就是它，不经过任何能力）；
+ * 2. 参数按**目录声明**校验：名字多给了当场拒、标了必填的缺了拒、没标必填的缺了照跑（有默认值）；
+ * 3. 事件照常报（`running` → 终态），跑计划时带着计划序号与 task_id，直接叫时如实缺席；
+ * 4. 取消与失败如实返回，不抛异常、不粉饰。
+ */
+describe('RoboFrameExecutor · 跑单个原语', () => {
+	it('把那个原语下发给设备，事件带进度与状态', async () => {
+		const { rig, log } = fakeRig();
+		const seen: StepEvent[] = [];
+		const exec = new RoboFrameExecutor(rig, primitives, { onStep: (e) => seen.push(e) });
+
+		const outcome = await exec.runPrimitiveCommand('open_gripper');
+		expect(outcome.ok).toBe(true);
+		expect(log).toEqual(['gripper 1']);
+		expect(seen.map((e) => e.state)).toEqual(['running', 'done']);
+		// 一个原语就是一步：1/1
+		expect(seen.map((e) => `${String(e.index)}/${String(e.total)}`)).toEqual(['1/1', '1/1']);
+		// 直接叫原语时**没有能力可指**：这一栏如实缺席（与 planIndex 同一个口径）
+		expect(seen.every((e) => e.capabilityRef === undefined)).toBe(true);
+		expect(outcome.steps.map((e) => e.primitiveRef)).toEqual(['open_gripper']);
+	});
+
+	it('参数按目录声明校验：多给的名字当场拒，一个字节都不下发', async () => {
+		const { rig, log } = fakeRig();
+		const exec = new RoboFrameExecutor(rig, primitives);
+
+		const outcome = await exec.runPrimitiveCommand('open_gripper', { nope: 1 });
+		expect(outcome.ok).toBe(false);
+		expect(outcome.reason).toContain('没有参数 nope');
+		expect(log).toEqual([]);
+	});
+
+	it('标了必填的缺了 → 拒绝执行；没标必填的缺了 → 照跑（执行侧有默认值）', async () => {
+		const { rig, log } = fakeRig();
+		const exec = new RoboFrameExecutor(rig, primitives);
+
+		const refused = await exec.runPrimitiveCommand('rotate_gripper_cw');
+		expect(refused.ok).toBe(false);
+		expect(refused.reason).toContain('缺少参数 motion_distance');
+		expect(log).toEqual([]);
+
+		// `duration_sec` 没标必填：只给关节目标位置也跑得动（与计划层那条「只提醒」同一条口径）
+		const ok = await exec.runPrimitiveCommand('move_to_joint_positions', { joint_positions: { '1': 0.02 } });
+		expect(ok.ok).toBe(true);
+		expect(log).toEqual(['joints {"1":0.02} 1.5s']);
+	});
+
+	it('目录里没有这个原语：如实拒绝，不当成做过', async () => {
+		const { rig, log } = fakeRig();
+		const exec = new RoboFrameExecutor(rig, primitives);
+
+		const outcome = await exec.runPrimitiveCommand('fly');
+		expect(outcome.ok).toBe(false);
+		expect(outcome.reason).toBe('目录里没有原语 fly');
+		expect(log).toEqual([]);
+	});
+
+	it('跑计划时带计划上下文：事件里有计划序号与 task_id', async () => {
+		const { rig } = fakeRig();
+		const seen: StepEvent[] = [];
+		const exec = new RoboFrameExecutor(rig, primitives, { onStep: (e) => seen.push(e) });
+		exec.beginRun();
+		exec.setPlanContext({ planIndex: 3, taskId: 'plan-3-abc' });
+
+		await exec.runPrimitiveCommand('open_gripper');
+		expect(seen.map((e) => `${String(e.planIndex)} ${String(e.taskId)}`)).toEqual(['3 plan-3-abc', '3 plan-3-abc']);
+	});
+
+	it('取消之后如实拒绝，不碰设备（原语一旦下发就没法从中间叫停——与技能步同一个口径）', async () => {
+		const { rig, log } = fakeRig();
+		const exec = new RoboFrameExecutor(rig, primitives);
+		exec.cancel();
+
+		const outcome = await exec.runPrimitiveCommand('open_gripper');
+		expect(outcome.ok).toBe(false);
+		expect(outcome.reason).toBe('已取消');
+		expect(log).toEqual([]);
+
+		// `beginRun()` 清掉取消标记之后照跑（与跑计划开始一趟同一个口径）
+		exec.beginRun();
+		expect((await exec.runPrimitiveCommand('open_gripper')).ok).toBe(true);
+		expect(log).toEqual(['gripper 1']);
 	});
 });

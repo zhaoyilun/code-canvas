@@ -11,14 +11,19 @@
  *
  * - **参数名照抄上游**。设计稿示例写的是 `motionDirection`，RoboFrame 的目录里是
  *   `motion_direction`（YAML 里的原名）。用真名，免得中间多一层没人维护的映射。
- * - **`step` 认 `'skill'` / `'if'` / `'wait'`**。设计稿的 `primitive` / `skipIf` 步这一版不做——
- *   它们要在流程画布上各自长成一种模块，而现在画布上的模块就是「调一个能力」；
- *   但**分支**要做：现实任务真的会分叉（上一步没成就换个法子再试），平铺的步骤列表
- *   表达不出来；**等待**也要做：技能自己带的时长管不了「两步之间停一下」
- *   （抓起来、等它稳定两秒、再移动）。遇到不认的 step 给明确诊断，不静默当技能处理。
- *   设计稿的 `skipIf` 是「守卫挂在**后一步**上」，这一版换成技能步自己的 `onFailure`：
- *   两件事回答的是同一个问题（这一步失败之后计划怎么办），而写在这一步自己身上，
- *   读计划的人不必往后找那个守卫——**缺省仍是停**（见 `SkillStep.onFailure`）。
+ * - **`step` 认 `'skill'` / `'if'` / `'wait'` / `'primitive'`**。设计稿的 `skipIf` 步这一版不做——
+ *   它是「守卫挂在**后一步**上」，这一版换成这一步自己的 `onFailure`：两件事回答的是同一个问题
+ *   （这一步失败之后计划怎么办），而写在这一步自己身上，读计划的人不必往后找那个守卫——
+ *   **缺省仍是停**（见 `SkillStep.onFailure`）。**分支**要做：现实任务真的会分叉
+ *   （上一步没成就换个法子再试），平铺的步骤列表表达不出来；**等待**也要做：技能自己带的时长
+ *   管不了「两步之间停一下」（抓起来、等它稳定两秒、再移动）。**原语**也要做：目录里有些原子动作
+ *   **没有**技能包装（`open_gripper` / `close_gripper` 这种），想直接叫它就得编一个假技能——
+ *   `PrimitiveStep` 就是那条直路（见那个接口）。遇到不认的 step 给明确诊断，不静默当技能处理。
+ *
+ * **原语步（`primitive`）与技能步的关系**：形状与技能步**一模一样**（都是「叫一个东西去做事」，
+ * 参数、`timeoutSec`、`onFailure` 三栏同待遇），差别只在**指名的方式**与**判据的来源**：
+ * 技能步写 `skill`，判据是 `catalog.capabilities`；原语步写 `primitive`，判据是 `catalog.primitives`。
+ * 参数校验因此**共用同一条路**（`validateCallStepParts`）——两份判据迟早分叉。
  * - **多一个 `description`**（可选）。设计稿的 plan 没有任务名（在 n8n 里节点自带名字），
  *   而这个界面上到处要显示「这是哪个任务」。不加就只能拿机器人名当任务名。
  *
@@ -28,15 +33,27 @@
  * 将来要加感知条件（比如夹爪里有没有东西），加的是**一个新的 `field`**（那时执行侧也真的会报这个量），
  * 而不是把这里放宽成「随便填」。
  *
- * 校验的判据是**目录**：技能必须在目录里，参数必须是那个技能声明过的、类型要对得上。
+ * 校验的判据是**目录**：技能（或原语）必须在目录里，参数必须是那个技能（或原语）声明过的、类型要对得上。
  * 目录就是设备报上来的那份，所以「能生成什么」和「能执行什么」永远是同一件事。
  */
 import { DiagnosticCollector, type Diagnostic } from './diagnostic';
 import { jsonDetail, type JsonObject, type JsonValue } from './json';
-import { findCapability, type CapabilityCatalog, type CapabilitySpec } from './capability';
+import {
+	findCapability,
+	findPrimitive,
+	type CapabilityCatalog,
+	type CapabilitySpec,
+	type CatalogParameter,
+} from './capability';
 
 /** 计划格式的版本。整数，与设计稿一致（不是一期协议那种 `'1.0'` 字符串）。 */
 export const SKILL_PLAN_SCHEMA_VERSION = 1;
+
+/**
+ * 计划步的种类全集。诊断里的 `supported` 与文档、提示词都照它说——
+ * 加一种步就在这儿加一个名字，别处不许再抄一份。
+ */
+export const SKILL_PLAN_STEP_KINDS = ['skill', 'if', 'wait', 'primitive'] as const;
 
 /** 分支条件的 `field` 全集。**要加感知条件就在这里加一个新 field**，不是放宽下面的判据。 */
 export const BRANCH_CONDITION_FIELDS = ['last.success'] as const;
@@ -92,7 +109,36 @@ export interface SkillStep {
 	 * 不算进 `completed`——失败是事实，被容忍也是事实，两件事各说各的。
 	 *
 	 * `wait` 与 `if` **不带**这一栏（等待不会失败；分支走哪条臂由条件决定），给了就报错。
+	 * **`primitive` 步带它**，判据与待遇跟技能步完全一样（两者都是「叫一个东西去做事」）。
 	 */
+	readonly onFailure?: SkillPlanOnFailure;
+}
+
+/**
+ * 一个计划步：**直接叫一个原子动作**，绕开技能那层包装。
+ *
+ * 为什么要有它：目录里有些原子动作**没有**对应的技能（SO-101 的 `open_gripper` / `close_gripper`
+ * 就是这样——技能库里只有 `open_gripper_skill` 这类包装，而上游 `/embodied/execute_primitive`
+ * 那条路本来就是直呼原语）。没有这一步，计划里想用它就只能**编一个假技能**：假技能不在目录里，
+ * 校验器当场拒，编出来也用不了。
+ *
+ * 三条规矩，与技能步**同一条路**：
+ * - `primitive` 必须是**当前设备目录 `catalog.primitives` 里的名字**（判据是目录，不是写死的表）。
+ *   查不到报 `plan.step.primitive.unknown`，并把目录里有什么一并给上——与 `skill.unknown` 同一个写法；
+ * - `params` 每个键必须是**那个原语声明的参数名**，类型要对得上；标了 `required: true` 的缺了是错误
+ *   （`plan.step.param.required`），没标必填的缺了只提醒。这一段与技能步**共用同一个校验函数**；
+ * - `timeoutSec` 与 `onFailure` 同技能步的待遇（`'stop'` 缺省 / `'continue'`），且它**真的会成会败**，
+ *   所以参与 `last.success`。
+ */
+export interface PrimitiveStep {
+	readonly step: 'primitive';
+	/** 原语名（目录 `catalog.primitives[].primitiveRef` 里的原名）。 */
+	readonly primitive: string;
+	/** 原语参数；名字与取值类型由目录里那个原语的 `parameters` 规定。 */
+	readonly params?: JsonObject;
+	/** 这一步的超时（秒）。与技能步同一条口径（见 `SkillStep.timeoutSec`）。 */
+	readonly timeoutSec?: number;
+	/** 失败处置。缺省 `'stop'`；判据与待遇同技能步（见 `SkillStep.onFailure`）。 */
 	readonly onFailure?: SkillPlanOnFailure;
 }
 
@@ -134,10 +180,11 @@ export interface WaitStep {
 }
 
 /**
- * 计划步：`SkillStep`（调一个技能）、`BranchStep`（按上一步的结果走一条臂）或 `WaitStep`（停一下）。
- * 三者可以互相嵌套——`BranchStep` 的两条臂装的还是这个联合。
+ * 计划步：`SkillStep`（调一个技能）、`BranchStep`（按上一步的结果走一条臂）、
+ * `WaitStep`（停一下）或 `PrimitiveStep`（直接叫一个原子动作）。
+ * 四者可以互相嵌套——`BranchStep` 的两条臂装的还是这个联合。
  */
-export type SkillPlanStep = SkillStep | BranchStep | WaitStep;
+export type SkillPlanStep = SkillStep | BranchStep | WaitStep | PrimitiveStep;
 
 export interface SkillPlan {
 	readonly schemaVersion: number;
@@ -222,6 +269,7 @@ const validateOnFailure = (
  *
  * 为什么是错误而不是「收下但没用」：这一栏在它们身上没有对象——等待不会失败，
  * 分支走哪条臂由条件决定。收下一个执行侧永远不会读的字段，等于让写计划的人以为它生效了。
+ * **带这一栏的是技能步与原语步**（两者都是「叫一个东西去做事」），所以 `applicable` 是那两个。
  */
 const rejectOnFailure = (
 	rawStep: Record<string, unknown>,
@@ -236,7 +284,7 @@ const rejectOnFailure = (
 		message,
 		path: `${path}.onFailure`,
 		ref,
-		details: { value: jsonDetail(rawStep['onFailure']), applicable: ['skill'] },
+		details: { value: jsonDetail(rawStep['onFailure']), applicable: ['skill', 'primitive'] },
 	});
 };
 
@@ -384,6 +432,127 @@ const validateBranchStep = (
 	return { step: 'if', condition, then: thenSteps, ...(elseSteps === undefined ? {} : { else: elseSteps }) };
 };
 
+/** 一个「叫一个东西去做事」的步：参数、超时、失败处置这三段校验之后的产物。 */
+interface CallStepParts {
+	/** 只装**认得且类型对**的那些参数（没给的不补键，执行侧有默认值）。 */
+	readonly params: JsonObject;
+	readonly timeoutSec: number | undefined;
+	readonly onFailure: SkillPlanOnFailure | undefined;
+}
+
+/**
+ * 校验技能步与原语步**共用的那三段**：参数、`timeoutSec`、`onFailure`。
+ *
+ * 为什么必须共用：两边的规矩是同一套（名字必须是声明过的那些、类型要对得上、标了 `required`
+ * 的缺了是错误、没标的缺了只提醒、超时是正数、失败处置只有两个取值），各写一份的结果是
+ * **两份判据迟早分叉**——一边放宽一点，另一边的计划就悄悄溜过去了，而两条路在界面上长得一模一样。
+ * 措辞里「被叫的那个东西」由 `subject` 给（`技能「wave_hello」` / `原语「open_gripper」`），
+ * **码与判据一个字都不分叉**（同一个坏参数在两条路上给的是同一个码）。
+ *
+ * 检查顺序（诊断的先后顺序因此是稳定的）：参数是不是对象 → 逐个参数的认名与类型 →
+ * 逐个声明的必填/缺失 → 超时 → 失败处置。
+ */
+const validateCallStepParts = (
+	rawStep: Record<string, unknown>,
+	path: string,
+	options: {
+		/** 被叫的那个东西的名字（技能名 / 原语名），进诊断的 `ref`。 */
+		readonly ref: string;
+		/** 措辞里的主语：`技能「x」` / `原语「x」`。 */
+		readonly subject: string;
+		/** 它声明的参数（判据来自目录，不是这里写的一张表）。 */
+		readonly declared: readonly CatalogParameter[];
+		readonly collector: DiagnosticCollector;
+	},
+): CallStepParts | undefined => {
+	const { ref, subject, declared, collector } = options;
+
+	const params = rawStep['params'] ?? {};
+	if (!isPlainObject(params)) {
+		collector.error({
+			code: 'plan.step.params.not_object',
+			message: `${subject}的参数必须是一个对象`,
+			path: `${path}.params`,
+			ref,
+			details: { value: jsonDetail(params) },
+		});
+		return undefined;
+	}
+
+	const byName = new Map(declared.map((parameter) => [parameter.name, parameter]));
+	const validated: JsonObject = {};
+	/** 出现过的参数名（**不论取值合不合法**）——「缺参数」只对真的没出现的那些说。 */
+	const seen = new Set<string>();
+	for (const [name, value] of Object.entries(params)) {
+		const spec = byName.get(name);
+		if (spec === undefined) {
+			collector.error({
+				code: 'plan.step.param.unknown',
+				message: `${subject}没有参数「${name}」`,
+				path: `${path}.params.${name}`,
+				ref,
+				details: { param: name, allowed: [...byName.keys()] },
+			});
+			continue;
+		}
+		seen.add(name);
+		const asJson = jsonDetail(value);
+		if (!matchesType(spec, asJson)) {
+			collector.error({
+				code: 'plan.step.param.type',
+				message: `${subject}的参数「${name}」要 ${spec.type}，收到别的类型`,
+				path: `${path}.params.${name}`,
+				ref,
+				details: { param: name, expected: spec.type, value: asJson },
+			});
+			continue;
+		}
+		validated[name] = asJson;
+	}
+
+	for (const [name, spec] of byName) {
+		if (seen.has(name)) continue;
+		// 上游说必填就是必填（技能的 JSON Schema 里有 `required` 数组），缺了是错误。
+		if (spec.required === true) {
+			collector.error({
+				code: 'plan.step.param.required',
+				message: `${subject}的「${name}」（${spec.label}）是必填的，这份计划没给`,
+				path: `${path}.params`,
+				ref,
+				details: { param: name, expected: spec.type },
+			});
+			continue;
+		}
+		// 没标必填的缺了只提醒：执行侧有默认值。
+		collector.warning({
+			code: 'plan.step.param.missing',
+			message: `${subject}没给参数「${name}」（${spec.label}），执行侧会用默认值`,
+			path: `${path}.params`,
+			ref,
+			details: { param: name, expected: spec.type },
+		});
+	}
+
+	const timeoutSec = rawStep['timeoutSec'];
+	if (timeoutSec !== undefined && (typeof timeoutSec !== 'number' || !(timeoutSec > 0))) {
+		collector.error({
+			code: 'plan.step.timeout.invalid',
+			message: '超时必须是正数（秒）',
+			path: `${path}.timeoutSec`,
+			ref,
+			details: { value: jsonDetail(timeoutSec) },
+		});
+		return undefined;
+	}
+
+	return {
+		params: validated,
+		timeoutSec: typeof timeoutSec === 'number' ? timeoutSec : undefined,
+		// 失败处置：缺省不给这一栏（＝执行侧按 `'stop'` 走，那时结果里也没有这个键）。
+		onFailure: validateOnFailure(rawStep, path, ref, collector),
+	};
+};
+
 /** 校验一个**技能**步：技能在不在目录里、参数名认不认、类型对不对。 */
 const validateSkillStep = (
 	rawStep: Record<string, unknown>,
@@ -414,93 +583,72 @@ const validateSkillStep = (
 		return undefined;
 	}
 
-	const params = rawStep['params'] ?? {};
-	if (!isPlainObject(params)) {
-		collector.error({
-			code: 'plan.step.params.not_object',
-			message: '技能参数必须是一个对象',
-			path: `${path}.params`,
-			ref: rawSkill,
-			details: { value: jsonDetail(params) },
-		});
-		return undefined;
-	}
-
-	const declared = new Map(capability.parameters.map((parameter) => [parameter.name, parameter]));
-	const validated: JsonObject = {};
-	/** 出现过的参数名（**不论取值合不合法**）——「缺参数」只对真的没出现的那些说。 */
-	const seen = new Set<string>();
-	for (const [name, value] of Object.entries(params)) {
-		const spec = declared.get(name);
-		if (spec === undefined) {
-			collector.error({
-				code: 'plan.step.param.unknown',
-				message: `技能「${rawSkill}」没有参数「${name}」`,
-				path: `${path}.params.${name}`,
-				ref: rawSkill,
-				details: { param: name, allowed: [...declared.keys()] },
-			});
-			continue;
-		}
-		seen.add(name);
-		const asJson = jsonDetail(value);
-		if (!matchesType(spec, asJson)) {
-			collector.error({
-				code: 'plan.step.param.type',
-				message: `技能「${rawSkill}」的参数「${name}」要 ${spec.type}，收到别的类型`,
-				path: `${path}.params.${name}`,
-				ref: rawSkill,
-				details: { param: name, expected: spec.type, value: asJson },
-			});
-			continue;
-		}
-		validated[name] = asJson;
-	}
-
-	for (const [name, spec] of declared) {
-		if (seen.has(name)) continue;
-		// 上游说必填就是必填（技能的 JSON Schema 里有 `required` 数组），缺了是错误。
-		if (spec.required === true) {
-			collector.error({
-				code: 'plan.step.param.required',
-				message: `技能「${rawSkill}」的「${name}」（${spec.label}）是必填的，这份计划没给`,
-				path: `${path}.params`,
-				ref: rawSkill,
-				details: { param: name, expected: spec.type },
-			});
-			continue;
-		}
-		// 没标必填的缺了只提醒：执行侧有默认值。
-		collector.warning({
-			code: 'plan.step.param.missing',
-			message: `技能「${rawSkill}」没给参数「${name}」（${spec.label}），执行侧会用默认值`,
-			path: `${path}.params`,
-			ref: rawSkill,
-			details: { param: name, expected: spec.type },
-		});
-	}
-
-	const timeoutSec = rawStep['timeoutSec'];
-	if (timeoutSec !== undefined && (typeof timeoutSec !== 'number' || !(timeoutSec > 0))) {
-		collector.error({
-			code: 'plan.step.timeout.invalid',
-			message: '超时必须是正数（秒）',
-			path: `${path}.timeoutSec`,
-			ref: rawSkill,
-			details: { value: jsonDetail(timeoutSec) },
-		});
-		return undefined;
-	}
-
-	// 失败处置：缺省不给这一栏（＝执行侧按 `'stop'` 走，那时结果里也没有这个键）。
-	const onFailure = validateOnFailure(rawStep, path, rawSkill, collector);
+	const parts = validateCallStepParts(rawStep, path, {
+		ref: rawSkill,
+		subject: `技能「${rawSkill}」`,
+		declared: capability.parameters,
+		collector,
+	});
+	if (parts === undefined) return undefined;
 
 	return {
 		step: 'skill',
 		skill: rawSkill,
-		...(Object.keys(validated).length === 0 ? {} : { params: validated }),
-		...(typeof timeoutSec === 'number' ? { timeoutSec } : {}),
-		...(onFailure === undefined ? {} : { onFailure }),
+		...(Object.keys(parts.params).length === 0 ? {} : { params: parts.params }),
+		...(parts.timeoutSec === undefined ? {} : { timeoutSec: parts.timeoutSec }),
+		...(parts.onFailure === undefined ? {} : { onFailure: parts.onFailure }),
+	};
+};
+
+/**
+ * 校验一个**原语**步：原语在不在目录里（不在就把目录里有什么一并给上）、参数与技能步同一条路。
+ *
+ * 判据是**目录**（`catalog.primitives`），不是写死的表——设备报上来的原语可以随时增删，
+ * 写死一张表等于让「能生成什么」与「能执行什么」分家。查不到时的诊断形状照 `skill.unknown` 抄。
+ */
+const validatePrimitiveStep = (
+	rawStep: Record<string, unknown>,
+	path: string,
+	collector: DiagnosticCollector,
+	catalog: CapabilityCatalog,
+): PrimitiveStep | undefined => {
+	const rawPrimitive = rawStep['primitive'];
+	if (typeof rawPrimitive !== 'string' || rawPrimitive.trim() === '') {
+		collector.error({ code: 'plan.step.primitive.missing', message: '原语步必须写明原语名', path: `${path}.primitive` });
+		return undefined;
+	}
+
+	const primitive = findPrimitive(catalog, rawPrimitive);
+	if (primitive === undefined) {
+		collector.error({
+			code: 'plan.step.primitive.unknown',
+			message: `目录「${catalog.displayName}」里没有原语「${rawPrimitive}」`,
+			path: `${path}.primitive`,
+			ref: rawPrimitive,
+			details: {
+				value: rawPrimitive,
+				catalog: catalog.catalogRef,
+				revision: catalog.revisionRef,
+				allowed: catalog.primitives.map((item) => item.primitiveRef),
+			},
+		});
+		return undefined;
+	}
+
+	const parts = validateCallStepParts(rawStep, path, {
+		ref: rawPrimitive,
+		subject: `原语「${rawPrimitive}」`,
+		declared: primitive.parameters,
+		collector,
+	});
+	if (parts === undefined) return undefined;
+
+	return {
+		step: 'primitive',
+		primitive: rawPrimitive,
+		...(Object.keys(parts.params).length === 0 ? {} : { params: parts.params }),
+		...(parts.timeoutSec === undefined ? {} : { timeoutSec: parts.timeoutSec }),
+		...(parts.onFailure === undefined ? {} : { onFailure: parts.onFailure }),
 	};
 };
 
@@ -568,6 +716,7 @@ const validateStep = (
 	if (stepKind === 'skill') return validateSkillStep(rawStep, path, collector, catalog);
 	if (stepKind === 'if') return validateBranchStep(rawStep, path, depth, collector, catalog);
 	if (stepKind === 'wait') return validateWaitStep(rawStep, path, collector);
+	if (stepKind === 'primitive') return validatePrimitiveStep(rawStep, path, collector, catalog);
 
 	// 别的步这一版不做——明说，不静默当成技能。
 	collector.error({
@@ -575,9 +724,9 @@ const validateStep = (
 		message:
 			stepKind === undefined
 				? '计划步缺少 step 字段'
-				: `这一版只认 step: "skill" / "if" / "wait"，收到 ${JSON.stringify(stepKind)}（primitive / skipIf 还没做）`,
+				: `这一版只认 step: ${SKILL_PLAN_STEP_KINDS.map((kind) => `"${kind}"`).join(' / ')}，收到 ${JSON.stringify(stepKind)}（设计稿的 skipIf 还没做：它是把守卫挂在后一步上，这一版换成这一步自己的 onFailure）`,
 		path: `${path}.step`,
-		details: { value: jsonDetail(stepKind), supported: ['skill', 'if', 'wait'] },
+		details: { value: jsonDetail(stepKind), supported: [...SKILL_PLAN_STEP_KINDS] },
 	});
 	return undefined;
 };

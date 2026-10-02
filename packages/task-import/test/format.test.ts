@@ -107,10 +107,12 @@ describe('技能计划：声明 ↔ 技能计划 JSON', () => {
 	});
 
 	it('写死这一版不做的步种类：还原不出来就直说，不编一个技能', () => {
-		const broken = { schemaVersion: 1, robot: 'so101_single_arm', plan: [{ step: 'primitive', name: 'grab' }] };
+		// 设计稿的 `skipIf` 这一版不做（守卫挂在**后一步**上，这一版换成这一步自己的 onFailure）。
+		const broken = { schemaVersion: 1, robot: 'so101_single_arm', plan: [{ step: 'skipIf', skill: 'inspect_scene' }] };
 		const result = importSkillPlan(broken, context);
 		expect(result.ok).toBe(false);
 		expect(result.diagnostics[0]?.code).toBe('plan.step.kind_unsupported');
+		expect(result.diagnostics[0]?.message).toContain('skipIf');
 	});
 
 	it('第二道闸认得出目录里没有的技能', () => {

@@ -6,11 +6,13 @@
  * 这里写成 `SkillPlan` 类型的对象再序列化：字段名与形状**由契约保证**，
  * 写错一个键在 typecheck 就炸，不会等到界面上才现形。
  *
- * 两份素材各管一件事：
+ * 素材各管一件事：
  * - `BRANCH_PLAN_JSON`：两条臂 + `main[2]` 的后续（这一层 `if` 之后还有一步）；
- * - `NESTED_NO_ELSE_PLAN_JSON`：没有 `else` 的形态，且 then 臂里再嵌一层分支。
+ * - `NESTED_NO_ELSE_PLAN_JSON`：没有 `else` 的形态，且 then 臂里再嵌一层分支；
+ * - `MIXED_STEPS_PLAN_JSON`：**四类步混排**（技能 / 原语 / 等待 / 分支），原语步的判据也是目录
+ *   （`catalog.primitives`），所以原语名同样照真实目录写。
  */
-import type { SkillPlan, SkillPlanStep } from '@codecanvas/contracts';
+import type { JsonObject, SkillPlan, SkillPlanStep } from '@codecanvas/contracts';
 
 /** 素材里出现的技能名（全部是目录里的原名）。验收里拿来核对「没编技能」。 */
 export const BRANCH_PLAN_SKILLS: readonly string[] = [
@@ -162,3 +164,70 @@ const CONTINUE_ON_FAILURE_PLAN: SkillPlan = {
 };
 
 export const CONTINUE_ON_FAILURE_PLAN_JSON = JSON.stringify(CONTINUE_ON_FAILURE_PLAN, null, 2);
+
+/**
+ * 一条原语步（`{step:'primitive', primitive, params?, timeoutSec?, onFailure?}`）。
+ * 原语名同样只能从 `ROBOFRAME_SO101_CATALOG.primitives` 里挑——那里有 `open_gripper` / `close_gripper`
+ * 这两条**没有技能包装**的原子动作，正是原语步存在的理由。
+ */
+const primitive = (
+	ref: string,
+	params?: JsonObject,
+	timeoutSec?: number,
+	onFailure?: 'stop' | 'continue',
+): SkillPlanStep => ({
+	step: 'primitive',
+	primitive: ref,
+	...(params === undefined ? {} : { params }),
+	...(timeoutSec === undefined ? {} : { timeoutSec }),
+	...(onFailure === undefined ? {} : { onFailure }),
+});
+
+/**
+ * 四类步混排的素材：看一眼 → **直接张开夹爪**（没有技能包装的那种） → 等两秒 → 分叉
+ * （没成就自己合上，成了就打个招呼）→ 最后往前挪一点（失败也往下走）。
+ *
+ * 覆盖四件事：原语步的卡头用目录标签、参数行来自原语声明、单格出边、`onFailure` 与技能步同待遇。
+ */
+const MIXED_STEPS_PLAN: SkillPlan = {
+	schemaVersion: 1,
+	robot: 'so101_single_arm',
+	description: '四类步都有的计划',
+	plan: [
+		skill('inspect_scene'),
+		primitive('open_gripper'),
+		{ step: 'wait', seconds: 2 },
+		{
+			step: 'if',
+			condition: { field: 'last.success', op: '==', value: false },
+			then: [primitive('close_gripper')],
+			else: [skill('wave_hello')],
+		},
+		skill('move_relative_ee', { motion_direction: 'forward', motion_distance: 0.03 }, 10, 'continue'),
+	],
+};
+
+export const MIXED_STEPS_PLAN_JSON = JSON.stringify(MIXED_STEPS_PLAN, null, 2);
+
+/** 带参数的命名位姿原语：用来看「实参按原语声明的顺序与名字写出来」。 */
+const POSE_PRIMITIVE_PLAN: SkillPlan = {
+	schemaVersion: 1,
+	robot: 'so101_single_arm',
+	description: '直接回命名位姿',
+	plan: [primitive('move_to_named_pose', { pose_name: 'home' })],
+};
+
+export const POSE_PRIMITIVE_PLAN_JSON = JSON.stringify(POSE_PRIMITIVE_PLAN, null, 2);
+
+/**
+ * 参数顺序的素材：计划里把两个参数**倒着给**，代码那一行仍要按原语声明的顺序写
+ * （`joint_positions` 在前、`duration_sec` 在后）——与 `code-render` 渲染实现里那些调用同一个口径。
+ */
+const ORDERED_ARGS_PLAN: SkillPlan = {
+	schemaVersion: 1,
+	robot: 'so101_single_arm',
+	description: '关节位置与时长',
+	plan: [primitive('move_to_joint_positions', { duration_sec: 2, joint_positions: { '1': 0.02 } })],
+};
+
+export const ORDERED_ARGS_PLAN_JSON = JSON.stringify(ORDERED_ARGS_PLAN, null, 2);

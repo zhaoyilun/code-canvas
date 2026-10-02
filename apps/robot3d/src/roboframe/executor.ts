@@ -7,6 +7,10 @@
  *   都在这里写清楚，映射有歧义的地方（基座系方向、模板归一化）明确标注。
  * - **安全边界照拦**：模板里带了 `workspace_limits`，越界就拒绝执行并如实报出来，
  *   不静默截断——上游的 `safety_guard` 也是这个态度。
+ *
+ * 对外两个入口：`run()` 跑一个**能力**（目录里的 `implementation` 整条链），
+ * `runPrimitiveCommand()` 跑**一个原语**（上游 `/embodied/execute_primitive` 那条路，
+ * 给目录里没有技能包装的原子动作用）。两者报同一套事件、同一套取消与失败口径。
  */
 import type { CapabilitySpec, ImplArgument, ImplExpression, ImplStatement, PrimitiveSpec } from '@codecanvas/contracts';
 import { asTemplate, checkLimits, synthesize, trajectorySeconds, type Waypoint } from './trajectory';
@@ -37,7 +41,12 @@ export interface ArmRigLike {
 export type StepState = 'running' | 'done' | 'skipped' | 'refused' | 'failed';
 
 export interface StepEvent {
-	readonly capabilityRef: string;
+	/**
+	 * 这一步属于哪个能力。**直接跑一个原语时没有能力可指**（`/embodied/execute_primitive`
+	 * 那条路压根不经过能力），这一栏就如实缺席——不拿原语名冒充它，
+	 * 与 `planIndex` 「不在计划里就没有」同一个口径。
+	 */
+	readonly capabilityRef?: string;
 	readonly primitiveRef: string;
 	/** 这一步在**这个能力内部**是第几个原语（1 基） */
 	readonly index: number;
@@ -213,7 +222,7 @@ export class RoboFrameExecutor {
 	// ---- 原语执行 ---------------------------------------------------------
 
 	/** 单个原语：认不出来的原语不假装做过——报 skipped 并说明原因。 */
-	private async runPrimitive(
+	private async applyPrimitive(
 		primitiveRef: string,
 		args: Record<string, unknown>,
 	): Promise<{ state: StepState; detail?: string; durationSec?: number }> {
@@ -361,7 +370,7 @@ export class RoboFrameExecutor {
 				...(this.taskId === undefined ? {} : { taskId: this.taskId }),
 			};
 			this.hooks.onStep?.({ ...base, state: 'running' });
-			const result = await this.runPrimitive(statement.primitiveRef, args);
+			const result = await this.applyPrimitive(statement.primitiveRef, args);
 			const event: StepEvent = {
 				...base,
 				state: result.state,
@@ -392,6 +401,73 @@ export class RoboFrameExecutor {
 		const events: StepEvent[] = [];
 		const reason = await this.runStatements(capability.implementation, scope, capability.capabilityRef, { index: 0, total }, events);
 		return reason === null ? { ok: true, steps: events } : { ok: false, steps: events, reason };
+	}
+
+	/**
+	 * 跑**一个原语**：上游 `PrimitiveCommand.action` → `/embodied/execute_primitive` 那条路。
+	 *
+	 * 为什么要有这个公开入口：有些原子动作**没有**技能包装（`open_gripper` / `close_gripper` 这种），
+	 * 计划里想直接叫它就得有地方接——`run()` 只接 `CapabilitySpec`，而原语不是能力
+	 * （目录里没有它的 `implementation`）。这里就是那条直路，四件事说清：
+	 *
+	 * - **参数按目录声明校验**：名字必须是那个原语声明过的（多给的名字当场拒，
+	 *   不悄悄咽下去送给设备），标了 `required: true` 的缺了是错误——判据来自目录；
+	 *   没标必填的缺了**不是错**：执行侧对它们有默认值（与计划层那条「只提醒」同一条口径，
+	 *   计划层放行的事，执行侧不许反过来拒）。
+	 * - **事件照常报**：`running` 与终态各一条，走同一个 `onStep`。
+	 *   跑计划时（`setPlanContext` 设过）它们带着计划序号与 task_id；
+	 *   直接叫一个原语时那一栏如实缺席（跟 `capabilityRef` 同一个道理）。
+	 * - **可取消**：取消标记由 `beginRun()` 清（与跑计划同一个口径），这里只看它——
+	 *   取消之后不假装跑过。原语一旦下发就没法从中间叫停，这一点与技能步一样如实。
+	 * - **失败如实返回**：原语认不出来、参数不对，都是 `ok: false` 带原因，不抛异常、不粉饰。
+	 *
+	 * 事件里的步骤号恒为 `1/1`：这是**一个**原语，不是一条实现。
+	 */
+	async runPrimitiveCommand(primitiveRef: string, params: Record<string, unknown> = {}): Promise<RunOutcome> {
+		const spec = this.primitiveSpec(primitiveRef);
+		if (spec === undefined) return { ok: false, steps: [], reason: `目录里没有原语 ${primitiveRef}` };
+
+		const declared = new Set(spec.parameters.map((parameter) => parameter.name));
+		for (const name of Object.keys(params)) {
+			if (declared.has(name)) continue;
+			return { ok: false, steps: [], reason: `原语 ${primitiveRef} 没有参数 ${name}` };
+		}
+
+		const args: Record<string, unknown> = {};
+		for (const parameter of spec.parameters) {
+			const value = params[parameter.name];
+			if (value === undefined || value === '') {
+				if (parameter.required === true) return { ok: false, steps: [], reason: `缺少参数 ${parameter.name}` };
+				continue;
+			}
+			args[parameter.name] = parameter.type === 'number' ? Number(value) : value;
+		}
+
+		if (this.cancelled) return { ok: false, steps: [], reason: '已取消' };
+
+		const base = {
+			primitiveRef,
+			index: 1,
+			total: 1,
+			args,
+			...(this.planIndex === 0 ? {} : { planIndex: this.planIndex }),
+			...(this.taskId === undefined ? {} : { taskId: this.taskId }),
+		};
+		this.hooks.onStep?.({ ...base, state: 'running' });
+		const result = await this.applyPrimitive(primitiveRef, args);
+		const event: StepEvent = {
+			...base,
+			state: result.state,
+			...(result.detail === undefined ? {} : { detail: result.detail }),
+			...(result.durationSec === undefined ? {} : { durationSec: result.durationSec }),
+		};
+		this.hooks.onStep?.(event);
+		// `failed` 与 `refused` 是没做成（与 `run()` 同一口径）；`skipped` 是「没做，但也没坏」，
+		// 它照旧不算失败——把它算成失败，会让「这一步没做成」这句话指向一次根本没下发的动作。
+		if (result.state === 'failed' || result.state === 'refused') {
+			return { ok: false, steps: [event], reason: result.detail ?? `${primitiveRef} 未完成` };
+		}
+		return { ok: true, steps: [event] };
 	}
 }
 

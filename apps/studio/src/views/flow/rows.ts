@@ -5,13 +5,19 @@
  * 「卡片行 + 它自己的臂行」，模板照着画；缩进的语义是 DOM 嵌套（臂里的卡片在 `.flow-arm` 里），
  * 不是拿 CSS 猜出来的——否则「哪张卡属于哪条臂」在 DOM 上就无迹可查，验收只能靠肉眼。
  *
- * 卡片上的参数摘要仍走 `summary.ts` 那一套（判据只有校验器一个来源）；两张卡是例外，
+ * 卡片上的参数摘要仍走 `summary.ts` 那一套（判据只有校验器一个来源）；三张卡是例外，
  * 它们都不是「调一个能力」：分支卡画的是条件的人话（它没有 `action`），
- * 等待卡的秒数写在卡头（「等待 2 秒」）——两张卡都不摆那句「这个动作没有参数」，
- * 那句话在它们身上是对的，但没说清这一步是什么（它们不是动作）。
+ * 等待卡的秒数写在卡头（「等待 2 秒」），原语卡的卡头是**目录里那个原语的标签**（「张开夹爪」）
+ * ——三张卡都不摆那句「这个动作没有参数」的默认话……原语卡例外，它确实是一次动作，
+ * 没有参数时那句话在它身上是对的。
  */
-import { findCapability, type CapabilityCatalog, type Diagnostic, type WorkflowNode } from '@codecanvas/contracts';
-import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
+import {
+	findCapability,
+	type CapabilityCatalog,
+	type Diagnostic,
+	type WorkflowNode,
+} from '@codecanvas/contracts';
+import { TASK_BRANCH_NODE_TYPE, TASK_PRIMITIVE_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
 import {
 	actionLabel,
 	nodeAction,
@@ -26,6 +32,9 @@ import {
 	conditionViewOf,
 	continuesOnFailure,
 	CONTINUE_ON_FAILURE_NOTE,
+	primitiveLabelOf,
+	primitiveRefOf,
+	primitiveSpecOf,
 	waitLabelOf,
 	type ConditionView,
 	type PlanStep,
@@ -35,9 +44,9 @@ export interface FlowCardModel {
 	readonly node: WorkflowNode;
 	/** 声明里的位置（0 基）。徽标上的「第几步」= `index + 1`。 */
 	readonly index: number;
-	/** 卡头显示的文字：动作的中文名，分支卡是「分支」，等待卡是「等待 2 秒」。 */
+	/** 卡头显示的文字：动作的中文名，分支卡是「分支」，等待卡是「等待 2 秒」，原语卡是原语的标签。 */
 	readonly action: string;
-	/** 协议里的名字（分支卡与等待卡是节点类型），只进 `data-action`。 */
+	/** 协议里的名字（分支卡、等待卡与原语卡是节点类型），只进 `data-action`。 */
 	readonly actionName: string;
 	readonly stepId: string | null;
 	readonly parameters: readonly ParameterSummary[];
@@ -50,7 +59,7 @@ export interface FlowCardModel {
 	 */
 	readonly paramsNote: string | null;
 	/**
-	 * 这一步失败了还往下走吗（`onFailure: 'continue'`）。只有技能卡可能是 `true`。
+	 * 这一步失败了还往下走吗（`onFailure: 'continue'`）。技能卡与原语卡可能是 `true`。
 	 * 那句话是**人话版本**：参数区里那个原样的 `onFailure` 行（与 `timeoutSec` 一样，
 	 * 由 `summarizeNodeParameters` 照「声明里多出来的字段」列出来）说的是同一件事的机器形态。
 	 */
@@ -109,27 +118,44 @@ const cardOf = (
 			? null
 			: (findCapability(catalog, action) ?? null);
 	/*
-	 * 失败处置只有技能步有（契约那边就不让 `wait` / `if` 带它）。判据从节点参数读，
+	 * 原语步问的是**目录里的原语定义**（不是能力）：卡头那个标签与参数区那几行都从它读。
+	 * 查不到（或没有目录）时给 `null`——参数区退回「声明里多出来的字段」那条老路，
+	 * 卡头照出节点参数里那个原语名，不编一个中文名顶上。
+	 */
+	const primitive = step.isPrimitive ? primitiveSpecOf(catalog, step.node) : null;
+	/*
+	 * 失败处置只有技能步与原语步有（契约那边就不让 `wait` / `if` 带它）。判据从节点参数读，
 	 * 见 `continuesOnFailure`——视图里不另立一份「哪个键、哪个值算 continue」的表。
 	 */
 	const continues = !step.isBranch && !step.isWait && continuesOnFailure(step.node);
 	return {
 		node: step.node,
 		index: step.index,
-		action: step.isBranch ? '分支' : step.isWait ? waitLabelOf(step.node.parameters['seconds']) : actionLabel(step.node, capability),
+		action: step.isBranch
+			? '分支'
+			: step.isWait
+				? waitLabelOf(step.node.parameters['seconds'])
+				: step.isPrimitive
+					? primitiveLabelOf(catalog, primitiveRefOf(step.node))
+					: actionLabel(step.node, capability),
 		actionName: step.isBranch
 			? TASK_BRANCH_NODE_TYPE
 			: step.isWait
 				? TASK_WAIT_NODE_TYPE
-				: nodeActionName(step.node),
+				: step.isPrimitive
+					? TASK_PRIMITIVE_NODE_TYPE
+					: nodeActionName(step.node),
 		stepId: nodeStepId(step.node),
 		// 等待步的秒数已经在卡头那句「等待 2 秒」里了，不再摆一行参数（摆一遍是把同一个数说两次）；
 		// 参数区照旧给一句说明——「这个动作没有参数」在它不是动作时是一句没说清的话。
+		// 原语步照常摆参数：那几行是**这个原语声明的**参数（名字/标签/单位都从目录读）。
 		parameters: step.isBranch
 			? branchExtraParameters(step.node, limits)
 			: step.isWait
 				? []
-				: summarizeNodeParameters(step.node.parameters, protocolAction, limits, capability),
+				: step.isPrimitive
+					? summarizeNodeParameters(step.node.parameters, null, limits, primitive)
+					: summarizeNodeParameters(step.node.parameters, protocolAction, limits, capability),
 		diagnostics: nodeDiagnostics(diagnostics, step.node, step.index),
 		condition: step.isBranch ? conditionViewOf(step.node) : null,
 		// 措辞要准：等待步**有**参数（秒数，已经写在卡头那个「等待 N 秒」里了），

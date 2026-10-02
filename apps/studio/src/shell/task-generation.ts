@@ -62,24 +62,26 @@ max_duration=30.0、require_confirmation=true。`;
  * 为什么不能手写一份技能清单（哪怕它现在看着没错）：技能是设备报上来的、能随时增删的，
  * 手写清单等于把提示词变成第二份目录——目录一改，模型照旧清单编，而校验器拿的是真目录，
  * 于是每一条都被拒。参数名与类型同理，照 `catalog.capabilities[].parameters` 如实列出来。
+ * **原语清单也照目录现生成**（`catalog.primitives`），同样不许手写。
  */
 export const skillPlanSystemPrompt = (catalog: CapabilityCatalog): string => {
 	const robot = catalog.robotName;
+	const parameters = (declared: readonly { name: string; type: string; unit?: string; required?: boolean }[]): string =>
+		declared.length === 0
+			? '没有参数'
+			: declared
+					.map((parameter) => {
+						// 单位与必填也来自目录（上游 JSON Schema）：模型不该猜「米还是度」。
+						const unit = parameter.unit === undefined ? '' : `/${parameter.unit}`;
+						const must = parameter.required === true ? '，必填' : '';
+						return `${parameter.name}(${parameter.type}${unit}${must})`;
+					})
+					.join('、');
 	const skills = catalog.capabilities
-		.map((capability) => {
-			const parameters =
-				capability.parameters.length === 0
-					? '没有参数'
-					: capability.parameters
-							.map((parameter) => {
-								// 单位与必填也来自目录（上游 JSON Schema）：模型不该猜「米还是度」。
-								const unit = parameter.unit === undefined ? '' : `/${parameter.unit}`;
-								const must = parameter.required === true ? '，必填' : '';
-								return `${parameter.name}(${parameter.type}${unit}${must})`;
-							})
-							.join('、');
-			return `- ${capability.capabilityRef}（${capability.label}）：${parameters}`;
-		})
+		.map((capability) => `- ${capability.capabilityRef}（${capability.label}）：${parameters(capability.parameters)}`)
+		.join('\n');
+	const primitives = catalog.primitives
+		.map((primitive) => `- ${primitive.primitiveRef}（${primitive.label}）：${parameters(primitive.parameters)}`)
 		.join('\n');
 
 	return `你是${catalog.displayName}的技能规划器。只输出合法JSON，不要输出Markdown和解释。
@@ -89,27 +91,35 @@ ${
 		? 'robot必须是这台机器人自己认的名字。'
 		: `robot必须是"${robot}"，别的名字一律不行。`
 }
-plan的每一步要么是一次技能调用，要么是一次条件分叉，要么是一次等待。
-技能调用形如{"step":"skill","skill":"技能名","params":{…}}，skill只能从下面这份清单里选；
+plan的每一步要么是一次技能调用，要么是直接叫一个原语，要么是一次条件分叉，要么是一次等待。
+技能调用形如{"step":"skill","skill":"技能名","params":{…}}，skill只能从下面这份技能清单里选；
 这一步要限时就加"timeoutSec"（秒，正数），它跟"params"平级，不要放进params里。
 这一步失败之后怎么办，看"onFailure"，它也只能跟"params"平级，取值只有"stop"和"continue"。
 **缺省是"stop"**：这一步没成，整条计划就停在这里（这是默认，也是安全立场——机器不会在失败之后自己接着按计划动）。
 **只在「这一步失败也有下一步可走」时才写"continue"**：那时计划继续往下走，并且「上一步成没成」记成没成，
 所以后面可以跟一个 condition 为 {"field":"last.success","op":"==","value":false} 的分叉去补救。
 没想清楚就别写这一栏——不写就是停。
-"onFailure"只能写在技能调用那一步上：等待与分叉不许带它。
+"onFailure"只能写在技能调用与直接叫原语那两种步上：等待与分叉不许带它。
 params里的参数名与类型只能用下面列出的那些；标着「没有参数」的技能不要给params。
+直接叫一个原语形如{"step":"primitive","primitive":"原语名","params":{…}}，原语只能从下面那份原语清单里选，
+它的"params"、"timeoutSec"、"onFailure"与技能调用那一步完全同待遇（一样会成会败，也照样参与「上一步成没成」）。
+**什么时候用它**：上面那份技能清单里**已经有干这件事的技能时，一律用技能**——
+技能带着它自己的守卫与恢复策略（那台设备上验证过的做法），直接用原语等于把这些绕过去；
+只有**没有技能包装的原子动作**（清单里有、技能清单里没有对应的那一个，比如张开夹爪 / 闭合夹爪这种）
+才写成 primitive 步。不要为了少写一层就编一个假技能，也不要放着现成的技能不用去拆成原语。
 条件分叉形如{"step":"if","condition":{…},"then":[…],"else":[…]}
 ——condition 只能是 {"field":"last.success","op":"=="或"!=","value":true或false}，
 说的是「上一步成功了没有」；then 里至少一步，else 可以不给，给了就不能空；
 两臂里放的是同样的步骤，所以分叉还能再套分叉（最多八层）。
 只在「下一步做什么要看上一步成没成」时才用分叉；顺着的动作就直接排下去，不要硬套。
 等待形如{"step":"wait","seconds":2}——seconds 是正数（秒），最多 ${String(SKILL_PLAN_MAX_WAIT_SECONDS)}（十分钟），超了直接报错。
-它只是让计划在这里停一下：不改动「上一步成没成」（后面的分叉看的仍是它前面那个技能步的结果），也不动机械臂。
+它只是让计划在这里停一下：不改动「上一步成没成」（后面的分叉看的仍是它前面那一步的结果），也不动机械臂。
 只在两步之间真的需要停一下时才用（比如夹住了、等它稳定两秒、再移动）——技能自己带的时长管不了这种间隔，顺着的动作就直接排下去。
 description可选，给这个任务起一个中文名。
 可用技能：
-${skills}`;
+${skills}
+可用原语（只在技能清单里没有对应技能时才用）：
+${primitives}`;
 };
 
 /** 这一次通话的对话：system 定规矩（缺省是一期那份），user 就是用户那句话（原文，不改写）。 */

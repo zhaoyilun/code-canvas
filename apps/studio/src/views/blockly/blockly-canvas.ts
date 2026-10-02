@@ -55,9 +55,13 @@ import {
 	branchPlanOf,
 	conditionViewOf,
 	isPlanLayerNode,
+	isPrimitiveNode,
 	isWaitNode,
 	planCallTextOf,
 	planWaitCallTextOf,
+	primitiveCallTextOf,
+	primitiveLabelOf,
+	primitiveRefOf,
 	waitLabelOf,
 	type PlanArm,
 	type PlanDiagnostic,
@@ -138,45 +142,54 @@ function deviceCatalogs(): readonly CapabilityCatalog[] {
 // ---------------------------------------------------------------------------
 
 /**
- * 计划层节点（分支 / 等待）没有 `parameters.action`，按「能力实现」那条路走只会得到一句
- * `blockly.render.unknown_capability`——那是把「这是个判断 / 只是等一会儿」说成「查不到这个能力」，误导。
+ * 计划层节点（分支 / 等待 / 原语）没有 `parameters.action`，按「能力实现」那条路走只会得到一句
+ * `blockly.render.unknown_capability`——那是把「这是个判断 / 只是等一会儿 / 直接叫一个原语」
+ * 说成「查不到这个能力」，误导。
  *
  * 所以计划层节点走**计划视图**：分支画的是这一层的判断结构——`如果 <条件> 那么 … 否则 …`，
- * 两臂里各是臂内步骤的**计划块**（一步一块，写的就是那一步的技能调用）；等待画的是它自己那一块
- * （`等待 2 秒 wait(2.0)`）——等待步没有实现可看，它自己就是计划层的一步。
+ * 两臂里各是臂内步骤的**计划块**（一步一块，写的就是那一步的调用）；等待画的是它自己那一块
+ * （`等待 2 秒 wait(2.0)`）；原语画的是它自己那一块（`张开夹爪 open_gripper()`）——
+ * 等待与原语都没有实现可看（原语**不是能力**，目录里没有它的 `implementation`），
+ * 它们自己就是计划层的一步。
  * 它和代码面板说的是同一件事（同一个口径的调用写法），与「某个能力的实现」是两层。
  *
  * 结构只读、**没有可写字段**：分支本身没有参数（它的参数只有条件，条件不是可编辑的配置），
  * 等待的秒数在声明里写着、也不是可编辑的配置；计划块也只用只读标签写「这是哪一步」——
  * 画布在这一层没有可写的东西，就不该摆出可改的样子。
- * 想看那一步的实现：点它的块（选中那一步，画布换成它的实现）。
+ * 想看那一步的实现：点它的块（选中那一步，画布换成它的实现）——原语步点过去还是这一块，
+ * 因为它本来就没有实现可看。
  */
 export const PLAN_BRANCH_BLOCK_TYPE = 'cc_plan_branch';
 export const PLAN_BRANCH_NO_ELSE_BLOCK_TYPE = 'cc_plan_branch_no_else';
 export const PLAN_STEP_BLOCK_TYPE = 'cc_plan_step';
 export const PLAN_WAIT_BLOCK_TYPE = 'cc_plan_wait';
+export const PLAN_PRIMITIVE_BLOCK_TYPE = 'cc_plan_primitive';
 
 /**
  * 是不是**计划视图**的块（计划层节点被选中时画的那几块）。
  *
  * 它们只表示结构，不回写任何参数——写回通道要按这个把它们跳过，
- * 否则每选中一次分支/等待就会弹几条「来路不明的积木」红字，而声明一个字节都没错。
+ * 否则每选中一次分支/等待/原语就会弹几条「来路不明的积木」红字，而声明一个字节都没错。
  */
 export const isPlanBlockType = (type: string): boolean =>
 	type === PLAN_BRANCH_BLOCK_TYPE ||
 	type === PLAN_BRANCH_NO_ELSE_BLOCK_TYPE ||
 	type === PLAN_STEP_BLOCK_TYPE ||
-	type === PLAN_WAIT_BLOCK_TYPE;
+	type === PLAN_WAIT_BLOCK_TYPE ||
+	type === PLAN_PRIMITIVE_BLOCK_TYPE;
 /** 分支块上那格只读的条件文字。 */
 export const PLAN_CONDITION_FIELD = 'condition';
 /** 计划块上那格只读的「哪一步」。 */
 export const PLAN_STEP_FIELD = 'step';
 /** 等待块上那格只读的「等多久」。 */
 export const PLAN_WAIT_FIELD = 'wait';
+/** 原语块上那格只读的「叫哪个原语」。 */
+export const PLAN_PRIMITIVE_FIELD = 'primitive';
 /** 计划块的节点标签：进 `block.data`，选中联动靠它区分「计划块」与「实现块」。 */
 export const PLAN_BRANCH_NODE_TAG = 'plan_branch';
 export const PLAN_STEP_NODE_TAG = 'plan_step';
 export const PLAN_WAIT_NODE_TAG = 'plan_wait';
+export const PLAN_PRIMITIVE_NODE_TAG = 'plan_primitive';
 
 /** 计划块是只读的，所以块色不按能力分（它不是某个能力的实现），用主题里那两档现成的色。 */
 const PLAN_BRANCH_BLOCK_STYLE = 'logic_blocks';
@@ -238,6 +251,17 @@ export const PLAN_BLOCK_DEFINITIONS: readonly Record<string, unknown>[] = [
 		nextStatement: null,
 		style: PLAN_STEP_BLOCK_STYLE,
 		tooltip: '计划里的一步：在这儿停一下（计划层，只读；等待步没有实现可看）',
+		helpUrl: '',
+	},
+	{
+		// 原语步与等待步同一个道理：它叫的原语**不是能力**（没有实现可展开），块上写的就是那一行调用。
+		type: PLAN_PRIMITIVE_BLOCK_TYPE,
+		message0: '%1',
+		args0: [{ type: 'field_label', name: PLAN_PRIMITIVE_FIELD, text: '' }],
+		previousStatement: null,
+		nextStatement: null,
+		style: PLAN_STEP_BLOCK_STYLE,
+		tooltip: '计划里的一步：直接叫一个原语（计划层，只读；原语不是能力，没有实现可看）',
 		helpUrl: '',
 	},
 ];
@@ -307,6 +331,17 @@ const planStepText = (context: PlanBuildContext, node: WorkflowNode): string => 
 const planWaitText = (node: WorkflowNode): string =>
 	truncateLiteralText(`${waitLabelOf(node.parameters['seconds'])} ${planWaitCallTextOf(node)}`);
 
+/**
+ * 原语块上写的字：`张开夹爪 open_gripper()`——与技能块/等待块同一个排法（人话在前、代码在后）。
+ * 人话取自**目录里那个原语的 label**，代码那一行与代码面板同一个口径（`primitiveCallTextOf`）。
+ */
+const planPrimitiveText = (context: PlanBuildContext, node: WorkflowNode): string => {
+	const ref = primitiveRefOf(node);
+	const label = primitiveLabelOf(context.catalog, ref);
+	const call = primitiveCallTextOf(node, context.catalog);
+	return truncateLiteralText(label === ref ? call : `${label} ${call}`);
+};
+
 /** 一串计划步骤 → 用 `next` 串起来的链（与工具包的 `statementChain` 同一个形状；那个没导出）。 */
 const planChainState = (
 	context: PlanBuildContext,
@@ -366,6 +401,7 @@ const planBranchState = (
 const planStepState = (context: PlanBuildContext, step: PlanStep): Blockly.serialization.blocks.State => {
 	if (step.isBranch) return planBranchState(context, step.node, step.arms);
 	if (step.isWait) return planWaitState(context, step.node);
+	if (step.isPrimitive) return planPrimitiveState(context, step.node);
 
 	const identity = planIdentityOf(context, step.node, PLAN_STEP_NODE_TAG);
 	context.identities.push(identity);
@@ -403,6 +439,30 @@ const planWaitState = (context: PlanBuildContext, node: WorkflowNode): Blockly.s
 	};
 };
 
+/**
+ * 一个原语节点 → 一块只读的原语调用。它也没有臂（原语步是普通步骤）。
+ *
+ * `data.primitiveRef` 照实填上这个原语（技能块那边恒为 null：它调的是能力，原语是第二层）。
+ * 它只表示「计划里这一步叫的是这个原语」，画布在这一层依然没有可写字段。
+ */
+const planPrimitiveState = (context: PlanBuildContext, node: WorkflowNode): Blockly.serialization.blocks.State => {
+	const identity = planIdentityOf(context, node, PLAN_PRIMITIVE_NODE_TAG);
+	context.identities.push(identity);
+	return {
+		id: identity.blockId,
+		type: PLAN_PRIMITIVE_BLOCK_TYPE,
+		data: serializeBlockData({
+			nodeId: node.id,
+			stepId: identity.stepId,
+			capabilityRef: identity.capabilityRef,
+			stepPath: identity.stepPath,
+			nodeTag: identity.nodeTag,
+			primitiveRef: primitiveRefOf(node),
+		}),
+		fields: { [PLAN_PRIMITIVE_FIELD]: planPrimitiveText(context, node) },
+	};
+};
+
 export interface PlanRenderOptions {
 	readonly workspace: Blockly.Workspace;
 	readonly declaration: WorkflowDeclaration;
@@ -419,10 +479,10 @@ export interface PlanRenderResult {
 }
 
 /**
- * 一个计划层节点 → 工作区：分支画 `如果…那么…否则…`，等待画它自己那一块。
+ * 一个计划层节点 → 工作区：分支画 `如果…那么…否则…`，等待画它自己那一块，原语画它自己那一块。
  *
  * 返回 `null` 表示「这个节点不是计划层节点」（技能步、一期动作），调用方据此走能力实现那条路——
- * 判据只有一处（`isPlanLayerNode`：分支与等待都没有实现可看），不在这里重写一遍类型比较。
+ * 判据只有一处（`isPlanLayerNode`：分支、等待与原语都没有实现可看），不在这里重写一遍类型比较。
  */
 export const renderPlanInto = (options: PlanRenderOptions): PlanRenderResult | null => {
 	const selected = options.declaration.nodes.find((node) => node.id === options.planNodeId);
@@ -443,6 +503,8 @@ export const renderPlanInto = (options: PlanRenderOptions): PlanRenderResult | n
 	let planDiagnostics: readonly PlanDiagnostic[] = [];
 	if (isWaitNode(selected)) {
 		head = planWaitState(context, selected);
+	} else if (isPrimitiveNode(selected)) {
+		head = planPrimitiveState(context, selected);
 	} else {
 		const plan = branchPlanOf(options.declaration, options.planNodeId);
 		if (plan === null) return null;

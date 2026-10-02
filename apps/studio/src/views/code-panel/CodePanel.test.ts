@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeWorkflowDigest, type WorkflowDeclaration, type WorkflowNode } from '@codecanvas/contracts';
-import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
+import { TASK_BRANCH_NODE_TYPE, TASK_PRIMITIVE_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
 import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import FlowView from '../flow/FlowView.vue';
@@ -25,7 +25,10 @@ import {
 	ARM_PARAMS_PLAN_JSON,
 	BRANCH_PLAN_JSON,
 	BRANCH_WAIT_PLAN_JSON,
+	MIXED_STEPS_PLAN_JSON,
 	NESTED_NO_ELSE_PLAN_JSON,
+	ORDERED_ARGS_PLAN_JSON,
+	POSE_PRIMITIVE_PLAN_JSON,
 	WAIT_PLAN_JSON,
 } from '../flow/__fixtures__/branch-plan';
 import { normalizeRenderedHtml, readBaseline } from '../flow/__fixtures__/normalize-html';
@@ -635,5 +638,84 @@ describe('CodePanel · 等待步显示的是计划层那一行 wait(2.0)', () =>
 		expect(indents(panel)).toEqual(['0', '1', '1', '0', '1']);
 		// 每一行都指着**真实的节点**：跨栏连线与选中联动靠它
 		expect(stepPaths(panel)).toEqual(['0', '0.then.0', '0.then.1', '0.else', '0.else.0']);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 原语步：计划层的另一行代码（`open_gripper()`）
+// ---------------------------------------------------------------------------
+
+/** 载入一份带原语步的技能计划，并选中那个原语节点。 */
+const selectPrimitive = (json: string): WorkflowNode => {
+	setSelectedDevice('so101_robot');
+	expect(doc.loadTaskJson(json)).toBe(true);
+	const node = declaration().nodes.find((candidate) => candidate.type === TASK_PRIMITIVE_NODE_TYPE);
+	if (node === undefined) throw new Error('这份素材里应当有原语节点');
+	doc.select(node.id);
+	return node;
+};
+
+describe('CodePanel · 原语步显示的是计划层那一行原语调用', () => {
+	it('没有参数的原语：就一行 open_gripper()，带计划层注记，没有「查不到能力」', async () => {
+		selectPrimitive(MIXED_STEPS_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		expect(panel.get('[data-testid="code-title"]').text()).toBe('2. 张开夹爪 · 计划');
+		expect(lineTexts(panel)).toEqual(['open_gripper()']);
+		expect(indents(panel)).toEqual(['0']);
+		// 这一段代码属于哪一层：与分支、等待两侧同一句注记（原语不是能力，没有实现可看）
+		expect(panel.get('[data-testid="code-plan-note"]').text()).toContain('计划层');
+		expect(panel.text()).not.toContain('查不到能力');
+		expect(panel.find('[data-testid="code-warnings"]').exists()).toBe(false);
+	});
+
+	it('有参数的原语：实参按原语声明的名字写出来（字符串照计划层的字面量口径）', async () => {
+		selectPrimitive(POSE_PRIMITIVE_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		expect(lineTexts(panel)).toEqual(['move_to_named_pose(pose_name="home")']);
+		// 那一行指着的是**真实的节点**（跨栏连线与选中联动靠它）
+		expect(stepPaths(panel)).toEqual(['0']);
+		expect(panel.findAll('li.cp-line')[0]?.attributes('data-node-id')).toBe(declaration().nodes[0]?.id);
+	});
+
+	it('实参按**原语声明的顺序**排，不按计划里给的顺序（与实现里那些调用的口径一致）', async () => {
+		// 计划里倒着给（duration_sec 在前），声明里是 joint_positions、duration_sec
+		selectPrimitive(ORDERED_ARGS_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		expect(lineTexts(panel)).toEqual(['move_to_joint_positions(joint_positions={"1":0.02}, duration_sec=2.0)']);
+	});
+
+	it('臂里的原语步：跟着臂缩进，与技能调用同一个口径', async () => {
+		selectBranch(MIXED_STEPS_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		expect(lineTexts(panel)).toEqual([
+			'if last.success == False:',
+			'    close_gripper()',
+			'else:',
+			'    wave_hello()',
+		]);
+		expect(indents(panel)).toEqual(['0', '1', '0', '1']);
+		expect(stepPaths(panel)).toEqual(['0', '0.then.0', '0.else', '0.else.0']);
+	});
+
+	it('`timeoutSec` 与 `onFailure` 不是原语的实参：不进那一行（它们是这一步自己的属性）', async () => {
+		selectPrimitive(
+			JSON.stringify({
+				schemaVersion: 1,
+				robot: 'so101_single_arm',
+				plan: [{ step: 'primitive', primitive: 'open_gripper', timeoutSec: 5, onFailure: 'continue' }],
+			}),
+		);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		expect(lineTexts(panel)).toEqual(['open_gripper()']);
 	});
 });

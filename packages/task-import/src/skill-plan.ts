@@ -40,6 +40,19 @@
  * 为什么不开三格：三格是**分支专用**的（位置就是 then / else / 后续）。等待没有臂，
  * 给它三格等于让下游以为「这一步能分叉」，视图与逆映射都得跟着猜哪一格才算数。
  * 秒数原样进参数，还原时原样收回——`seconds` 是这一步的全部内容，不翻译成别的键。
+ *
+ * 一个 `primitive` 步 → 一个 `task.primitive` 节点，**一格出边**（与技能步一样）：
+ *
+ * ```text
+ * { step: 'primitive', primitive: 'open_gripper', params: { … } }
+ *   →  parameters: { primitive: 'open_gripper', …params }
+ * ```
+ *
+ * 参数平铺的做法与技能步**同一套**，只是指名的那一栏从 `action` 换成 `primitive`。
+ * **为什么不用 `action`**：`action` 是「能力」的接缝（`findCapability` 认它，视图据此去目录里
+ * 找一个**有实现可看**的能力）——原语不是能力，它没有 `implementation` 可展开。
+ * 借用那个键，三个视图就会拿原语名去 `catalog.capabilities` 里查，然后报「查不到这个能力」，
+ * 而事实是「这一步本来就不经过任何能力」。键名分开，判据才会分开。
  */
 import {
 	computeWorkflowDigest,
@@ -53,6 +66,7 @@ import {
 	type ConnectionTarget,
 	type Diagnostic,
 	type JsonObject,
+	type PrimitiveStep,
 	type SkillPlan,
 	type SkillPlanStep,
 	type SkillStep,
@@ -78,6 +92,13 @@ export const TASK_BRANCH_NODE_TYPE_VERSION = 1;
  */
 export const TASK_WAIT_NODE_TYPE = 'task.wait';
 export const TASK_WAIT_NODE_TYPE_VERSION = 1;
+
+/**
+ * 原语步的节点类型。与上面三个并列——同一层里的第四种节点，不是另一套协议。
+ * 它**没有 `action`**（原语不是能力，见文件头）：指名的那一栏是 `primitive`，参数照样平铺在它旁边。
+ */
+export const TASK_PRIMITIVE_NODE_TYPE = 'task.primitive';
+export const TASK_PRIMITIVE_NODE_TYPE_VERSION = 1;
 
 /**
  * 等待步的显示名：`3. 等待 2 秒`。
@@ -192,6 +213,31 @@ export const buildDeclarationFromPlan = (
 		};
 	};
 
+	/**
+	 * 一个 `primitive` 步 → 一个节点，指名的那一栏是 `primitive`、参数平铺在它旁边
+	 * （与技能步同一套做法，只是不借 `action` 那个「能力」的接缝——见文件头）。
+	 * 它的出边由下面那条通用规则给（普通步骤一格）。
+	 */
+	const primitiveNode = (step: PrimitiveStep, y: number): WorkflowNode => {
+		const { order, position } = takePosition(y);
+		const parameters: JsonObject = { primitive: step.primitive, ...(step.params ?? {}) };
+		// 超时与失败处置跟技能步同一个待遇：**不是原语参数**（目录里没这两栏），按原名进节点参数。
+		if (step.timeoutSec !== undefined) parameters['timeoutSec'] = step.timeoutSec;
+		if (step.onFailure !== undefined) parameters['onFailure'] = step.onFailure;
+		return {
+			id: idFactory.nodeId(),
+			// 显示名用目录里那个原语的标签（「张开夹爪」），查不到就照出原名——不编一个。
+			name: `${String(order + 1)}. ${
+				catalog.primitives.find((item) => item.primitiveRef === step.primitive)?.label ?? step.primitive
+			}`,
+			type: TASK_PRIMITIVE_NODE_TYPE,
+			typeVersion: TASK_PRIMITIVE_NODE_TYPE_VERSION,
+			parameters,
+			position,
+			disabled: false,
+		};
+	};
+
 	/** 把一串步串成一条链，返回链头的节点 id（空链给 `undefined`）。嵌套的 `if` 在这里递归下去。 */
 	const buildList = (steps: readonly SkillPlanStep[], y: number): string | undefined => {
 		const built: BuiltStep[] = [];
@@ -204,6 +250,12 @@ export const buildDeclarationFromPlan = (
 			}
 			if (step.step === 'wait') {
 				const node = waitNode(step, y);
+				nodes.push(node);
+				built.push({ id: node.id });
+				continue;
+			}
+			if (step.step === 'primitive') {
+				const node = primitiveNode(step, y);
 				nodes.push(node);
 				built.push({ id: node.id });
 				continue;

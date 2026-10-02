@@ -39,10 +39,11 @@ type PanelProgram = RenderedImplementation | PlanProgram;
 /** 当前显示的模块：选中的那个；没选中时退到第一个（不改共享状态）。 */
 const activeNode = computed(() => doc.selectedNode.value ?? doc.nodes.value[0] ?? null);
 
-/** 选中的是分支节点 → 它的计划层代码；否则 null（退回能力实现那条路）。 */
+/** 选中的是计划层节点（分支 / 等待 / 原语）→ 它的计划层代码；否则 null（退回能力实现那条路）。 */
 const planProgram = computed<PlanProgram | null>(() => {
 	const node = activeNode.value;
-	return node === null ? null : planProgramOf(doc.declaration.value, node.id);
+	// 目录也交给它：原语那一行要按**原语声明的顺序**写实参（与实现里的调用同一个口径）。
+	return node === null ? null : planProgramOf(doc.declaration.value, node.id, doc.declarationCatalog.value);
 });
 
 /*

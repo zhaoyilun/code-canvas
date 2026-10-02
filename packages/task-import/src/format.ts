@@ -28,7 +28,12 @@ import {
 	type WorkflowNode,
 } from '@codecanvas/contracts';
 import { TASK_ACTION_NODE_TYPE, importTaskJson } from './convert';
-import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE, importSkillPlanJson } from './skill-plan';
+import {
+	TASK_BRANCH_NODE_TYPE,
+	TASK_PRIMITIVE_NODE_TYPE,
+	TASK_WAIT_NODE_TYPE,
+	importSkillPlanJson,
+} from './skill-plan';
 
 /** 两条路都把「成/不成」说成同一个形状，上层不用分情况。 */
 export type DeclarationImportResult =
@@ -135,13 +140,18 @@ const NEXT_PORT = 0;
 
 /** 参与任务还原的节点类型。别的类型（将来会有）不是计划步。 */
 const isTaskNode = (node: WorkflowNode): boolean =>
-	node.type === TASK_ACTION_NODE_TYPE || node.type === TASK_BRANCH_NODE_TYPE || node.type === TASK_WAIT_NODE_TYPE;
+	node.type === TASK_ACTION_NODE_TYPE ||
+	node.type === TASK_BRANCH_NODE_TYPE ||
+	node.type === TASK_WAIT_NODE_TYPE ||
+	node.type === TASK_PRIMITIVE_NODE_TYPE;
 
 /**
  * 声明还原成技能计划。
  *
  * 技能参数就是节点参数里除了 `action` / `timeoutSec` / `onFailure` 之外的那些——
  * 当初导入时把它们平铺进来的，还原时原样收回去。后两个**不是技能参数**，各回自己那一栏。
+ * 原语步（`task.primitive`）照同一套规矩收，只是指名的那一栏从 `action` 换成 `primitive`：
+ * 原语不是能力，借用 `action` 会让三个视图拿原语名去 `catalog.capabilities` 里查（见 skill-plan.ts 的文件头）。
  *
  * 失败处置（`onFailure`）**原样收回、不在这里判取值**：判据只有校验器一个来源
  * （`plan.step.onfailure_invalid`），这里替它丢掉一个不认的取值，就等于把一份被改坏的声明
@@ -154,7 +164,8 @@ const isTaskNode = (node: WorkflowNode): boolean =>
  * **没有分支的声明走旧路**（任务节点按声明顺序就是步骤顺序）。这不是偷懒：
  * 一份手拼的、压根没有 `connections` 的声明，形状就是平铺的一串，只有按声明顺序读才对得上；
  * 有分支才需要走图——那时出边是唯一的真相，声明顺序只用来挑链头。
- * 等待步（`task.wait`）是**普通步骤**：两条路都按「单格出边」读它，与技能步同一套规矩。
+ * 等待步（`task.wait`）与原语步（`task.primitive`）都是**普通步骤**：两条路都按「单格出边」读它们，
+ * 与技能步同一套规矩。
  */
 export const declarationToSkillPlan = (declaration: WorkflowDeclaration): JsonObject => {
 	const nodesById = new Map(declaration.nodes.map((node) => [node.id, node]));
@@ -163,14 +174,19 @@ export const declarationToSkillPlan = (declaration: WorkflowDeclaration): JsonOb
 	const portHead = (nodeId: string, port: number): string | undefined =>
 		declaration.connections[nodeId]?.main?.[port]?.[0]?.node;
 
-	const skillStep = (node: WorkflowNode): JsonObject => {
+	/**
+	 * 一次「叫一个东西去做事」的步（技能步 / 原语步）：指名那一栏之外的参数原样收回。
+	 * 两种步的节点参数只有**指名那一栏**不同（`action` / `primitive`），所以还原也只有这一处不同。
+	 */
+	const callStep = (node: WorkflowNode, kind: 'skill' | 'primitive'): JsonObject => {
+		const refKey = kind === 'skill' ? 'action' : 'primitive';
 		const params: JsonObject = {};
 		let timeoutSec: number | undefined;
 		// 失败处置先收着、最后再写进 `step`：这样它的**键序**与冻结的形状一致
-		// （step / skill / params / timeoutSec / onFailure），声明被改坏时也不会跑到别处去。
+		// （step / skill（或 primitive）/ params / timeoutSec / onFailure），声明被改坏时也不会跑到别处去。
 		let onFailure: JsonValue | undefined;
 		for (const [key, value] of Object.entries(node.parameters)) {
-			if (key === 'action' || value === undefined) continue;
+			if (key === refKey || value === undefined) continue;
 			if (key === 'timeoutSec') {
 				if (typeof value === 'number') timeoutSec = value;
 				continue;
@@ -181,12 +197,15 @@ export const declarationToSkillPlan = (declaration: WorkflowDeclaration): JsonOb
 			}
 			params[key] = value;
 		}
-		const step: JsonObject = { step: 'skill', skill: String(node.parameters['action'] ?? '') };
+		const step: JsonObject = { step: kind, [kind]: String(node.parameters[refKey] ?? '') };
 		if (Object.keys(params).length > 0) step['params'] = params;
 		if (timeoutSec !== undefined) step['timeoutSec'] = timeoutSec;
 		if (onFailure !== undefined) step['onFailure'] = onFailure;
 		return step;
 	};
+
+	const skillStep = (node: WorkflowNode): JsonObject => callStep(node, 'skill');
+	const primitiveStep = (node: WorkflowNode): JsonObject => callStep(node, 'primitive');
 
 	/** 分支节点 → `if` 步：条件原样收回，两条臂各自递归；同层的后续由调用方顺着第三格接着走。 */
 	const branchStep = (node: WorkflowNode, visited: Set<string>): JsonObject => {
@@ -227,6 +246,12 @@ export const declarationToSkillPlan = (declaration: WorkflowDeclaration): JsonOb
 				current = portHead(node.id, NEXT_PORT);
 				continue;
 			}
+			if (node.type === TASK_PRIMITIVE_NODE_TYPE) {
+				// 原语步同样是普通步骤：单格出边（与技能步一样）。
+				steps.push(primitiveStep(node));
+				current = portHead(node.id, NEXT_PORT);
+				continue;
+			}
 			if (node.type !== TASK_ACTION_NODE_TYPE) break; // 别的节点类型不是计划步
 			steps.push(skillStep(node));
 			current = portHead(node.id, NEXT_PORT);
@@ -236,13 +261,18 @@ export const declarationToSkillPlan = (declaration: WorkflowDeclaration): JsonOb
 
 	const hasBranch = declaration.nodes.some((node) => node.type === TASK_BRANCH_NODE_TYPE);
 
+	/** 一个任务节点 → 它那一步（四种节点各归各的，判据只有这一处）。 */
+	const stepOfNode = (node: WorkflowNode): JsonObject => {
+		if (node.type === TASK_WAIT_NODE_TYPE) return waitStep(node);
+		if (node.type === TASK_PRIMITIVE_NODE_TYPE) return primitiveStep(node);
+		return skillStep(node);
+	};
+
 	let plan: JsonObject[];
 	if (!hasBranch) {
 		// 平铺的声明：任务节点按声明顺序就是步骤顺序——没有出边也读得对。
-		// 技能步与等待步都在这儿：两种都是单格出边的普通步骤，只是还原出来的字段不一样。
-		plan = declaration.nodes
-			.filter(isTaskNode)
-			.map((node) => (node.type === TASK_WAIT_NODE_TYPE ? waitStep(node) : skillStep(node)));
+		// 技能步、等待步与原语步都在这儿：三种都是单格出边的普通步骤，只是还原出来的字段不一样。
+		plan = declaration.nodes.filter(isTaskNode).map(stepOfNode);
 	} else {
 		// 顶层链的头：没有入边的第一个任务节点。导入时它就是 `nodes[0]`；
 		// 声明被改坏时退回第一个任务节点，反正写回的第二道闸正要拿它量。
@@ -274,7 +304,7 @@ export const declarationToSkillPlan = (declaration: WorkflowDeclaration): JsonOb
 export const SKILL_PLAN_FORMAT: TaskFormat = {
 	formatRef: 'skill_plan',
 	label: '技能计划',
-	describe: '一串技能调用，可以按「上一步成没成」分叉；技能名与参数由这台设备的目录给，可以随时增删。',
+	describe: '一串技能调用（也可以直接叫一个原语），可以按「上一步成没成」分叉；名字与参数由这台设备的目录给，可以随时增删。',
 	parse: (text, context) =>
 		importSkillPlanJson(text, {
 			catalog: context.catalog,

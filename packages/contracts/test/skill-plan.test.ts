@@ -1,7 +1,7 @@
 /**
  * 技能计划的校验器：**判据是目录**，不是写死的动作表。
  *
- * 这份测试要钉住的六件事：
+ * 这份测试要钉住的七件事：
  * 1. 合法计划原样通过，参数按目录里的类型判；
  * 2. 不合法的每一类都有**自己的码**（技能查不到 / 参数名不认 / 类型不对 / 步种类不支持），
  *    界面能据此指出是哪一步的哪个字段；
@@ -10,8 +10,10 @@
  *    嵌套有深度上限、`then` 非空、`else` 给了就非空，且诊断的 `path` 要指到嵌套里的那一层；
  * 5. 等待（`wait` 步）的秒数必须是正数、不超十分钟，且**不参与**分支的深度计数——
  *    「等一会儿」不该占掉分支的表达空间；
- * 6. 失败处置（`onFailure`）只有技能步有：取值只认 `stop` / `continue`，缺省**不补键**
- *    （缺省是停，不许在执行侧看不见的地方把它悄悄写成 `continue`），落在 `wait` / `if` 上报错。
+ * 6. 失败处置（`onFailure`）只有技能步与原语步有：取值只认 `stop` / `continue`，缺省**不补键**
+ *    （缺省是停，不许在执行侧看不见的地方把它悄悄写成 `continue`），落在 `wait` / `if` 上报错；
+ * 7. 原语步（`primitive`）的判据同样是目录（`catalog.primitives`），且**参数校验与技能步共用同一条路**
+ *    ——最后一组用「同一类毛病在两条路上给同一个码、同一个 path 形状」把这件事钉死。
  */
 import { describe, expect, it } from 'vitest';
 import { capabilityCatalogSchema, type CapabilityCatalog } from '../src/capability';
@@ -25,6 +27,21 @@ const CATALOG: CapabilityCatalog = capabilityCatalogSchema.parse({
 	namedPoses: ['home', 'observe_table', 'zero'],
 	primitives: [
 		{ primitiveRef: 'move_to_named_pose', label: '移动到命名位姿', parameters: [{ name: 'pose_name', label: '命名位姿', type: 'pose' }] },
+		{ primitiveRef: 'open_gripper', label: '张开夹爪', parameters: [] },
+		{
+			// 上游说必填的原语参数：缺了是**错误**（与技能那边同一条规矩）。
+			primitiveRef: 'rotate_gripper_cw',
+			label: '顺时针旋转夹爪',
+			parameters: [{ name: 'motion_distance', label: '旋转角度', type: 'number', required: true, unit: 'degrees' }],
+		},
+		{
+			primitiveRef: 'move_to_joint_positions',
+			label: '移动到关节位置',
+			parameters: [
+				{ name: 'joint_positions', label: '关节目标位置', type: 'json' },
+				{ name: 'duration_sec', label: '时长', type: 'number' },
+			],
+		},
 	],
 	capabilities: [
 		{
@@ -152,10 +169,15 @@ describe('技能计划的校验', () => {
 	});
 
 	it('别的步种类明说不做，不静默当成技能', () => {
-		const result = validateSkillPlan(step({ step: 'primitive', name: 'grab' }), { catalog: CATALOG });
+		// 设计稿的 `skipIf` 这一版不做（守卫挂在**后一步**上，这一版换成这一步自己的 onFailure）——
+		// 遇到它要明说，不静默当技能处理。
+		const result = validateSkillPlan(step({ step: 'skipIf', skill: 'grab' }), { catalog: CATALOG });
 		expect(codes(result)).toEqual(['plan.step.kind_unsupported']);
-		expect(result.diagnostics[0]?.message).toContain('primitive / skipIf 还没做');
-		expect(result.diagnostics[0]?.details?.['supported']).toEqual(['skill', 'if', 'wait']);
+		const [first] = result.diagnostics;
+		expect(first?.message).toContain('skipIf');
+		expect(first?.message).toContain('"skill" / "if" / "wait" / "primitive"');
+		// 认得的四种一并给上：界面据此把「能写哪几种」说给写计划的人
+		expect(first?.details?.['supported']).toEqual(['skill', 'if', 'wait', 'primitive']);
 	});
 
 	it('超时必须正数', () => {
@@ -464,7 +486,8 @@ describe('技能计划的失败处置', () => {
 		const [first] = result.diagnostics;
 		expect(first?.path).toBe('plan[0].onFailure');
 		expect(first?.ref).toBe('wait');
-		expect(first?.details?.['applicable']).toEqual(['skill']);
+		// 带这一栏的是技能步与原语步（判据那一栏也照实说这两个）
+		expect(first?.details?.['applicable']).toEqual(['skill', 'primitive']);
 		// 秒数那个毛病照报：这一栏不对，不挡着别的问题
 		expect(codes(validateSkillPlan(step({ step: 'wait', seconds: 0, onFailure: 'stop' }), { catalog: CATALOG }))).toEqual([
 			'plan.step.onfailure_not_applicable',
@@ -494,5 +517,218 @@ describe('技能计划的失败处置', () => {
 		);
 		expect(codes(result)).toEqual(['plan.step.skill.unknown', 'plan.step.onfailure_invalid']);
 		expect(result.diagnostics.map((item) => item.path)).toEqual(['plan[0].skill', 'plan[1].onFailure']);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 原语步（`primitive`）：直接叫一个原子动作，判据同样是目录
+// ---------------------------------------------------------------------------
+
+/** 一条原语步，按冻结的形状写：`{ step:'primitive', primitive, params?, timeoutSec?, onFailure? }`。 */
+const primitive = (ref: unknown, rest: Record<string, unknown> = {}): Record<string, unknown> => ({
+	step: 'primitive',
+	primitive: ref,
+	...rest,
+});
+
+describe('技能计划的原语步', () => {
+	it('合法计划通过，参数原样带进结果（键序照冻结的形状：step / primitive / params / timeoutSec / onFailure）', () => {
+		const result = validateSkillPlan(
+			step(primitive('move_to_named_pose', { params: { pose_name: 'home' }, timeoutSec: 5, onFailure: 'continue' })),
+			{ catalog: CATALOG },
+		);
+		expect(codes(result)).toEqual([]);
+		if (!result.ok) throw new Error('应当通过');
+		expect(result.plan.plan).toStrictEqual([
+			{ step: 'primitive', primitive: 'move_to_named_pose', params: { pose_name: 'home' }, timeoutSec: 5, onFailure: 'continue' },
+		]);
+		expect(Object.keys(result.plan.plan[0] ?? {})).toEqual(['step', 'primitive', 'params', 'timeoutSec', 'onFailure']);
+	});
+
+	it('没有参数的原语（张开夹爪）：不写 params 也通过，结果里不带 params 键', () => {
+		const result = validateSkillPlan(step(primitive('open_gripper')), { catalog: CATALOG });
+		expect(codes(result)).toEqual([]);
+		if (!result.ok) throw new Error('应当通过');
+		expect(result.plan.plan).toStrictEqual([{ step: 'primitive', primitive: 'open_gripper' }]);
+	});
+
+	it('原语不在目录里：报出来，并把目录里有什么一并给上（照 skill.unknown 的写法）', () => {
+		const result = validateSkillPlan(step(primitive('fly')), { catalog: CATALOG });
+		expect(codes(result)).toEqual(['plan.step.primitive.unknown']);
+		const [first] = result.diagnostics;
+		expect(first?.path).toBe('plan[0].primitive');
+		expect(first?.ref).toBe('fly');
+		expect(first?.message).toContain('SO-101 单臂');
+		expect(first?.details?.['allowed']).toEqual([
+			'move_to_named_pose',
+			'open_gripper',
+			'rotate_gripper_cw',
+			'move_to_joint_positions',
+		]);
+		expect(first?.details?.['catalog']).toBe('roboframe_so101_single_arm');
+		// 判据是**目录**，不是写死的表：连 `primitive` 这个键名都不是它认人的依据
+		expect(codes(validateSkillPlan(step(primitive('wave_hello')), { catalog: CATALOG }))).toEqual([
+			'plan.step.primitive.unknown',
+		]);
+	});
+
+	it('没写原语名：自己的码，不跟「不在目录里」混成一个', () => {
+		for (const raw of [primitive(undefined), primitive(''), primitive(3)]) {
+			const result = validateSkillPlan(step(raw), { catalog: CATALOG });
+			expect(codes(result)).toEqual(['plan.step.primitive.missing']);
+			expect(result.diagnostics[0]?.path).toBe('plan[0].primitive');
+		}
+	});
+
+	it('参数名不是这个原语声明的：报出来，并列出它能收哪些', () => {
+		const result = validateSkillPlan(step(primitive('open_gripper', { params: { motion_distance: 1 } })), { catalog: CATALOG });
+		expect(codes(result)).toEqual(['plan.step.param.unknown']);
+		expect(result.diagnostics[0]?.path).toBe('plan[0].params.motion_distance');
+		expect(result.diagnostics[0]?.details?.['allowed']).toEqual([]);
+	});
+
+	it('参数类型不对：报出来，并写清要哪一种；`json` 参数照收结构化载荷', () => {
+		const bad = validateSkillPlan(step(primitive('move_to_joint_positions', { params: { joint_positions: {}, duration_sec: 'fast' } })), {
+			catalog: CATALOG,
+		});
+		expect(codes(bad)).toEqual(['plan.step.param.type']);
+		expect(bad.diagnostics[0]?.details?.['expected']).toBe('number');
+		expect(bad.diagnostics[0]?.path).toBe('plan[0].params.duration_sec');
+
+		// `json` 收一切（关节位置映射这种结构化载荷不许被当成类型不符），所以只提醒没给时长
+		const good = validateSkillPlan(step(primitive('move_to_joint_positions', { params: { joint_positions: { '1': 0.02 } } })), {
+			catalog: CATALOG,
+		});
+		expect(codes(good)).toEqual(['plan.step.param.missing']);
+		expect(good.ok).toBe(true);
+	});
+
+	it('必填的参数缺了 → 报错；没标必填的缺了只提醒', () => {
+		const missingRequired = validateSkillPlan(step(primitive('rotate_gripper_cw')), { catalog: CATALOG });
+		expect(missingRequired.ok).toBe(false);
+		expect(codes(missingRequired)).toEqual(['plan.step.param.required']);
+		expect(missingRequired.diagnostics[0]?.details?.['param']).toBe('motion_distance');
+		expect(missingRequired.diagnostics[0]?.path).toBe('plan[0].params');
+
+		const optional = validateSkillPlan(step(primitive('move_to_joint_positions', { params: { joint_positions: {} } })), {
+			catalog: CATALOG,
+		});
+		expect(optional.ok).toBe(true);
+		expect(codes(optional)).toEqual(['plan.step.param.missing']);
+	});
+
+	it('`params` 不是对象：自己的码，且不再往下报逐参数的问题', () => {
+		const result = validateSkillPlan(step(primitive('open_gripper', { params: 'nope' })), { catalog: CATALOG });
+		expect(codes(result)).toEqual(['plan.step.params.not_object']);
+		expect(result.diagnostics[0]?.path).toBe('plan[0].params');
+	});
+
+	it('失败处置与技能步同待遇：两个取值都收，写错报同一个码', () => {
+		for (const value of SKILL_PLAN_ON_FAILURE) {
+			expect(codes(validateSkillPlan(step(primitive('open_gripper', { onFailure: value })), { catalog: CATALOG }))).toEqual([]);
+		}
+		const bad = validateSkillPlan(step(primitive('open_gripper', { onFailure: 'keep_going' })), { catalog: CATALOG });
+		expect(codes(bad)).toEqual(['plan.step.onfailure_invalid']);
+		expect(bad.diagnostics[0]?.path).toBe('plan[0].onFailure');
+		expect(bad.diagnostics[0]?.ref).toBe('open_gripper');
+	});
+
+	it('超时必须正数（与技能步同一个码）', () => {
+		expect(codes(validateSkillPlan(step(primitive('open_gripper', { timeoutSec: 0 })), { catalog: CATALOG }))).toEqual([
+			'plan.step.timeout.invalid',
+		]);
+	});
+
+	it('原语步与技能步、分支、等待混排在同一条链上（臂里也放得下）', () => {
+		const result = validateSkillPlan(
+			planOf(
+				primitive('open_gripper'),
+				{ step: 'wait', seconds: 1 },
+				{ step: 'skill', skill: 'wave_hello' },
+				branch({ then: [primitive('move_to_named_pose', { params: { pose_name: 'home' } })] }),
+			),
+			{ catalog: CATALOG },
+		);
+		expect(codes(result)).toEqual([]);
+		if (!result.ok) throw new Error('应当通过');
+		expect(result.plan.plan.map((item) => item.step)).toEqual(['primitive', 'wait', 'skill', 'if']);
+	});
+
+	it('诊断的 path 指到嵌套里那一层（原语步在臂里也照判）', () => {
+		const result = validateSkillPlan(step(branch({ then: [primitive('move_to_named_pose', { params: { pose_name: 1 } })] })), {
+			catalog: CATALOG,
+		});
+		expect(result.diagnostics.map((item) => `${item.code}@${item.path ?? ''}`)).toEqual([
+			'plan.step.param.type@plan[0].then[0].params.pose_name',
+		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 「参数校验共用同一条路」的证据：同一类毛病，两条路给同一个码、同一个 path 形状
+// ---------------------------------------------------------------------------
+
+describe('技能步与原语步的参数判据是同一条路', () => {
+	/** 诊断压成一行：`码@path（参数名归一成 <参数>）`——两条路的 path 只该差在参数名上。 */
+	const shape = (result: ReturnType<typeof validateSkillPlan>): string[] =>
+		result.diagnostics.map((diagnostic) => `${diagnostic.code}@${(diagnostic.path ?? '').replace(/params\.[^.]+$/, 'params.<参数>')}`);
+
+	/** 措辞：把主语（`技能「x」` / `原语「y」`）换成同一个占位符，两句话该是同一句。 */
+	const wording = (result: ReturnType<typeof validateSkillPlan>, subject: string): string[] =>
+		result.diagnostics.map((diagnostic) => diagnostic.message.split(subject).join('X'));
+
+	/**
+	 * 再把**这件事本身不同的那几处**（参数名、参数中文标签、类型名）换成占位符：
+	 * 两条路报的是同一套话，差的只是「说的是哪个参数」。留下的就是模板本身。
+	 */
+	const template = (line: string): string =>
+		line
+			.replace(/「[^」]*」/g, '「<参数>」')
+			// 标签自己可能带括号（`移动距离（米）`），所以从第一个 `（` 一路吃到最后一个 `）`
+			.replace(/（.*）/, '（<标签>）')
+			.replace(/要 \S+，/, '要 <类型>，');
+
+	it('名字不认 / 类型不对 / 没标必填的缺了：两条路的码与 path 形状一模一样', () => {
+		const skillRun = validateSkillPlan(
+			step({ step: 'skill', skill: 'move_relative_ee', params: { nope: 1, motion_direction: 3 } }),
+			{ catalog: CATALOG },
+		);
+		const primitiveRun = validateSkillPlan(
+			step(primitive('move_to_joint_positions', { params: { nope: 1, duration_sec: 'fast' } })),
+			{ catalog: CATALOG },
+		);
+
+		// 三条毛病：参数名不认、类型不对、另一个参数没给（提醒）
+		expect(shape(skillRun)).toEqual([
+			'plan.step.param.unknown@plan[0].params.<参数>',
+			'plan.step.param.type@plan[0].params.<参数>',
+			'plan.step.param.missing@plan[0].params',
+		]);
+		expect(shape(primitiveRun)).toEqual(shape(skillRun));
+		// 措辞也只有主语不同——把参数名/标签/类型换成占位符之后，两句是同一句
+		expect(wording(primitiveRun, '原语「move_to_joint_positions」').map(template)).toEqual(
+			wording(skillRun, '技能「move_relative_ee」').map(template),
+		);
+	});
+
+	it('必填缺了：两条路给同一个码（技能那份放宽一点，这条就该红）', () => {
+		const skillRun = validateSkillPlan(step({ step: 'skill', skill: 'grip', params: {} }), { catalog: CATALOG });
+		const primitiveRun = validateSkillPlan(step(primitive('rotate_gripper_cw', { params: {} })), { catalog: CATALOG });
+
+		expect(shape(skillRun)).toEqual([
+			'plan.step.param.required@plan[0].params',
+			'plan.step.param.missing@plan[0].params',
+		]);
+		// 必填那一条两边都在；原语的这个没有可选参数，所以只有一条
+		expect(shape(primitiveRun)[0]).toBe('plan.step.param.required@plan[0].params');
+	});
+
+	it('`params` 不是对象：同一个码、同一句措辞（只差主语）', () => {
+		const skillRun = validateSkillPlan(step({ step: 'skill', skill: 'wave_hello', params: [] }), { catalog: CATALOG });
+		const primitiveRun = validateSkillPlan(step(primitive('open_gripper', { params: [] })), { catalog: CATALOG });
+
+		expect(shape(skillRun)).toEqual(['plan.step.params.not_object@plan[0].params']);
+		expect(shape(primitiveRun)).toEqual(shape(skillRun));
+		expect(wording(primitiveRun, '原语「open_gripper」')).toEqual(wording(skillRun, '技能「wave_hello」'));
 	});
 });

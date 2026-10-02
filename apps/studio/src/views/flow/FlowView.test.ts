@@ -16,13 +16,21 @@ import {
 	type WorkflowNode,
 } from '@codecanvas/contracts';
 import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
-import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
+import { TASK_BRANCH_NODE_TYPE, TASK_PRIMITIVE_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
 import { setSelectedDevice } from '../../shell/devices';
 import { clearRunningPlanPath, setRunningPlanPath } from '../../shell/device-run';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import FlowView from './FlowView.vue';
 import { planStructureOf } from '../shared/plan-structure';
-import { BRANCH_PLAN_JSON, BRANCH_WAIT_PLAN_JSON, CONTINUE_ON_FAILURE_PLAN_JSON, NESTED_NO_ELSE_PLAN_JSON, WAIT_PLAN_JSON } from './__fixtures__/branch-plan';
+import {
+	BRANCH_PLAN_JSON,
+	BRANCH_WAIT_PLAN_JSON,
+	CONTINUE_ON_FAILURE_PLAN_JSON,
+	MIXED_STEPS_PLAN_JSON,
+	NESTED_NO_ELSE_PLAN_JSON,
+	POSE_PRIMITIVE_PLAN_JSON,
+	WAIT_PLAN_JSON,
+} from './__fixtures__/branch-plan';
 import { normalizeRenderedHtml, readBaseline } from './__fixtures__/normalize-html';
 
 const store = useStudioDocument();
@@ -949,5 +957,122 @@ describe('流程画布 · 运行标记（设备正在这一步）', () => {
 		await runningCardOf(wrapper, '9');
 
 		expect(runningCards(wrapper)).toHaveLength(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 原语步（task.primitive）：直接叫一个原子动作
+// ---------------------------------------------------------------------------
+
+describe('流程画布 · 原语步', () => {
+	beforeEach(() => {
+		loadPlan(MIXED_STEPS_PLAN_JSON);
+	});
+
+	/** 目录里那个原语的标签（卡头那句话的唯一来源）。 */
+	const primitiveLabel = (ref: string): string => {
+		const primitive = ROBOFRAME_SO101_CATALOG.primitives.find((item) => item.primitiveRef === ref);
+		if (primitive === undefined) throw new Error(`目录里没有原语 ${ref}`);
+		return primitive.label;
+	};
+
+	it('四类步混排：七张卡（含臂里两张），原语卡的卡头是**目录里那个原语的标签**', () => {
+		const wrapper = mount(FlowView);
+
+		// DOM 顺序 = 画布上的顺序：分支卡之后先是 then 臂、再是 else 臂，最后才是 `if` 之后的后续
+		expect(structureOf(wrapper).map((row) => row.action)).toEqual([
+			'观察桌面',
+			primitiveLabel('open_gripper'),
+			'等待 2 秒',
+			'分支',
+			primitiveLabel('close_gripper'),
+			'打招呼',
+			'往前一点',
+		]);
+		// 目录里 `open_gripper` 的 label 就是「张开夹爪」——视图里没有第二份原语名表
+		expect(primitiveLabel('open_gripper')).toBe('张开夹爪');
+		expect(primitiveLabel('close_gripper')).toBe('闭合夹爪');
+		// 卡头那句人话来自目录；`data-action` 那一栏放的是**节点类型**（原语不是能力，不编一个动作名顶上）
+		const openCard = cards(wrapper)[1];
+		if (openCard === undefined) throw new Error('没有原语卡');
+		expect(openCard.get('[data-testid="flow-node-action"]').text()).toBe('张开夹爪');
+		expect(openCard.get('[data-testid="flow-node-action"]').attributes('data-action')).toBe(TASK_PRIMITIVE_NODE_TYPE);
+		// 声明里的名字也照目录写：与卡头说的是同一个词
+		expect(nameOf(currentDeclaration(), openCard.attributes('data-node-id') ?? '')).toBe('2. 张开夹爪');
+	});
+
+	it('没有参数的原语：参数区说「这个动作没有参数」（它确实是一次动作）', () => {
+		const wrapper = mount(FlowView);
+		const openCard = cards(wrapper)[1];
+		if (openCard === undefined) throw new Error('没有原语卡');
+
+		expect(openCard.find('[data-testid="flow-node-params"]').exists()).toBe(false);
+		expect(openCard.text()).toContain('这个动作没有参数');
+		expect(openCard.find('[data-testid="flow-node-condition"]').exists()).toBe(false);
+		expect(openCard.classes()).not.toContain('branch');
+	});
+
+	it('有参数的原语：参数行来自**原语声明**（名字 / 中文标签 / 单位都从目录读）', () => {
+		loadPlan(POSE_PRIMITIVE_PLAN_JSON);
+		const wrapper = mount(FlowView);
+		const card = cards(wrapper)[0];
+		if (card === undefined) throw new Error('没有原语卡');
+
+		// 一行：`pose_name`，标签是目录里那个（「命名位姿」），读数是计划里那个
+		expect(paramValues(card)).toEqual({ pose_name: 'home' });
+		const row = card.get('[data-testid="flow-node-params"] .param-row');
+		expect(row.get('[data-label]').attributes('data-label')).toBe('pose_name');
+		expect(row.get('dt').text()).toBe(
+			ROBOFRAME_SO101_CATALOG.primitives.find((item) => item.primitiveRef === 'move_to_named_pose')?.parameters[0]?.label,
+		);
+	});
+
+	it('目录没给单位的参数就不显示单位（不编一个）：读数原样，标签仍来自声明', () => {
+		// 目录里 `rotate_gripper_cw` 的 `motion_distance` 没标 unit——那一格就空着
+		loadPlan(
+			JSON.stringify({
+				schemaVersion: 1,
+				robot: 'so101_single_arm',
+				plan: [{ step: 'primitive', primitive: 'rotate_gripper_cw', params: { motion_distance: 90 } }],
+			}),
+		);
+		const card = cards(mount(FlowView))[0];
+		if (card === undefined) throw new Error('没有原语卡');
+		const declared = ROBOFRAME_SO101_CATALOG.primitives.find((item) => item.primitiveRef === 'rotate_gripper_cw')
+			?.parameters[0];
+		expect(declared?.unit).toBeUndefined();
+		expect(card.get('.param-value .param-number').text()).toBe('90');
+		expect(card.get('[data-label]').attributes('data-label')).toBe('motion_distance');
+		expect(card.get('.param-name').text()).toBe(declared?.label);
+	});
+
+	it('原语卡与别的卡混排：一条链、一格出边（连线数 = 卡数 - 1）', () => {
+		const wrapper = mount(FlowView);
+
+		// 七张卡（含两条臂里各一张）与四条连线：原语步是普通步骤，与技能步同一套规矩
+		expect(cards(wrapper)).toHaveLength(7);
+		expect(wrapper.findAll('[data-testid="flow-connector"]')).toHaveLength(4);
+		// 臂里那张原语卡在 then 臂里
+		const armCard = cards(wrapper).find((card) => card.get('[data-testid="flow-node-action"]').text() === '闭合夹爪');
+		expect(armCard?.element.closest('[data-testid="flow-arm"]')?.getAttribute('data-arm')).toBe('then');
+	});
+
+	it('失败处置与技能步同待遇：带 continue 的原语卡标「失败也往下走」', async () => {
+		loadPlan(
+			JSON.stringify({
+				schemaVersion: 1,
+				robot: 'so101_single_arm',
+				plan: [
+					{ step: 'primitive', primitive: 'open_gripper', onFailure: 'continue' },
+					{ step: 'primitive', primitive: 'close_gripper' },
+				],
+			}),
+		);
+		const wrapper = mount(FlowView);
+
+		expect(cards(wrapper).map((card) => card.find('[data-testid="flow-node-continue"]').exists())).toEqual([true, false]);
+		expect(cards(wrapper)[0]?.get('[data-testid="flow-node-continue"]').text()).toBe('失败也往下走');
+		// 参数区里那个原样的 `onFailure` 行照旧在（机器形态），卡上那句话是人话版本
+		expect(paramValues(cards(wrapper)[0]!)).toEqual({ onFailure: 'continue' });
 	});
 });

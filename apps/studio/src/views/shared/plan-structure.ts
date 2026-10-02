@@ -9,22 +9,26 @@
  *   `main[0]` = then 臂的头、`main[1]` = else 臂的头、`main[2]` = 这一层里 `if` 之后的后续步骤。
  *   两臂的链尾**不接任何东西**（这一版不做汇合点），所以「走一步」就是顺着 `main[0]` 往下取。
  * - 普通步骤只有一格出边：下一步。没有出边就是链尾。
- *   等待步（`task.wait`）就是普通步骤——它没有臂，所以**不进分支那套两臂逻辑**（见 `isPlanLayerNode`）。
+ *   等待步（`task.wait`）与原语步（`task.primitive`）就是普通步骤——它们没有臂，
+ *   所以**不进分支那套两臂逻辑**（见 `isPlanLayerNode`）。
  *
  * 图推不出来时（悬空引用、环、多个链头、分支没有出边）**不抛异常、也不静默少画**：
  * 把问题如实记成诊断交给界面，能画的那部分照画——少画一步比画错一步更难发现。
  */
 import {
 	canonicalJsonString,
+	findPrimitive,
 	isJsonObject,
+	type CapabilityCatalog,
 	type ConnectionTarget,
 	type JsonValue,
+	type PrimitiveSpec,
 	type WorkflowConnections,
 	type WorkflowDeclaration,
 	type WorkflowNode,
 } from '@codecanvas/contracts';
 import { formatNumberLiteral } from '@codecanvas/code-render';
-import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
+import { TASK_BRANCH_NODE_TYPE, TASK_PRIMITIVE_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
 
 /** 计划层的一条问题。`nodeId` 有的问题指向具体一步，界面据此把话说到那一步上。 */
 export interface PlanDiagnostic {
@@ -50,7 +54,9 @@ export interface PlanStep {
 	readonly isBranch: boolean;
 	/** 是不是等待步（`task.wait`）。它没有臂，所以与 `isBranch` 互斥。 */
 	readonly isWait: boolean;
-	/** 只有分支步有；分支没有出边（图坏了）时是空表。等待步与技能步都是空表。 */
+	/** 是不是原语步（`task.primitive`）。同样没有臂，所以与 `isBranch` 互斥。 */
+	readonly isPrimitive: boolean;
+	/** 只有分支步有；分支没有出边（图坏了）时是空表。等待步、原语步与技能步都是空表。 */
 	readonly arms: readonly PlanArm[];
 }
 
@@ -69,17 +75,23 @@ export interface BranchPlan {
 
 export const isBranchNode = (node: WorkflowNode): boolean => node.type === TASK_BRANCH_NODE_TYPE;
 
-/** 是不是等待步的节点（`task.wait`）。 */
+/** 是不是等待步（`task.wait`）。 */
 export const isWaitNode = (node: WorkflowNode): boolean => node.type === TASK_WAIT_NODE_TYPE;
 
+/** 是不是原语步（`task.primitive`）：直接叫一个原子动作，不经过任何能力。 */
+export const isPrimitiveNode = (node: WorkflowNode): boolean => node.type === TASK_PRIMITIVE_NODE_TYPE;
+
 /**
- * 是不是**计划层**的节点：分支与等待。
+ * 是不是**计划层**的节点：分支、等待与原语。
  *
- * 为什么这两个归一类：它们都**没有实现可看**（技能步有，`action` 指向目录里的能力），
+ * 为什么这三个归一类：它们都**没有实现可看**（技能步有，`action` 指向目录里的能力），
  * 所以选中它们时，代码面板与积木画布显示的是计划本身，而不是「某个能力做了什么」。
+ * 原语步尤其如此：它叫的那个原语**不是能力**（目录里没有它的 `implementation`），
+ * 拿它去 `catalog.capabilities` 里查只会得到一句「查不到这个能力」——那是把这一步说错了。
  * 判据只有这一处——三个视图都从这里问，不各写一遍 `type === ... || type === ...`。
  */
-export const isPlanLayerNode = (node: WorkflowNode): boolean => isBranchNode(node) || isWaitNode(node);
+export const isPlanLayerNode = (node: WorkflowNode): boolean =>
+	isBranchNode(node) || isWaitNode(node) || isPrimitiveNode(node);
 
 /** 一个节点那三格出边。没有这一项就是三格都没有——「没连过线」与「连了个空」是两件事。 */
 const mainPorts = (
@@ -204,13 +216,13 @@ const walkChain = (state: WalkState, head: string | null): PlanStep[] => {
 		const index = state.indexOf.get(node.id) ?? 0;
 
 		if (!isBranchNode(node)) {
-			steps.push({ node, index, isBranch: false, isWait: isWaitNode(node), arms: [] });
+			steps.push({ node, index, isBranch: false, isWait: isWaitNode(node), isPrimitive: isPrimitiveNode(node), arms: [] });
 			current = headOfPort(state, node, mainPorts(state.connections, node.id)[0] ?? [], '下一步');
 			continue;
 		}
 
 		const { arms, continuation } = armsOf(state, node);
-		steps.push({ node, index, isBranch: true, isWait: false, arms });
+		steps.push({ node, index, isBranch: true, isWait: false, isPrimitive: false, arms });
 		current = continuation;
 	}
 
@@ -244,6 +256,7 @@ export const planStructureOf = (declaration: WorkflowDeclaration | null): PlanSt
 				index: state.indexOf.get(node.id) ?? 0,
 				isBranch: isBranchNode(node),
 				isWait: isWaitNode(node),
+				isPrimitive: isPrimitiveNode(node),
 				arms: [],
 			})),
 			diagnostics: [],
@@ -431,18 +444,73 @@ export const planLiteralOf = (value: JsonValue | undefined): string => {
 };
 
 /**
+ * 节点参数里**不是这次调用实参**的那几个键。
+ *
+ * `step_id` 是节点的语义身份；`action` / `primitive` 是「这次叫的是谁」（已经写在函数名里了）；
+ * `timeoutSec` 与 `onFailure` 是**这一步自己的属性**（目录里没有这两栏，由 `@codecanvas/task-import`
+ * 按原名平铺进来）。它们照旧在流程卡片上显示着，只是不冒充实参——一次调用里没有
+ * 「失败也往下走」这种参数。
+ */
+const CALL_STEP_KEYS = new Set(['step_id', 'action', 'primitive', 'timeoutSec', 'onFailure']);
+
+/** 这一步给了的那些实参（顺序照节点参数；要按声明排序的用法见 `primitiveCallTextOf`）。 */
+const planArgumentsOf = (node: WorkflowNode): readonly (readonly [string, JsonValue])[] =>
+	Object.entries(node.parameters).filter(([key]) => !CALL_STEP_KEYS.has(key));
+
+/**
  * 臂里那一步的调用写法：`close_gripper_skill()`，有技能参数就照计划里的样子列出来。
  *
  * 代码面板与积木画布**共用这一个口径**：同一件事在两处长得一样，人才认得出说的是同一步。
- * `timeoutSec` 刻意不列：它不是技能参数（目录里没有这一栏），是这一步的超时——
- * 换句话说不属于这次调用；它在流程卡片上照旧显示着，一个字都没丢。
+ * `timeoutSec` 与 `onFailure` 刻意不列：它们不是技能参数（目录里没有这两栏），是这一步自己的属性——
+ * 换句话说不属于这次调用；它们在流程卡片上照旧显示着，一个字都没丢。
  */
 export const planCallTextOf = (node: WorkflowNode): string => {
 	const skill = node.parameters['action'];
 	const name = typeof skill === 'string' && skill !== '' ? skill : '?';
-	const args = Object.entries(node.parameters)
-		.filter(([key]) => key !== 'action' && key !== 'step_id' && key !== 'timeoutSec')
-		.map(([key, value]) => `${key}=${planLiteralOf(value)}`);
+	const args = planArgumentsOf(node).map(([key, value]) => `${key}=${planLiteralOf(value)}`);
+	return `${name}(${args.join(', ')})`;
+};
+
+// ---------------------------------------------------------------------------
+// 原语步（`task.primitive`）：名字与实参都从目录读
+// ---------------------------------------------------------------------------
+
+/**
+ * 原语的显示名：目录里那个 `label`（「张开夹爪」），查不到就照出原名——**不编一个**。
+ *
+ * 视图里没有第二份原语名表：目录是设备报上来的，写死一份就会在换设备之后显示成标识符。
+ */
+export const primitiveLabelOf = (catalog: CapabilityCatalog | null, primitiveRef: string): string =>
+	catalog === null ? primitiveRef : (findPrimitive(catalog, primitiveRef)?.label ?? primitiveRef);
+
+/** 这一步叫的是哪个原语（节点参数里那一个；读不出来就是空串）。 */
+export const primitiveRefOf = (node: WorkflowNode): string => {
+	const ref = node.parameters['primitive'];
+	return typeof ref === 'string' ? ref : '';
+};
+
+/** 这一步叫的那个原语在目录里的定义；查不到（或没有目录）就是 `null`。 */
+export const primitiveSpecOf = (catalog: CapabilityCatalog | null, node: WorkflowNode): PrimitiveSpec | null =>
+	catalog === null ? null : (findPrimitive(catalog, primitiveRefOf(node)) ?? null);
+
+/**
+ * 原语步的写法：`open_gripper()` / `move_to_named_pose(pose_name="home")`。
+ *
+ * **实参按原语声明的顺序与名字**（`catalog.primitives[].parameters`），与 `@codecanvas/code-render`
+ * 渲染实现里那些原语调用的口径一致——同一台设备上的同一个原语，在实现里与在计划里长得一样。
+ * 没给的参数不补一行（计划只写了它要给的那些，没给的由执行侧用默认值）；
+ * 目录里查不到这个原语时退回节点参数的顺序，照实写出来，不假装知道它的声明顺序。
+ */
+export const primitiveCallTextOf = (node: WorkflowNode, catalog: CapabilityCatalog | null = null): string => {
+	const ref = primitiveRefOf(node);
+	const name = ref === '' ? '?' : ref;
+	const declared = primitiveSpecOf(catalog, node)?.parameters ?? [];
+	const order = new Map(declared.map((parameter, index) => [parameter.name, index]));
+	// 声明里有的按声明排，没有的（改坏的声明）排在后面——排序稳定，所以它们自己那一段仍按原顺序。
+	const args = planArgumentsOf(node)
+		.map((entry, index) => ({ entry, rank: order.get(entry[0]) ?? declared.length + index }))
+		.sort((left, right) => left.rank - right.rank)
+		.map(({ entry: [key, value] }) => `${key}=${planLiteralOf(value)}`);
 	return `${name}(${args.join(', ')})`;
 };
 
@@ -492,6 +560,7 @@ export const planWaitCallTextOf = (node: WorkflowNode): string => {
  *
  * 只有 `'continue'` 才算数：缺省、`'stop'` 与任何读不出来的值都按缺省（停）处理——
  * 与执行侧同一个口径（`apps/robot3d/src/roboframe/plan.ts`），也与契约里那条安全立场一致。
+ * **带这一栏的是技能步与原语步**（两者都会成会败），等待与分支上它不存在（契约那边就报错）。
  */
 export const continuesOnFailure = (node: WorkflowNode): boolean => node.parameters['onFailure'] === 'continue';
 

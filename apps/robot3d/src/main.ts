@@ -14,6 +14,7 @@
  */
 import './style.css';
 import { ROBOFRAME_SO101_CATALOG as catalog, ROBOFRAME_SO101_PROVENANCE as provenance } from '@codecanvas/capabilities';
+import { findPrimitive } from '@codecanvas/contracts';
 import type { RunOutcome, StepEvent } from './roboframe/executor';
 import { intake, planStepLabel, type PlanRunOutcome } from './roboframe/plan';
 import { mountVirtualDevice } from './mount';
@@ -120,10 +121,15 @@ async function runJson(text: string): Promise<void> {
 	// 计划步那几行由 mount 的账本推过来：一条计划步一个结论，不再收 running
 	const off = device.onStep((event) => {
 		if (event.state !== 'done' && event.state !== 'failed') return;
+		/*
+		 * 这一步在日志里叫什么：跑技能时是能力名；跑**原语**时（`primitive` 步）没有能力可指，
+		 * 报的是目录里那个原语的标签（「张开夹爪」）——查不到就退回原语名，不编一个中文名。
+		 */
+		const name = event.capabilityRef ?? (findPrimitive(catalog, event.primitiveRef)?.label ?? event.primitiveRef);
 		panel.appendPlanStep({
 			index: event.index,
 			total: event.total,
-			skill: event.capabilityRef,
+			skill: name,
 			taskId: '',
 			state: event.state,
 		});

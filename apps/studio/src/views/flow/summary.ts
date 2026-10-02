@@ -15,6 +15,7 @@ import {
 	type JsonObject,
 	type JsonValue,
 	type CapabilitySpec,
+	type CatalogParameter,
 	type NumericLimitName,
 	type ProtocolFieldSummary,
 	type TaskAction,
@@ -74,7 +75,11 @@ export const summarizeNodeParameters = (
 	parameters: JsonObject,
 	action: TaskAction | null,
 	limits: NodeLimits = {},
-	capability: CapabilitySpec | null = null,
+	/**
+	 * 目录里那份声明：**技能与原语都走这里**（`capability.parameters` 与 `primitive.parameters`
+	 * 是同一个形状）。名字、标签、单位、必填都从它读——视图里没有第二份参数表。
+	 */
+	declared: { readonly parameters: readonly CatalogParameter[] } | null = null,
 ): readonly ParameterSummary[] => {
 	const rows: ParameterSummary[] = [];
 	const covered = new Set<string>();
@@ -86,9 +91,10 @@ export const summarizeNodeParameters = (
 	 * （`inspect_scene` 这类），协议表当然不认识，于是卡头显示标识符、参数行显示英文键名——
 	 * 而**目录里明明有中文名**（观察桌面 / 相对移动）。这里就是把它取出来的地方：
 	 * 谁是这台设备的目录，谁就有这套名字；没有目录（或查不到）才退回原样，不编一个。
+	 * 原语步走的是同一条路（`primitive.parameters` 里那几栏就是它的全部参数）。
 	 */
-	if (capability !== null) {
-		for (const parameter of capability.parameters) {
+	if (declared !== null) {
+		for (const parameter of declared.parameters) {
 			covered.add(parameter.name);
 			const value = parameters[parameter.name];
 			rows.push({
@@ -121,8 +127,8 @@ export const summarizeNodeParameters = (
 	}
 
 	for (const [name, value] of Object.entries(parameters)) {
-		// step_id / action 已经在卡头上了，不再占一行。
-		if (covered.has(name) || name === 'step_id' || name === 'action') continue;
+		// step_id / action / primitive 已经在卡头上了，不再占一行。
+		if (covered.has(name) || name === 'step_id' || name === 'action' || name === 'primitive') continue;
 		// 协议不认识的字段没有中文名可给——照出原字段名，不编一个。
 		rows.push({
 			name,

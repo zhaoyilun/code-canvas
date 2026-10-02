@@ -12,6 +12,7 @@
  */
 import {
 	DiagnosticCollector,
+	findPrimitive,
 	SKILL_PLAN_SCHEMA_VERSION,
 	validateSkillPlan,
 	type BranchCondition,
@@ -19,6 +20,7 @@ import {
 	type CapabilitySpec,
 	type Diagnostic,
 	type SkillPlan,
+	type SkillPlanOnFailure,
 	type SkillPlanStep,
 } from '@codecanvas/contracts';
 import type { RunOutcome } from './executor';
@@ -26,6 +28,11 @@ import type { RunOutcome } from './executor';
 /** 执行侧需要的最小面（真身是 RoboFrameExecutor，测试里换成假的） */
 export interface PlanRunner {
 	run(capability: CapabilitySpec, params: Record<string, unknown>): Promise<RunOutcome>;
+	/**
+	 * 跑**一个原语**（`primitive` 步）：RoboFrame 的 `/embodied/execute_primitive` 那条路——
+	 * 绕开技能那层包装，直接叫一个原子动作。参数由执行侧照目录声明校验，失败如实返回。
+	 */
+	runPrimitiveCommand(primitiveRef: string, params: Record<string, unknown>): Promise<RunOutcome>;
 	/** 开始跑这条计划：清取消标记，但**不复位机械臂**（上一条指令停在哪就从哪接着走） */
 	beginRun(): void;
 	/**
@@ -191,15 +198,21 @@ const conditionHolds = (condition: BranchCondition, lastSuccess: boolean): boole
 
 /**
  * 一个计划步在界面上叫什么：技能步报技能名（那是设备那边真收到的调用），
- * 分支步说这是个判断，等待步说等了多久。
+ * 分支步说这是个判断，等待步说等了多久，原语步报**目录里那个原语的标签**（「张开夹爪」）。
  *
  * 为什么放在执行侧而不是各界面各写一份：这几种说法说的是**同一件事实**（这一步是什么），
  * 两个界面（机器人应用自己的日志、studio 右栏）不该各有一套叫法。
  * 「等多久」就写声明里那个数——不摆一张「几秒怎么说」的表。
+ *
+ * 原语的标签只有目录里有，所以目录是可选的：给不出（没传目录 / 目录里查不到这个原语）时
+ * 退回原语名——那是设备真收到的东西，照实说，不编一个中文名。
  */
-export function planStepLabel(step: SkillPlanStep): string {
+export function planStepLabel(step: SkillPlanStep, catalog?: CapabilityCatalog | null): string {
 	if (step.step === 'if') return '分支';
 	if (step.step === 'wait') return `等待 ${String(step.seconds)} 秒`;
+	if (step.step === 'primitive') {
+		return catalog == null ? step.primitive : (findPrimitive(catalog, step.primitive)?.label ?? step.primitive);
+	}
 	return step.skill;
 }
 
@@ -227,23 +240,28 @@ type StepResult = { readonly ok: true; readonly completed: boolean } | { readonl
  * 两条都不自动重试（与 bridge 的纪律一致：是否重试由技能自己的 `recovery_policy` 决定，
  * 不由执行器替它拿主意）。
  *
- * **失败处置（`onFailure`）**：技能步缺省（或写 `'stop'`）就是上面那句「失败即停」，一个字不变；
- * 写了 `'continue'` 的那一步失败后，计划**继续往下走**，并且 `last.success` 记成 `false`——
+ * **失败处置（`onFailure`）**：技能步与原语步缺省（或写 `'stop'`）就是上面那句「失败即停」，
+ * 一个字不变；写了 `'continue'` 的那一步失败后，计划**继续往下走**，并且 `last.success` 记成 `false`——
  * 后面那个 `if` 因此真的能走到「上一步没成」那条臂。
  * 为什么缺省是停，见契约里 `SkillStep.onFailure` 那段（安全立场，与 bridge 同一条）。
- * `wait` 与 `if` 不带这一栏（契约那边就报错），所以这里只有技能步看它。
+ * `wait` 与 `if` 不带这一栏（契约那边就报错），所以这里只有技能步与原语步看它——
+ * 而这两者走的是**同一段收尾**（`runStep` 里的 `settle`），待遇不许分家。
  *
  * **分支真的跑**：走到 `step: 'if'` 就按 `last.success` 判条件、选一条臂、在臂里继续跑
  * （臂里还能再有 `if`，深度由契约挡在 8 层）。分支自己也算一步，照报 `running` → `done`/`failed`，
  * 并在事件里说清走了哪条臂（`arm`）与它在树的哪一格（`path`）。
  *
- * **`last.success` 的语义**：最近一次**真正执行过的技能步**成没成。四个要点：
- * ① **成功的技能步记 `true`，被容忍失败的技能步记 `false`**——两个都写在同一处
- *    （技能步那段里的 `settle`，就一行 `lastSuccess = ok`），不散在两处各写一遍；
- * ② 分支步自己不更新它——它不是技能步，没做成的事由臂里的那一步去说
+ * **原语真的跑**：走到 `step: 'primitive'` 就**只叫那一个原语**（`runPrimitiveCommand`）——
+ * 目录里有些原子动作没有技能包装，这一步是它们的直路；它照报计划步事件（`running` → `done`/`failed`，
+ * 带 `path`），原语级事件也照常报（带着所属顶层步与 task_id）。
+ *
+ * **`last.success` 的语义**：最近一次**真正执行过的那一步**（技能步或原语步）成没成。四个要点：
+ * ① **成功的记 `true`，被容忍失败的记 `false`**——两种步都写在同一处
+ *    （`settle`，就一行 `lastSuccess = ok`），不散在两处各写一遍；
+ * ② 分支步自己不更新它——它不是一次执行，没做成的事由臂里的那一步去说
  *    （分支**走完**也不算「成」：`if` 自己不是一次执行）；
  * ③ **`wait` 步也不更新它**——它什么也没「成」也没「败」，所以它后面那个 `if` 看到的
- *    仍是 `wait` **之前**那个技能步的结果（`plan.test.ts` 里钉着这一条）；
+ *    仍是 `wait` **之前**那一步的结果（`plan.test.ts` 里钉着这一条）；
  * ④ **计划第一步之前没有上一步，那时算 `true`**（什么都还没失败），于是「第一步就是
  *    `if`」的计划按条件成立那条路走。这个初值在 `plan.test.ts` 里钉着。
  *
@@ -300,42 +318,57 @@ export async function runPlan(
 		return { ok: true, completed: true };
 	};
 
-	/** 跑一步：技能步下发一次能力调用，分支步判条件选一条臂再往下递归。 */
+	/** 跑一步：技能步下发一次能力调用，原语步直接叫一个原语，分支步判条件选一条臂再往下递归。 */
 	const runStep = async (step: SkillPlanStep, path: string, topIndex: number): Promise<StepResult> => {
 		const taskId = makeTaskId(topIndex);
 		const header = { kind: 'plan-step', index: topIndex, total, path, step, taskId } as const;
 
-		if (step.step === 'skill') {
-			/*
-			 * 这一步的失败处置（`onFailure`）。三种结局都从**这一处**出去：
-			 * - 成了：`last.success` 记 `true`，算完成；
-			 * - 没成且 `'continue'`：`last.success` 记 **`false`**、计划接着往下走，但**不算完成**
-			 *   ——这一步照报 `failed`（不粉饰成 done），`completed` 也不把它数进去；
-			 * - 没成且 `'stop'`（含缺省）：把原因带出去，失败即停（现在的行为一个字不变）。
-			 *
-			 * `lastSuccess` 只在这里写：成功的技能步与「失败但被容忍」的技能步是同一个赋值，
-			 * 所以「上一步成没成」永远等于**最近一次真正执行过的技能步**的结局。
-			 */
-			const onFailure = step.onFailure;
-			const settle = (ok: boolean, reason: string): StepResult => {
-				lastSuccess = ok;
-				options.onPlanStep?.({ ...header, arm: null, state: ok ? 'done' : 'failed' });
-				if (ok) return { ok: true, completed: true };
-				if (onFailure === 'continue') return { ok: true, completed: false };
-				return { ok: false, reason };
-			};
+		/*
+		 * 「会成会败的一步」的收尾（**技能步与原语步共用这一条路**）。
+		 *
+		 * 三种结局都从这一处出去：
+		 * - 成了：`last.success` 记 `true`，算完成；
+		 * - 没成且 `'continue'`：`last.success` 记 **`false`**、计划接着往下走，但**不算完成**
+		 *   ——这一步照报 `failed`（不粉饰成 done），`completed` 也不把它数进去；
+		 * - 没成且 `'stop'`（含缺省）：把原因带出去，失败即停（现在的行为一个字不变）。
+		 *
+		 * 判据只有这一份：技能步与原语步都是「叫一个东西去做事」，失败处置的待遇必须一模一样——
+		 * 两处各写一遍，早晚会有一处被改松（变异验证里就是这么验的）。
+		 * `lastSuccess` 也只在写：两种步的结局是同一个赋值，所以「上一步成没成」永远等于
+		 * **最近一次真正执行过的那一步**（技能步或原语步）的结局。
+		 */
+		const settle = (onFailure: SkillPlanOnFailure | undefined, ok: boolean, reason: string): StepResult => {
+			lastSuccess = ok;
+			options.onPlanStep?.({ ...header, arm: null, state: ok ? 'done' : 'failed' });
+			if (ok) return { ok: true, completed: true };
+			if (onFailure === 'continue') return { ok: true, completed: false };
+			return { ok: false, reason };
+		};
 
+		if (step.step === 'skill' || step.step === 'primitive') {
 			options.onPlanStep?.({ ...header, arm: null, state: 'running' });
+
+			if (step.step === 'primitive') {
+				/*
+				 * 原语步：直接叫那一个原语（参数按目录声明由执行侧校验，事件照常报）。
+				 * 它**不经过目录里的能力**——目录里有些原子动作压根没有技能包装
+				 * （`open_gripper` / `close_gripper` 这种），这一步就是给它们留的直路。
+				 * 失败原因点名的是原语名（那是设备真收到的东西）。
+				 */
+				// 换一步就重设上下文：这一步的原语事件因此带上「所属顶层步」与 task_id
+				runner.setPlanContext?.({ planIndex: topIndex, taskId });
+				const outcome = await runner.runPrimitiveCommand(step.primitive, step.params ?? {});
+				return settle(step.onFailure, outcome.ok, atPath(path, outcome.reason ?? `${step.primitive} 未完成`, step.primitive));
+			}
 
 			// 判别在前：目录里没有这个技能就不假装调用过
 			const capability = catalog.capabilities.find((c) => c.capabilityRef === step.skill);
-			if (!capability) return settle(false, atPath(path, `目录里没有技能 ${step.skill}`));
+			if (!capability) return settle(step.onFailure, false, atPath(path, `目录里没有技能 ${step.skill}`));
 
-			const params: Record<string, unknown> = step.params ?? {};
 			// 换一步就重设上下文：这一步的原语事件因此带上「所属顶层步」与 task_id
 			runner.setPlanContext?.({ planIndex: topIndex, taskId });
-			const outcome = await runner.run(capability, params);
-			return settle(outcome.ok, atPath(path, outcome.reason ?? `${step.skill} 未完成`, step.skill));
+			const outcome = await runner.run(capability, step.params ?? {});
+			return settle(step.onFailure, outcome.ok, atPath(path, outcome.reason ?? `${step.skill} 未完成`, step.skill));
 		}
 
 		/*

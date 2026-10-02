@@ -12,8 +12,8 @@ import { describe, expect, it } from 'vitest';
 import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import type { WorkflowDeclaration, WorkflowNode } from '@codecanvas/contracts';
 import { findTaskFormat } from '@codecanvas/task-import';
-import { BRANCH_PLAN_JSON, NESTED_NO_ELSE_PLAN_JSON } from '../flow/__fixtures__/branch-plan';
-import { nodeAtPlanPath, planStructureOf } from './plan-structure';
+import { BRANCH_PLAN_JSON, MIXED_STEPS_PLAN_JSON, NESTED_NO_ELSE_PLAN_JSON } from '../flow/__fixtures__/branch-plan';
+import { isPlanLayerNode, isPrimitiveNode, nodeAtPlanPath, planStructureOf } from './plan-structure';
 
 /** 走真实导入路径：JSON → 声明（技能名照目录判，假名字在这儿就会被拒）。 */
 const parse = (json: string): WorkflowDeclaration => {
@@ -123,5 +123,49 @@ describe('执行路径 → 节点 · 素材用的是真目录', () => {
 		);
 		expect(skills.length).toBeGreaterThan(0);
 		for (const skill of skills) expect(refs).toContain(skill);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 原语步（`task.primitive`）：执行路径认得出它，它也是**计划层**节点
+// ---------------------------------------------------------------------------
+
+/** 「看一眼 → 直接张开夹爪 → 等两秒 → 分叉 → 往前挪一点」：四类步混排。 */
+const MIXED = parse(MIXED_STEPS_PLAN_JSON);
+
+describe('执行路径 → 节点 · 原语步与计划层判据', () => {
+	it('原语步在路径里就是一个普通位置：`1` 是它自己，臂里的原语是 `3.then.0`', () => {
+		expectStep(MIXED, '0', '1. 观察桌面');
+		expectStep(MIXED, '1', '2. 张开夹爪');
+		expectStep(MIXED, '2', '3. 等待 2 秒');
+		expectStep(MIXED, '3', '4. 分支');
+		expectStep(MIXED, '3.then.0', '5. 闭合夹爪');
+		expectStep(MIXED, '3.else.0', '6. 打招呼');
+		expectStep(MIXED, '4', '7. 往前一点');
+	});
+
+	it('原语步是**计划层**节点（与分支、等待一样没有实现可看），技能步不是', () => {
+		const primitive = stepNamed(MIXED, '2. 张开夹爪');
+		const skill = stepNamed(MIXED, '1. 观察桌面');
+		expect(isPrimitiveNode(primitive)).toBe(true);
+		expect(isPlanLayerNode(primitive)).toBe(true);
+		expect(isPlanLayerNode(skill)).toBe(false);
+		// 臂里的原语步同样是计划层节点（判据只看节点类型，不看它在哪一格）
+		expect(isPlanLayerNode(stepNamed(MIXED, '5. 闭合夹爪'))).toBe(true);
+	});
+
+	it('原语步没有臂：路径里给它接一段臂就是悬空，不猜一个位置', () => {
+		expect(nodeAtPlanPath(MIXED, '1.then.0')).toBeNull();
+		expect(nodeAtPlanPath(MIXED, '1.then')).toBeNull();
+	});
+
+	it('素材里的原语名都在真目录里（没有编出来的假原语）', () => {
+		const refs = new Set(ROBOFRAME_SO101_CATALOG.primitives.map((primitive) => primitive.primitiveRef));
+		const used = MIXED.nodes.flatMap((node) => {
+			const ref = node.parameters['primitive'];
+			return typeof ref === 'string' ? [ref] : [];
+		});
+		expect(used.length).toBeGreaterThan(0);
+		for (const ref of used) expect(refs).toContain(ref);
 	});
 });
