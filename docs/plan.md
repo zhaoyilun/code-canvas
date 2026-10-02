@@ -31,18 +31,28 @@
 
 ```text
 codecanvas/
-  apps/studio/src/
-    shell/                    # 五 tab、三栏、底部流水线、主题变量
-    views/
-      blockly/  flow/  code-panel/  mapping/
+  apps/
+    studio/src/
+      shell/                  # 品牌条、入口带（选设备 + 一句话 + 生成）、设备表、主题变量
+      state/                  # 唯一真相：声明 + 选中项，写回走两道闸
+      views/
+        flow/                 # 中栏：按声明的图推结构，分支画成两条臂
+        blockly/              # 左栏：唯一可写；实现树 / 计划层的只读视图
+        code-panel/           # 右栏下：编译产物 + 计划层代码
+        right/                # 右栏：虚拟设备（挂 3D）+ 代码 / 任务 JSON 两个 tab
+        mapping/  shared/     # 跨栏连线；三个视图共用的计划结构判据
+    robot3d/                  # RoboFrame 目录的 3D 执行器（独立应用，也导出挂载入口）
   packages/
-    contracts/                # 任务协议 schema + workflow 声明 + 稳定 ID + 诊断
-    task-import/              # 任务 JSON → workflow 声明
+    contracts/                # 任务协议、workflow 声明、技能计划、能力目录、诊断
+    task-import/              # 任务 JSON → 声明（并按设备格式分派）
+    capabilities/             # 能力目录：roboframe/ 由 tools/ 从上游生成
     blockly-toolkit/          # 积木定义（由校验器推导）、编译回声明、主题、映射表
     code-render/              # 声明 → 代码面板文本（规则由校验器推导）
-  test/{fixtures,e2e}/
+  tools/import-roboframe/     # 从上游 RoboFrame 仓库生成能力目录
   docs/
 ```
+
+（`test/` 那个空壳已经删了：建仓库时留的位，没人用过。）
 
 三条布局纪律：
 
