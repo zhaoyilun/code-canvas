@@ -1,54 +1,82 @@
 <script setup lang="ts">
 /**
- * 上层输入带：品牌条与三栏之间那一条。
+ * 上层入口带：品牌条与三栏之间那一条，**程序的入口**。
  *
- * 左半是本阶段**唯一的真实输入口**——任务 JSON。三条路都汇到同一个函数：
- * 粘贴、拖入、从接口取（`fetch` 读到文本后同样交给 `useStudioDocument().loadTaskJson`）。
- * 成功才换真相（三个视图跟着刷新），失败只把诊断摆在输入区下方，不弹窗、不 alert、
- * 不动已有的声明。
+ * 入口是两件事：**选设备**（给谁下指令）+ **说一句话**（干什么）。点「生成」把这两样
+ * POST 给可配置的生成接口，拿回来的任务 JSON 交给 `useStudioDocument().loadTaskJson`——
+ * 跟粘贴、拖入走的是**同一个函数**，没有第二条校验路径。
  *
- * 「生成任务」那一步不归这一层：上游生成器负责「自然语言 → 任务 JSON」（spec §0）。
- * 这里只把**已经生成好的**那份取回来——所以接口地址是个普通入口，不是生成器。
- * 取回来的原文会落进输入框，拿到的是什么看得见，改完还能照常「转换」。
+ * 三条设计决定：
  *
- * 右半的转译链不是装饰：获取 / 转换进行中它逐段点亮，成功后全亮一小会儿再回常态
- * 并留下「已完成」标记，失败则停在出错的那一段（染成危险色）。
+ * 1. **入口矮。** 上一版在这里摆一个巨大的任务 JSON 文本框 + 接口地址 + 获取按钮，
+ *    一条「入口」占掉小半屏，把工作区挤掉了。现在常态只有一行（下拉 + 一句话 + 生成），
+ *    高度由 `--cc-entryband-h` 钉住。JSON 本身不在这里编辑——它有自己的家（右栏的任务 JSON tab）。
+ * 2. **两样次要入口收起来，但不删。** 接口地址是联调用的（填一次记进 localStorage），
+ *    手工灌 JSON 是接口还没就绪时的兜底——两者都折进小按钮，点开才占地方，且都不再占主位。
+ * 3. **失败只出诊断。** 网络、HTTP 非 2xx、响应不是 JSON、JSON 不合协议，四类都摆在入口下方，
+ *    不弹窗、不动已有的声明（真相一个字节都不改）。
+ *
+ * 右半的转译链不是装饰：生成进行中它逐段点亮，成功后全亮一小会儿再回常态并留下「已完成」标记，
+ * 失败则停在出错的那一段（染成危险色）。
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import type { Diagnostic } from '@codecanvas/contracts';
 import { useStudioDocument } from '../state/document';
-import { SAMPLE_TASK_JSON } from '../state/sample-task';
+import { useStudioDevices } from './devices';
+import { DEFAULT_LLM_ENDPOINT, DEFAULT_LLM_MODEL } from './llm-json';
+import { generateTask, generationDiagnostic } from './task-generation';
 
 const doc = useStudioDocument();
+const devices = useStudioDevices();
+
+/** 设备下拉绑的就是共享的选中设备——右栏的虚拟设备那块读的是同一个数。 */
+const catalogRef = computed<string>({
+	get: () => devices.selectedCatalogRef.value,
+	set: (value) => {
+		devices.setSelectedCatalog(value);
+	},
+});
 
 /**
  * 接口地址记在本地。联调时那个地址要反复填，刷新一次就没了最烦人；
  * 但它不是真相的一部分，所以只进 localStorage，不进 store。
+ *
+ * 默认 `/llm` 是**同源相对路径**：dev server 把它反代到 LLM 服务并在服务端注入 key，
+ * 所以浏览器里从来没有密钥。联调时改成设备组的基地址即可——见 `task-generation.ts`。
  */
 const ENDPOINT_STORAGE_KEY = 'codecanvas.task-endpoint';
-const DEFAULT_ENDPOINT = 'http://localhost:8000/task';
+const DEFAULT_ENDPOINT = DEFAULT_LLM_ENDPOINT;
+const INSTRUCTION_PLACEHOLDER = '前进1米，避障后停止';
 
 const readEndpoint = (): string => {
 	try {
 		const stored = window.localStorage.getItem(ENDPOINT_STORAGE_KEY);
 		return stored === null || stored.trim() === '' ? DEFAULT_ENDPOINT : stored;
 	} catch {
-		// 隐私模式下 localStorage 会直接抛。地址记不住是小事，不该把整条输入带弄挂。
+		// 隐私模式下 localStorage 会直接抛。地址记不住是小事，不该把整条入口弄挂。
 		return DEFAULT_ENDPOINT;
 	}
 };
 
-/** 预填示例任务：输入带一上来就是可转换的，改一个数字就能试。 */
-const text = ref(SAMPLE_TASK_JSON);
+/** 用户这一句话。它只活在输入框里——生成之后真相里没有「原始输入」这回事。 */
+const instruction = ref('');
 const endpoint = ref(readEndpoint());
+/** 接口设置与粘贴兜底：折叠着，点开才占地方。 */
+const showEndpoint = ref(false);
+const showPaste = ref(false);
+const pasteText = ref('');
 const status = ref<'idle' | 'ok' | 'failed'>('idle');
+/** 这一份是怎么进来的：生成接口给的，还是手工灌进来的（成功那句话要说得准）。 */
+const lastPath = ref<'generate' | 'paste'>('generate');
+/** 失败时说清坏在哪一步：传输 / 协议 / 手工转换。 */
+const failureLabel = ref('生成失败');
 const dragging = ref(false);
 const sourceName = ref('');
-/** 正在取 / 正在点亮链路。这期间「获取」按钮禁用，一次只跑一条。 */
+/** 正在生成 / 正在点亮链路。这期间「生成」按钮禁用，一次只跑一条。 */
 const busy = ref(false);
 
 /**
- * 传输层自己那几条失败（网络、HTTP 非 2xx）。
+ * 传输层自己那几条失败（网络、HTTP 非 2xx、响应形状不对）。
  *
  * 非 null 时它就是当前唯一该显示的一份——**要盖住**上一次转换留下的诊断，
  * 否则「接口没连上」旁边还挂着前一次粘贴报的错，读的人会以为是同一件事。
@@ -60,8 +88,10 @@ const diagnostics = computed<readonly Diagnostic[]>(
 	() => transportDiagnostics.value ?? doc.diagnostics.value,
 );
 const nodeCount = computed(() => doc.nodes.value.length);
-/** 失败的是哪一步：传输层失败说「获取」，其余说「转换」。 */
-const failureLabel = computed(() => (transportDiagnostics.value === null ? '转换失败' : '获取失败'));
+/** 成功时的终态字：生成接口给的 vs 手工灌的，不能混着说。 */
+const okLabel = computed(() => (lastPath.value === 'generate' ? '已生成' : '已导入'));
+/** 不能生成：没写指令，或没有设备可选。 */
+const generateDisabled = computed(() => busy.value || instruction.value.trim() === '' || catalogRef.value === '');
 
 /** 链路四段：任务 JSON → 积木 / 流程 / 代码。 */
 const CHAIN_STEPS = 4;
@@ -82,8 +112,8 @@ const chainNote = ref('');
 
 /**
  * 一次只跑一条。按钮在跑的时候是禁用的，这里再兜一道：
- * 任何新动作（获取 / 转换 / 清空）都会把 runId 推进一格，在途的那条自己会退出——
- * 否则「获取中」的回调会把用户后来手动转出来的结果覆盖掉。
+ * 任何新动作（生成 / 转换 / 清空）都会把 runId 推进一格，在途的那条自己会退出——
+ * 否则「生成中」的回调会把用户后来手动转出来的结果覆盖掉。
  */
 let runId = 0;
 let timers: ReturnType<typeof setTimeout>[] = [];
@@ -103,7 +133,7 @@ watch(endpoint, (value) => {
 	try {
 		window.localStorage.setItem(ENDPOINT_STORAGE_KEY, value);
 	} catch {
-		// 存不下就存不下：地址留不住不影响这一次获取。
+		// 存不下就存不下：地址留不住不影响这一次生成。
 	}
 });
 
@@ -119,8 +149,6 @@ const PARSE_ERROR_CODE = 'task_import.json_parse_error';
 const failStage = (): number =>
 	doc.diagnostics.value.some((d) => d.code === PARSE_ERROR_CODE) ? 1 : 2;
 
-const reason = (error: unknown): string => (error instanceof Error ? error.message : String(error));
-
 const resetChain = (): void => {
 	chainPhase.value = 'idle';
 	chainStep.value = 0;
@@ -134,7 +162,7 @@ const chainClass = (index: number): Record<string, boolean> => ({
 	'is-failed': chainFailAt.value === index,
 });
 
-/** 换真相那一步。三条输入路都走它，失败时真相一个字节都不动。 */
+/** 换真相那一步。生成与粘贴两条路都走它，失败时真相一个字节都不动。 */
 const loadInto = (body: string): boolean => {
 	const converted = doc.loadTaskJson(body);
 	return settleChain(converted, converted ? 0 : failStage());
@@ -174,85 +202,123 @@ const settleChain = (converted: boolean, failAt: number): boolean => {
 function convert(): void {
 	runId += 1;
 	transportDiagnostics.value = null;
+	failureLabel.value = '转换失败';
+	lastPath.value = 'paste';
 	chainFailAt.value = 0;
-	status.value = loadInto(text.value) ? 'ok' : 'failed';
+	status.value = loadInto(pasteText.value) ? 'ok' : 'failed';
 }
 
 function clear(): void {
 	runId += 1;
-	text.value = '';
+	pasteText.value = '';
 	sourceName.value = '';
 	status.value = 'idle';
 	transportDiagnostics.value = null;
 	resetChain();
 }
 
-/** 从接口取。只有这一条路真正花时间，链路就在这段时间里亮着。 */
-async function fetchTask(): Promise<void> {
+/**
+ * 生成：把 `{ catalogRef, instruction }`（连同 LLM 那几个字段）POST 给生成接口，拿回任务 JSON。
+ *
+ * 只有这一条路真正花时间，链路就在这段时间里亮着。**校验不在这一层**：
+ * `generateTask` 拿到文本后交给 `accept`，而 `accept` 就是 `doc.loadTaskJson`——
+ * 唯一那条导入路。它说不行就再试一次（默认两次尝试），试完还不行就把诊断摆在入口下方。
+ */
+async function generate(): Promise<void> {
 	const url = endpoint.value.trim();
-	if (url === '' || busy.value) return;
+	const text = instruction.value.trim();
+	if (url === '' || text === '' || busy.value) return;
 
 	const mine = (runId += 1);
 	busy.value = true;
 	transportDiagnostics.value = null;
 	status.value = 'idle';
+	failureLabel.value = '生成失败';
+	lastPath.value = 'generate';
 	chainPhase.value = 'running';
 	chainStep.value = 1;
 	chainFailAt.value = 0;
-	chainNote.value = '获取中…';
+	chainNote.value = '生成中…';
 
 	/*
 	 * 整条流程包在 try 里，`busy` 在 finally 里无条件放下。
 	 * 中途被别的动作打断（runId 变了）时下面几个 `return` 就直接走掉——
-	 * 要是各自负责收尾，漏一条「获取」按钮就永远禁用了。
+	 * 要是各自负责收尾，漏一条「生成」按钮就永远禁用了。
 	 * 这里无条件清是安全的：只有本函数会把它立起来，而它开头就被 `busy` 挡着。
 	 */
 	try {
-		let body: string;
-		try {
-			const response = await fetch(url, { headers: { accept: 'application/json' } });
-			// 非 2xx 也归到「网络失败」这一类：用户看到的都是「这个地址没取回任务 JSON」。
-			if (!response.ok) throw new Error(`HTTP ${String(response.status)} ${response.statusText}`);
-			body = await response.text();
-		} catch (error) {
-			if (runId !== mine) return;
-			transportDiagnostics.value = [
-				{
-					code: 'task_input.fetch_failed',
-					severity: 'error',
-					message: `接口没取回任务 JSON：${reason(error)}`,
-					ref: url,
-				},
-			];
-			chainStep.value = 1;
-			chainFailAt.value = 1;
-			chainPhase.value = 'failed';
-			chainNote.value = '获取失败 · 停在第 1 段';
+		const result = await generateTask({
+			endpoint: url,
+			catalogRef: catalogRef.value,
+			instruction: text,
+			/*
+			 * 唯一那条导入路：成功才换真相，失败只留诊断。
+			 *
+			 * 中途被打断（用户又点了一次、或手工灌了一份）时这里直接当「成了」收场——
+			 * 下面的 runId 检查会把整条流程丢掉，于是**在途的那一份进不了真相**，
+			 * 界面一个字节都不动（这一手不能省：`loadTaskJson` 一跑就换真相了）。
+			 */
+			accept: (body) => {
+				if (runId !== mine) return true;
+				return doc.loadTaskJson(body);
+			},
+			onAttempt: (attempt, total) => {
+				if (runId !== mine) return;
+				chainNote.value = total > 1 && attempt > 1 ? `生成中… 第 ${attempt}/${total} 次` : '生成中…';
+			},
+		});
+
+		if (runId !== mine) return;
+
+		// 拿到什么就让人看得见：原文落进兜底框（点开「直接粘贴 JSON」就是它）。
+		if (result.ok || result.text !== null) {
+			pasteText.value = result.text ?? '';
+			sourceName.value = '';
+		}
+
+		if (!result.ok) {
+			if (result.kind === 'rejected') {
+				// 取回来了，但协议不过：诊断由 loadTaskJson 给，红灯停在没过的那一段。
+				failureLabel.value = '生成结果不合协议';
+				const failAt = failStage();
+				chainStep.value = failAt;
+				chainFailAt.value = failAt;
+				chainPhase.value = 'failed';
+				chainNote.value = `失败 · 停在第 ${String(failAt)} 段`;
+			} else {
+				// 传输 / 响应形状坏掉：这一层的诊断（含重试次数），红灯停在第 1 段。
+				failureLabel.value = '生成失败';
+				transportDiagnostics.value = [
+					generationDiagnostic(`${result.message}（已尝试 ${String(result.attempts)} 次）`, url),
+				];
+				chainStep.value = 1;
+				chainFailAt.value = 1;
+				chainPhase.value = 'failed';
+				chainNote.value = '生成失败 · 停在第 1 段';
+			}
 			status.value = 'failed';
 			return;
 		}
 
-		if (runId !== mine) return;
-
-		// 取回来的原文先落进输入框：拿到的是什么，得让人看得见，也让人能接着改。
-		text.value = body;
-		sourceName.value = '';
-
-		// 转换是同步的，先把结论拿到手，再让链路把「积木 / 流程 / 代码」逐段点亮到该停的地方。
-		const converted = doc.loadTaskJson(body);
-		const failAt = converted ? 0 : failStage();
-		const lastLit = converted ? CHAIN_STEPS : failAt;
-
-		for (let index = 2; index <= lastLit; index += 1) {
+		// 转换是同步的，先把结论拿到手，再让链路把「积木 / 流程 / 代码」逐段点亮到该满的地方。
+		for (let index = 2; index <= CHAIN_STEPS; index += 1) {
 			chainStep.value = index;
 			await wait(CHAIN_STEP_MS);
 			if (runId !== mine) return;
 		}
 
-		status.value = settleChain(converted, failAt) ? 'ok' : 'failed';
+		status.value = settleChain(true, 0) ? 'ok' : 'failed';
 	} finally {
 		busy.value = false;
 	}
+}
+
+function toggleEndpoint(): void {
+	showEndpoint.value = !showEndpoint.value;
+}
+
+function togglePaste(): void {
+	showPaste.value = !showPaste.value;
 }
 
 // `.prevent` 是必须的：不拦 dragover 浏览器就把文件当导航打开了。
@@ -268,8 +334,9 @@ async function onDrop(event: DragEvent): Promise<void> {
 	dragging.value = false;
 	const file = event.dataTransfer?.files?.[0];
 	if (file === undefined) return;
-	// 读进来先落到输入框，再走和「转换」按钮同一个函数——拖入只是另一种粘贴。
-	text.value = await file.text();
+	// 读进来先落到兜底框，再走和「转换」按钮同一个函数——拖入只是另一种粘贴。
+	showPaste.value = true;
+	pasteText.value = await file.text();
 	sourceName.value = file.name;
 	convert();
 }
@@ -284,7 +351,7 @@ const location = (diagnostic: Diagnostic): string => {
 
 <template>
 	<section
-		class="input-band"
+		class="entry-band"
 		:class="{ 'is-dragging': dragging }"
 		data-testid="task-input-band"
 		@dragover.prevent="onDragOver"
@@ -292,66 +359,123 @@ const location = (diagnostic: Diagnostic): string => {
 		@drop.prevent="onDrop"
 	>
 		<div class="band-row">
-			<div class="intake">
-				<header class="intake-head">
-					<span class="intake-title">任务 JSON</span>
-					<span class="intake-hint">粘贴、拖入 .json，或从接口取</span>
-					<span class="intake-meta">
+			<!-- 入口本体：设备 + 一句话 + 生成。常态就这一行。 -->
+			<div class="entry">
+				<header class="entry-head">
+					<span class="entry-title">程序入口</span>
+					<span class="entry-hint">选设备 → 说一句话 → 生成</span>
+					<span class="entry-meta">
 						<!-- 顺利时不占第二行：带子高度由变量钉住，失败或带诊断才往下长 -->
 						<span
 							v-if="status === 'ok' && diagnostics.length === 0"
 							class="feedback-state ok"
 							data-testid="task-input-status"
 						>
-							已转换 · {{ nodeCount }} 个节点
+							{{ okLabel }} · {{ nodeCount }} 个节点
 						</span>
-						<span v-if="sourceName !== ''" class="intake-file" data-testid="task-input-file">
+						<span v-if="sourceName !== ''" class="entry-file" data-testid="task-input-file">
 							{{ sourceName }}
 						</span>
 					</span>
 				</header>
 
-				<!--
-					接口入口：地址 + 获取。它跟粘贴/拖入是并列的第三条路，
-					不是替代——接口不可用时那两条还得在，所以它占自己一行，不挤进按钮组。
-				-->
-				<div class="intake-fetch">
-					<span class="fetch-label">接口地址</span>
-					<input
-						v-model="endpoint"
-						type="url"
-						class="fetch-url"
-						data-testid="task-endpoint-input"
-						aria-label="任务 JSON 接口地址"
-						spellcheck="false"
-						placeholder="http://localhost:8000/task"
-					/>
+				<div class="entry-row">
+					<label class="field field-device">
+						<span class="field-label">设备</span>
+						<select
+							v-model="catalogRef"
+							class="field-select"
+							data-testid="device-select"
+							aria-label="设备目录"
+						>
+							<option v-for="catalog in devices.catalogs" :key="catalog.catalogRef" :value="catalog.catalogRef">
+								{{ catalog.displayName }}
+							</option>
+						</select>
+					</label>
+
+					<label class="field field-instruction">
+						<span class="field-label">指令</span>
+						<input
+							v-model="instruction"
+							type="text"
+							class="field-text"
+							data-testid="instruction-input"
+							aria-label="一句话指令"
+							spellcheck="false"
+							:placeholder="INSTRUCTION_PLACEHOLDER"
+							@keydown.enter.prevent="generate"
+						/>
+					</label>
+
 					<button
 						type="button"
-						class="btn btn-fetch"
-						data-testid="task-fetch"
-						:disabled="busy || endpoint.trim() === ''"
-						@click="fetchTask"
+						class="btn btn-generate"
+						data-testid="task-generate"
+						:disabled="generateDisabled"
+						@click="generate"
 					>
-						{{ busy ? '获取中…' : '获取' }}
+						{{ busy ? '生成中…' : '生成' }}
 					</button>
 				</div>
 
-				<div class="intake-row">
+				<!-- 次要入口（一）：接口设置。折叠着，填一次记进 localStorage。 -->
+				<div class="entry-toggles">
+					<button
+						type="button"
+						class="link-btn"
+						data-testid="task-endpoint-toggle"
+						:aria-expanded="showEndpoint"
+						@click="toggleEndpoint"
+					>
+						接口设置
+					</button>
+					<span class="toggle-sep" aria-hidden="true">·</span>
+					<button
+						type="button"
+						class="link-btn"
+						data-testid="task-paste-toggle"
+						:aria-expanded="showPaste"
+						@click="togglePaste"
+					>
+						直接粘贴 JSON
+					</button>
+					<span class="toggle-note">接口联调前，粘贴这条路照样能把任务灌进来</span>
+				</div>
+
+				<div v-if="showEndpoint" class="settings-row" data-testid="task-endpoint-row">
+					<label class="field field-endpoint">
+						<span class="field-label">生成接口</span>
+						<input
+							v-model="endpoint"
+							type="url"
+							class="field-text field-mono"
+							data-testid="task-endpoint-input"
+							aria-label="生成接口地址"
+							spellcheck="false"
+							:placeholder="DEFAULT_ENDPOINT"
+						/>
+					</label>
+					<span class="settings-note">
+						POST {{ endpoint.trim() || DEFAULT_ENDPOINT }}/chat/completions · model {{ DEFAULT_LLM_MODEL }}
+					</span>
+				</div>
+
+				<div v-if="showPaste" class="paste-row" data-testid="task-paste-row">
 					<textarea
-						v-model="text"
-						class="intake-text"
+						v-model="pasteText"
+						class="paste-text"
 						data-testid="task-json-input"
 						aria-label="任务 JSON"
 						spellcheck="false"
 						placeholder='{ "schema_version": "1.0", "task_id": "task-1", "steps": [ ... ] }'
 					></textarea>
-					<div class="intake-actions">
+					<div class="paste-actions">
 						<button
 							type="button"
 							class="btn btn-convert"
 							data-testid="task-convert"
-							:disabled="text.trim() === ''"
+							:disabled="pasteText.trim() === ''"
 							@click="convert"
 						>
 							转换
@@ -387,7 +511,7 @@ const location = (diagnostic: Diagnostic): string => {
 					<li class="chain-slash" aria-hidden="true">/</li>
 					<li class="chain-node" :class="chainClass(4)">代码</li>
 				</ol>
-				<span class="chain-note">上游生成器负责「自然语言 → 任务 JSON」；这里只把它取回来</span>
+				<span class="chain-note">生成接口负责「一句话 → 任务 JSON」；这里只把它取回来</span>
 			</div>
 		</div>
 
@@ -400,7 +524,7 @@ const location = (diagnostic: Diagnostic): string => {
 				<span class="feedback-state" :class="status" data-testid="task-input-status">
 					{{
 						status === 'ok'
-							? `已转换 · ${nodeCount} 个节点`
+							? `${okLabel} · ${nodeCount} 个节点`
 							: `${failureLabel} · 声明未改动，三个视图保持原样`
 					}}
 				</span>
@@ -428,12 +552,16 @@ const location = (diagnostic: Diagnostic): string => {
 </template>
 
 <style scoped>
-.input-band {
+/*
+ * 入口带：常态只有一行控制 + 一行折起来的小开关，高度由 --cc-entryband-h 兜住。
+ * 折起来的两块（接口设置 / 粘贴兜底）点开时带子自然长高——那是用户自己要的，不是常态。
+ */
+.entry-band {
 	display: flex;
 	flex-direction: column;
 	gap: var(--cc-space-2);
 	flex: 0 0 auto;
-	min-height: var(--cc-inputband-h);
+	min-height: var(--cc-entryband-h);
 	padding: var(--cc-space-2) var(--cc-space-3);
 	background: var(--cc-surface);
 	border-bottom: 1px solid var(--cc-line);
@@ -443,31 +571,17 @@ const location = (diagnostic: Diagnostic): string => {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;
 	gap: var(--cc-space-4);
-	align-items: stretch;
-	/*
-	 * 行高由变量钉死（减掉带子自己的内边距与下边框），带子总高才正好是 --cc-inputband-h。
-	 * 不钉的话高度会被内容撑开：转译链是三层，输入区跟着长，一条「输入带」就厚成一块面板。
-	 * 诊断出现时带子靠 min-height 自然长高，行高不受影响。
-	 *
-	 * 矮窗下 --cc-inputband-h 自己会变薄（它是 clamp(150px, 37vh, 340px)），这里跟着退——
-	 * 三栏的可用高度就是这么让出来的。
-	 */
-	height: calc(var(--cc-inputband-h) - var(--cc-space-2) * 2 - 1px);
-	/* 轨道钉成 1fr：不然行高会跟着子项的 min-content 长（输入区那 60px 的文本框说了算），
-	   行比带子还高，内容就压到下面的画布上去了。 */
-	grid-template-rows: minmax(0, 1fr);
+	align-items: start;
 	min-height: 0;
 }
 
-/* 输入区：虚线框，明示「这里可以拖东西进来」 */
-.intake {
+/* 入口本体：虚线框，明示「这里可以拖东西进来」。 */
+.entry {
 	display: flex;
 	flex-direction: column;
 	gap: var(--cc-space-1);
 	min-width: 0;
 	padding: var(--cc-space-2);
-	min-height: 0;
-	overflow: hidden;
 	background: var(--cc-surface-sunken);
 	border: 1px dashed var(--cc-line-strong);
 	border-radius: var(--cc-radius);
@@ -476,29 +590,28 @@ const location = (diagnostic: Diagnostic): string => {
 		background 0.15s ease;
 }
 
-.input-band.is-dragging .intake {
+.entry-band.is-dragging .entry {
 	border-color: var(--cc-accent);
 	background: var(--cc-accent-veil);
 }
 
-.intake-head {
+.entry-head {
 	display: flex;
 	align-items: baseline;
 	gap: var(--cc-space-2);
 	flex: 0 0 auto;
 	min-width: 0;
-	/* 钉死行高：默认的 normal 会按继承来的 13px 字号算，比这一行的 11px 字高出一截，
-	   白吃掉输入框近一行的高度——这一带每一像素都该给文本框。 */
+	/* 钉死行高：默认的 normal 会按继承来的 13px 字号算，比这一行的 11px 字高出一截。 */
 	line-height: 1.2;
 }
 
-.intake-title {
+.entry-title {
 	font-size: var(--cc-fs-sm);
 	font-weight: 600;
 	color: var(--cc-text);
 }
 
-.intake-hint {
+.entry-hint {
 	min-width: 0;
 	overflow: hidden;
 	font-size: var(--cc-fs-xs);
@@ -507,7 +620,7 @@ const location = (diagnostic: Diagnostic): string => {
 	white-space: nowrap;
 }
 
-.intake-meta {
+.entry-meta {
 	display: flex;
 	align-items: baseline;
 	gap: var(--cc-space-2);
@@ -515,7 +628,7 @@ const location = (diagnostic: Diagnostic): string => {
 	flex: 0 0 auto;
 }
 
-.intake-file {
+.entry-file {
 	font-family: var(--cc-font-mono);
 	font-size: var(--cc-fs-xs);
 	color: var(--cc-accent);
@@ -525,62 +638,136 @@ const location = (diagnostic: Diagnostic): string => {
 	white-space: nowrap;
 }
 
-/* 接口一行：地址吃掉剩下的宽，获取按钮贴在右端，跟下面「转换 / 清空」同一列对齐观感 */
-.intake-fetch {
+/*
+ * 入口那一行：设备下拉按内容宽（最宽 260px），指令吃掉剩下的宽，生成按钮贴右端。
+ * 一行放得下就是这一行；放不下时窄窗媒体查询会把它折成两行。
+ */
+.entry-row {
 	display: grid;
-	grid-template-columns: auto minmax(0, 1fr) auto;
+	grid-template-columns: minmax(0, 260px) minmax(0, 1fr) auto;
 	align-items: center;
 	gap: var(--cc-space-2);
 	flex: 0 0 auto;
 	min-width: 0;
 }
 
-.fetch-label {
+.field {
+	display: flex;
+	align-items: center;
+	gap: var(--cc-space-2);
+	min-width: 0;
+}
+
+.field-label {
+	flex: 0 0 auto;
 	font-size: var(--cc-fs-xs);
 	color: var(--cc-text-dim);
 	white-space: nowrap;
 }
 
-.fetch-url {
+.field-device,
+.field-instruction {
+	min-width: 0;
+}
+
+.field-select,
+.field-text {
 	width: 100%;
 	min-width: 0;
 	padding: 5px var(--cc-space-2);
 	line-height: 1.2;
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-sm);
+	font-family: var(--cc-font);
+	font-size: var(--cc-fs-md);
 	color: var(--cc-text);
 	background: var(--cc-bg);
 	border: 1px solid var(--cc-line);
 	border-radius: var(--cc-radius-sm);
 }
 
-.fetch-url::placeholder {
-	color: var(--cc-text-faint);
+.field-mono {
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-sm);
 }
 
-.fetch-url:focus {
+.field-select:focus,
+.field-text:focus {
 	outline: none;
 	border-color: var(--cc-accent-dim);
 	box-shadow: 0 0 0 1px var(--cc-accent-glow) inset;
 }
 
-.intake-row {
+.field-text::placeholder {
+	color: var(--cc-text-faint);
+}
+
+/* 折起来的那两个入口：小字按钮，不占主位。 */
+.entry-toggles {
+	display: flex;
+	align-items: baseline;
+	gap: var(--cc-space-1);
+	flex: 0 0 auto;
+	min-width: 0;
+	line-height: 1.2;
+}
+
+.link-btn {
+	padding: 0;
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-dim);
+	background: transparent;
+	border: none;
+	border-bottom: 1px dashed var(--cc-line-strong);
+	cursor: pointer;
+}
+
+.link-btn:hover {
+	color: var(--cc-accent);
+	border-bottom-color: var(--cc-accent-dim);
+}
+
+.link-btn[aria-expanded='true'] {
+	color: var(--cc-accent);
+}
+
+.toggle-sep {
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-line-strong);
+}
+
+.toggle-note {
+	min-width: 0;
+	overflow: hidden;
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-faint);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.settings-row,
+.paste-row {
 	display: grid;
 	grid-template-columns: minmax(0, 1fr) auto;
-	grid-template-rows: minmax(0, 1fr);
+	align-items: center;
 	gap: var(--cc-space-2);
-	flex: 1 1 auto;
-	min-height: 0;
+	flex: 0 0 auto;
+	min-width: 0;
+}
+
+.settings-note {
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-faint);
+	white-space: nowrap;
 }
 
 /*
- * 输入框：撑满剩下的高度。带子按视口取 37vh（150–340px），扣掉标题行与接口行之后
- * 桌面高度上还有十行上下——一份完整任务 JSON 能看全，直接在里面改也行。矮窗跟着带子一起退。
+ * 粘贴兜底：接口没就绪时手工灌一份 JSON。高一点的文本框，但只在点开时才占地方
+ * （拖动文件进来会自动展开它——拖入就是粘贴的另一种手势）。
  */
-.intake-text {
+.paste-text {
 	width: 100%;
-	height: 100%;
-	min-height: 0;
+	height: 96px;
+	min-width: 0;
 	padding: var(--cc-space-1) var(--cc-space-2);
 	font-family: var(--cc-font-mono);
 	font-size: var(--cc-fs-sm);
@@ -589,22 +776,22 @@ const location = (diagnostic: Diagnostic): string => {
 	background: var(--cc-bg);
 	border: 1px solid var(--cc-line);
 	border-radius: var(--cc-radius-sm);
-	resize: none;
+	resize: vertical;
 }
 
-.intake-text::placeholder {
+.paste-text::placeholder {
 	color: var(--cc-text-faint);
 }
 
-.intake-text:focus {
+.paste-text:focus {
 	outline: none;
 	border-color: var(--cc-accent-dim);
 	box-shadow: 0 0 0 1px var(--cc-accent-glow) inset;
 }
 
-.intake-actions {
+.paste-actions {
 	display: flex;
-	align-items: center;
+	flex-direction: column;
 	gap: var(--cc-space-1);
 }
 
@@ -623,19 +810,20 @@ const location = (diagnostic: Diagnostic): string => {
 		background 0.15s ease;
 }
 
-.btn-convert {
-	min-width: 58px;
+/* 生成是这一带上唯一的实心按钮：把两样输入变成声明的那一下。 */
+.btn-generate {
+	min-width: 72px;
 	color: var(--cc-surface-sunken);
 	background: var(--cc-accent);
 	border-color: var(--cc-accent-strong);
 	box-shadow: 0 0 12px var(--cc-accent-glow);
 }
 
-.btn-convert:hover:not(:disabled) {
+.btn-generate:hover:not(:disabled) {
 	filter: brightness(1.1);
 }
 
-.btn-convert:disabled {
+.btn-generate:disabled {
 	color: var(--cc-disabled-text);
 	background: var(--cc-disabled-surface);
 	border-color: var(--cc-line);
@@ -643,19 +831,18 @@ const location = (diagnostic: Diagnostic): string => {
 	cursor: not-allowed;
 }
 
-/* 获取比转换轻一档：它是取料，转换才是换真相的那一步 */
-.btn-fetch {
+.btn-convert {
 	min-width: 58px;
 	color: var(--cc-accent-strong);
 	background: var(--cc-accent-veil);
 	border-color: var(--cc-accent-dim);
 }
 
-.btn-fetch:hover:not(:disabled) {
+.btn-convert:hover:not(:disabled) {
 	filter: brightness(1.15);
 }
 
-.btn-fetch:disabled {
+.btn-convert:disabled {
 	color: var(--cc-disabled-text);
 	background: var(--cc-disabled-surface);
 	border-color: var(--cc-line);
@@ -832,7 +1019,7 @@ const location = (diagnostic: Diagnostic): string => {
 	color: var(--cc-text-faint);
 }
 
-/* 诊断：跟积木侧那份同一形状（左侧色条区分严重度），摆在输入区下方 */
+/* 诊断：与积木侧那份同一形状（左侧色条区分严重度），摆在入口下方 */
 .feedback {
 	display: flex;
 	flex-direction: column;
@@ -927,27 +1114,39 @@ const location = (diagnostic: Diagnostic): string => {
 	overflow-wrap: anywhere;
 }
 
-/* 窄窗：先舍注释，再舍整条链——输入口永远留着，它才是这一带的功能 */
+/* 窄窗：先舍注释，再舍整条链——入口永远留着，它才是这一带的功能 */
 @media (max-width: 1180px) {
-	.chain-note {
+	.chain-note,
+	.toggle-note {
 		display: none;
 	}
 }
 
-/* 再窄一点：接口那一行的标签也舍掉，输入框本身留着 */
+/* 再窄一点：字段名也舍掉，控件本身留着（placeholder 与 aria-label 还在） */
 @media (max-width: 1020px) {
-	.fetch-label {
+	.field-label {
 		display: none;
 	}
 
-	.intake-fetch {
-		grid-template-columns: minmax(0, 1fr) auto;
+	.entry-row {
+		grid-template-columns: minmax(0, 200px) minmax(0, 1fr) auto;
 	}
 }
 
+/* 最窄：入口折成两行——设备与生成一行，指令一行 */
 @media (max-width: 900px) {
 	.chain {
 		display: none;
+	}
+
+	.entry-row {
+		grid-template-columns: minmax(0, 1fr) auto;
+		grid-template-rows: auto auto;
+	}
+
+	.field-instruction {
+		grid-column: 1 / -1;
+		grid-row: 2;
 	}
 }
 </style>

@@ -163,6 +163,22 @@
 	--cc-chain-failed: var(--cc-danger-strong);
 	--cc-chain-failed-veil: var(--cc-danger-veil);
 	--cc-chain-failed-border: var(--cc-danger);
+
+	/*
+	 * 入口带的高度（**仅追加**，上面已有的变量一个没动；只给重写后的 `TaskInputBand` 用）。
+	 *
+	 * 上一版入口带的主体是一个巨大的任务 JSON 文本框，所以它按视口取 37vh
+	 * （`--cc-inputband-h`）。现在入口只剩「设备下拉 + 一句话 + 生成」一行，
+	 * JSON 本身搬去了右栏的任务 JSON tab，那一档高度**不再适用**。
+	 *
+	 * 64–88px 是「一行控件 + 一行折起来的小开关」那一档：1080p 上约 84px，
+	 * 相比原来最高 340px 省下 250px 以上，全部让给三栏（入口高多少，工作区就少多少）。
+	 * 视口再矮也只是这条带子变薄，三栏不会被挤没。
+	 *
+	 * ⚠ `--cc-inputband-h` 是上一版的变量，按「不改已有变量值」的约定原样留着，
+	 * 重写后已无引用；要清掉它属于另一次改动，不混在这一版里。
+	 */
+	--cc-entryband-h: clamp(64px, 7.5vh, 88px);
 }
 
 * {

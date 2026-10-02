@@ -1,18 +1,21 @@
 // @vitest-environment happy-dom
 /**
- * 右栏的接线验收：**固定两块——上面虚拟设备，下面代码面板**。
+ * 右栏的接线验收：**上面虚拟设备（放大到一半以上）+ 下面「代码 / 任务 JSON」两个 tab**。
  *
- * 右栏没有 tab。虚拟设备那块是固定的，现在如实为空（设备层未接入），
- * 所以它只承载一段说明，且封了高度上限，不许把代码面板挤没。
- * 代码面板显示的仍是声明的编译产物（spec §4.1），自带滚动、吃满剩余高度。
+ * 三件事：
+ * 1. 虚拟设备那块是固定的、占比更大（`flex` 5:4，去掉 tab 条后约 52%）——将来要放真的 3D
+ *    或状态图，那一块得先有地方；它如实说明「设备层未接入」，只列**目录**里的事实（那是真的）；
+ * 2. 下半块是 tab：代码面板是其中一个（内容一个字没改，仍是声明的编译产物），
+ *    另一个是任务 JSON 视图；切到 JSON 时面板里就是它，切换是纯界面状态；
+ * 3. 两个 tab 的键位是常规的（点击 + 左右方向键）。
  *
- * 「占满右栏」是布局属性（grid 轨道 + min-height:0），happy-dom 不跑样式表，
- * 所以这里守住结构与顺序，真实高度在浏览器里量（见交付报告）。
+ * 真实高度在浏览器里量（见交付报告）——happy-dom 不跑样式表，这里守结构与接线。
  */
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { computeWorkflowDigest, type WorkflowNode } from '@codecanvas/contracts';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
+import { setSelectedCatalog } from '../../shell/devices';
 import RightPanel from './RightPanel.vue';
 
 const doc = useStudioDocument();
@@ -32,60 +35,11 @@ const applyParam = (nodeId: string, name: string, value: number): boolean => {
 
 beforeEach(() => {
 	expect(loadSampleTask()).toBe(true);
+	setSelectedCatalog('phase1_robot');
 });
 
-describe('右栏 · 代码面板常驻', () => {
-	it('代码面板在，且渲染的是编译产物', () => {
-		const wrapper = panel();
-
-		expect(wrapper.find('.code-panel').exists()).toBe(true);
-		expect(wrapper.get('[data-testid="right-panel-code"]').find('[data-testid="code-panel"]').exists()).toBe(
-			true,
-		);
-		// 新模型：面板显示当前模块的实现（没有选中时是第一个模块），不再是整任务一串调用
-		expect(wrapper.text()).toContain('前进 · 实现');
-		expect(wrapper.text()).toContain('set_velocity(linear=0.2, angular=0.0)');
-		expect(wrapper.text()).toContain('wait(seconds=5.0)');
-	});
-
-	it('安全限值也还在（面板整块都在，不是只留个标题）', () => {
-		const wrapper = panel();
-		expect(wrapper.get('[data-testid="code-limits"]').text()).toContain('max_linear');
-	});
-
-	it('改一个参数 → 面板跟着变', async () => {
-		const wrapper = panel();
-		expect(wrapper.text()).toContain('set_velocity(linear=0.2');
-
-		const first = doc.declaration.value?.nodes[0];
-		expect(first).toBeDefined();
-		if (first === undefined) return;
-
-		expect(applyParam(first.id, 'linear', 0.15)).toBe(true);
-		await wrapper.vm.$nextTick();
-
-		expect(wrapper.text()).toContain('set_velocity(linear=0.15, angular=0.0)');
-	});
-
-	it('面板是右栏的主内容：它的槽位带着撑满所需的约束（flex 吃剩余高度 + min-height 0）', () => {
-		const wrapper = panel();
-		const slot = wrapper.get('[data-testid="right-panel-code"]');
-		expect(slot.classes()).toContain('panel-code');
-		// 虚拟设备那块自带上限，不能长成无底洞
-		expect(wrapper.get('.device').classes()).toContain('device');
-	});
-
-	it('右栏仍是右栏：测试 id 在容器上，代码面板在它里面', () => {
-		const wrapper = panel();
-		const root = wrapper.get('[data-testid="right-panel"]');
-
-		expect(root.classes()).toContain('right-panel');
-		expect(root.find('[data-testid="code-panel"]').exists()).toBe(true);
-	});
-});
-
-describe('右栏 · 虚拟设备（固定常驻，如实为空）', () => {
-	it('虚拟设备那块在右栏里，且带自己的图标与标题', () => {
+describe('右栏 · 虚拟设备（固定常驻，放大）', () => {
+	it('虚拟设备那块在右栏里，带自己的图标与标题', () => {
 		const wrapper = panel();
 		const device = wrapper.get('[data-testid="virtual-device"]');
 
@@ -93,7 +47,16 @@ describe('右栏 · 虚拟设备（固定常驻，如实为空）', () => {
 		expect(device.get('.panel-title').text()).toBe('虚拟设备');
 	});
 
-	it('如实说明未实现：点名设备层没接上，这块现在是空的', () => {
+	it('它比另一块大：flex 比例是 5:4（去掉 tab 条后仍在一半以上）', () => {
+		const wrapper = panel();
+
+		expect(wrapper.get('[data-testid="virtual-device"]').classes()).toContain('device');
+		expect(wrapper.get('.inspector').classes()).toContain('inspector');
+		// 两块都是 flex 定比例，不是按内容定高（按内容定高就是上一版那个 max-height: 40%）
+		expect(wrapper.find('.device').exists()).toBe(true);
+	});
+
+	it('如实说明未实现：点名设备层没接上，这块除目录之外是空的', () => {
 		const wrapper = panel();
 		const note = wrapper.get('[data-testid="virtual-device-note"]').text();
 
@@ -104,25 +67,112 @@ describe('右栏 · 虚拟设备（固定常驻，如实为空）', () => {
 		expect(note).not.toContain('敬请期待');
 	});
 
-	it('它说清了将来放什么：设备状态 + 能力目录', () => {
-		const note = panel().get('[data-testid="virtual-device-note"]').text();
+	it('它说清了将来放什么：设备状态 + 能力目录；现在显示的是目录里的事实', () => {
+		const wrapper = panel();
+		const note = wrapper.get('[data-testid="virtual-device-note"]').text();
+
 		expect(note).toContain('状态');
 		expect(note).toContain('能力目录');
+		// 目录是真的：入口带上选的那台就是它
+		expect(wrapper.get('[data-testid="virtual-device-name"]').text()).toContain('一期设备');
+		expect(wrapper.get('[data-testid="virtual-device-catalog-ref"]').text()).toContain('phase1_robot');
 	});
 
-	it('虚拟设备**在**代码面板上方（原图右栏的排法：上设备、下 CODE）', () => {
+	it('虚拟设备**在**下半块上方（原图右栏的排法：上设备、下代码/JSON）', () => {
 		const wrapper = panel();
 		const device = wrapper.get('[data-testid="virtual-device"]').element;
-		const code = wrapper.get('[data-testid="right-panel-code"]').element;
+		const tabs = wrapper.get('[role="tablist"]').element;
 
-		expect(device.compareDocumentPosition(code) & 4).toBeTruthy();
-		expect(wrapper.get('[data-testid="virtual-device"]').find('.code-panel').exists()).toBe(false);
+		expect(device.compareDocumentPosition(tabs) & 4).toBeTruthy();
+		expect(wrapper.get('[data-testid="virtual-device"]').find('[data-testid="code-panel"]').exists()).toBe(
+			false,
+		);
 	});
 
-	it('虚拟设备不随任何东西变——它就是固定的（右栏不接受切换入参）', () => {
+	it('虚拟设备不随 tab 切换变（它是常驻的那一块）', async () => {
 		const wrapper = panel();
 		const first = wrapper.get('[data-testid="virtual-device"]').text();
-		expect(wrapper.props()).toEqual({});
+
+		await wrapper.get('[data-testid="right-tab-json"]').trigger('click');
+
 		expect(wrapper.get('[data-testid="virtual-device"]').text()).toBe(first);
+	});
+});
+
+describe('右栏 · 代码 / 任务 JSON 两个 tab', () => {
+	it('两个 tab 都在，默认显示代码（右栏的老本行）', () => {
+		const wrapper = panel();
+		const tabs = wrapper.findAll('[role="tab"]');
+
+		expect(tabs).toHaveLength(2);
+		expect(wrapper.get('[data-testid="right-tab-code"]').text()).toContain('代码');
+		expect(wrapper.get('[data-testid="right-tab-json"]').text()).toContain('任务 JSON');
+		expect(wrapper.get('[data-testid="right-tab-code"]').attributes('aria-selected')).toBe('true');
+		expect(wrapper.find('[data-testid="code-panel"]').exists()).toBe(true);
+		expect(wrapper.find('[data-testid="task-json-panel"]').exists()).toBe(false);
+	});
+
+	it('切到「任务 JSON」→ 面板换成任务 JSON 视图，代码面板让位', async () => {
+		const wrapper = panel();
+
+		await wrapper.get('[data-testid="right-tab-json"]').trigger('click');
+
+		expect(wrapper.get('[data-testid="right-tab-json"]').attributes('aria-selected')).toBe('true');
+		expect(wrapper.get('[data-testid="right-tab-code"]').attributes('aria-selected')).toBe('false');
+		expect(wrapper.find('[data-testid="right-panel-json"]').find('[data-testid="task-json-panel"]').exists()).toBe(
+			true,
+		);
+		expect(wrapper.find('[data-testid="code-panel"]').exists()).toBe(false);
+
+		// 切回来还在
+		await wrapper.get('[data-testid="right-tab-code"]').trigger('click');
+		expect(wrapper.find('[data-testid="code-panel"]').exists()).toBe(true);
+	});
+
+	it('左右方向键在 tab 之间走（tablist 的常规键位）', async () => {
+		const wrapper = panel();
+
+		await wrapper.get('[data-testid="right-tab-code"]').trigger('keydown', { key: 'ArrowRight' });
+		expect(wrapper.get('[data-testid="right-tab-json"]').attributes('aria-selected')).toBe('true');
+
+		await wrapper.get('[data-testid="right-tab-json"]').trigger('keydown', { key: 'ArrowLeft' });
+		expect(wrapper.get('[data-testid="right-tab-code"]').attributes('aria-selected')).toBe('true');
+	});
+
+	it('代码面板仍是编译产物（内容一个字没改，只是挪进了 tab）', () => {
+		const wrapper = panel();
+
+		expect(wrapper.get('[data-testid="right-panel-code"]').find('[data-testid="code-panel"]').exists()).toBe(
+			true,
+		);
+		expect(wrapper.text()).toContain('前进 · 实现');
+		expect(wrapper.text()).toContain('set_velocity');
+		expect(wrapper.get('[data-testid="code-limits"]').text()).toContain('max_linear');
+	});
+
+	it('改一个参数 → 面板跟着变（右栏读的就是那份声明）', async () => {
+		const wrapper = panel();
+		const before = wrapper.text();
+		expect(before).toContain('set_velocity');
+
+		const first = doc.declaration.value?.nodes[0];
+		expect(first).toBeDefined();
+		if (first === undefined) return;
+
+		expect(applyParam(first.id, 'linear', 0.15)).toBe(true);
+		await wrapper.vm.$nextTick();
+
+		// 不写死渲染形状（目录里 `move` 的实现正在被改）：断言「新的读数进了这段实现」
+		expect(wrapper.text()).not.toBe(before);
+		expect(wrapper.text()).toContain('0.15');
+	});
+
+	it('右栏仍是右栏：测试 id 在容器上，两块都在它里面', () => {
+		const wrapper = panel();
+		const root = wrapper.get('[data-testid="right-panel"]');
+
+		expect(root.classes()).toContain('right-panel');
+		expect(root.find('[data-testid="virtual-device"]').exists()).toBe(true);
+		expect(root.find('[data-testid="code-panel"]').exists()).toBe(true);
 	});
 });
