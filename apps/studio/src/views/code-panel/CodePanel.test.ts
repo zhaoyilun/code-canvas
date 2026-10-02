@@ -6,14 +6,25 @@
  * 4. 行 ↔ 步骤的映射写在 DOM 上（`data-line` / `data-step` / `data-path`），不在视图里重算；
  * 5. **点某一行 → `selectStep(顶层下标)`**；`selectedStepIndex` 变了 → 那一步的所有行全亮；
  * 6. 安全限值仍常驻；面板是只读的派生（退档不改共享选中状态，也不自己校验）。
+ *
+ * **面板读哪份目录**：`CodePanel.vue` 里那个 `PHASE1_ROBOT_CATALOG` 是写死的，只能从模块边界换掉——
+ * 下面 `vi.mock` 把它换成夹具目录（`views/__fixtures__/catalog.ts`）。理由：示意目录会被真实实现整份替换，
+ * 而这里断言的是界面（行、缩进、徽标、联动），跟设备写了什么无关；挂到真实目录上，目录一改就集体失效。
+ * 真实目录只留冒烟断言，见 `views/catalog-smoke.test.ts`。
  */
 import { mount } from '@vue/test-utils';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeWorkflowDigest, type WorkflowDeclaration, type WorkflowNode } from '@codecanvas/contracts';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import FlowView from '../flow/FlowView.vue';
 import RightPanel from '../right/RightPanel.vue';
 import CodePanel from './CodePanel.vue';
+
+vi.mock('@codecanvas/capabilities', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('@codecanvas/capabilities')>();
+	const { FIXTURE_CATALOG } = await import('../__fixtures__/catalog');
+	return { ...actual, PHASE1_ROBOT_CATALOG: FIXTURE_CATALOG };
+});
 
 const doc = useStudioDocument();
 

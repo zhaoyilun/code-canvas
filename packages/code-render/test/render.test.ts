@@ -11,15 +11,15 @@
  *
  * 这一版把老形状（`implementation: [{step, arguments}]`）的断言改成了语句树，
  * **一条用例都没删**：能平移的都平移，只属于老形状的那条（多给实参）换了构造方式。
+ *
+ * **输入用的是夹具目录（`./fixtures.ts`），不是 `PHASE1_ROBOT_CATALOG`**：示意目录会被真实实现整份替换，
+ * 而这里断言的是渲染规则（缩进、括号、行 ↔ 路径映射、数值保精度），跟设备写了什么无关。
+ * 真实目录自己只留两条冒烟断言，见 `catalog-smoke.test.ts`。
  */
 import { describe, expect, it } from 'vitest';
-import { PHASE1_ROBOT_CATALOG } from '@codecanvas/capabilities';
 import {
-	computeWorkflowDigest,
-	DEFAULT_LIMITS,
 	findCapability,
 	findPrimitive,
-	WORKFLOW_FORMAT_VERSION,
 	type CapabilityCatalog,
 	type CapabilitySpec,
 	type CatalogParameter,
@@ -27,7 +27,6 @@ import {
 	type JsonObject,
 	type JsonValue,
 	type WorkflowDeclaration,
-	type WorkflowDeclarationDraft,
 	type WorkflowNode,
 } from '@codecanvas/contracts';
 import { importTaskJson } from '@codecanvas/task-import';
@@ -42,6 +41,7 @@ import {
 	stepPathAtLine,
 	type RenderedImplementation,
 } from '../src/index';
+import { FIXTURE_CATALOG, fixtureDeclarationOf as declarationOf, fixtureNode as nodeOf } from './fixtures';
 
 /** 与 `apps/studio/src/state/sample-task.ts` 同一份示例（跨包不能直接 import，故抄一份语料）。 */
 const SAMPLE_TASK_JSON = `{
@@ -69,43 +69,14 @@ const sampleDeclaration = (): WorkflowDeclaration => {
 	return result.declaration;
 };
 
-const nodeOf = (parameters: JsonObject, overrides: Partial<WorkflowNode> = {}): WorkflowNode => ({
-	id: overrides.id ?? 'nd_1',
-	name: overrides.name ?? '测试节点',
-	type: 'task.action',
-	typeVersion: 1,
-	parameters,
-	position: { x: 0, y: 0 },
-	disabled: false,
-	...overrides,
-});
-
-/** 手工造的声明默认带一份协议缺省限值，免得每条用例都吃一条 limits 缺失的诊断。 */
-const META_WITH_LIMITS: JsonObject = { limits: { ...DEFAULT_LIMITS } };
-
-const declarationOf = (
-	nodes: readonly WorkflowNode[],
-	meta: JsonObject = META_WITH_LIMITS,
-): WorkflowDeclaration => {
-	const draft: WorkflowDeclarationDraft = {
-		formatVersion: WORKFLOW_FORMAT_VERSION,
-		id: 'wf_test',
-		name: '测试声明',
-		nodes: [...nodes],
-		connections: {},
-		meta,
-	};
-	return { ...draft, digest: computeWorkflowDigest(draft) };
-};
-
-/** 渲染一个节点（默认用一期设备目录 + 一份带限值的手工声明）。 */
+/** 渲染一个节点（默认用夹具目录 + 一份带限值的手工声明）。 */
 const render = (
 	parameters: JsonObject,
 	options: { overrides?: Partial<WorkflowNode>; catalog?: CapabilityCatalog; declaration?: WorkflowDeclaration | null } = {},
 ): RenderedImplementation =>
 	renderImplementation({
 		node: nodeOf(parameters, options.overrides ?? {}),
-		catalog: options.catalog ?? PHASE1_ROBOT_CATALOG,
+		catalog: options.catalog ?? FIXTURE_CATALOG,
 		declaration: options.declaration === undefined ? declarationOf([nodeOf(parameters)]) : options.declaration,
 	});
 
@@ -126,7 +97,7 @@ const sampleNode = (action: string): WorkflowNode => {
 const renderSample = (action: string, declaration: WorkflowDeclaration = sampleDeclaration()) => {
 	const node = declaration.nodes.find((item) => item.parameters['action'] === action);
 	if (node === undefined) throw new Error(`declaration has no ${action} step`);
-	return renderImplementation({ node, catalog: PHASE1_ROBOT_CATALOG, declaration });
+	return renderImplementation({ node, catalog: FIXTURE_CATALOG, declaration });
 };
 
 /**
@@ -191,9 +162,9 @@ const statementCalls = (
 	return found;
 };
 
-/** 一条只含一个能力的目录：用例自己造病态实现时用（原语仍是一期那份）。 */
+/** 一条只含一个能力的目录：用例自己造病态实现时用（原语仍用夹具那份）。 */
 const catalogWith = (capability: CapabilitySpec): CapabilityCatalog => ({
-	...PHASE1_ROBOT_CATALOG,
+	...FIXTURE_CATALOG,
 	capabilities: [capability],
 });
 
@@ -263,7 +234,7 @@ describe('示例任务的模块 → 实现（逐字比对）', () => {
 
 	it('没选中模块时给空程序，不编造内容', () => {
 		const declaration = sampleDeclaration();
-		const program = renderImplementation({ node: null, catalog: PHASE1_ROBOT_CATALOG, declaration });
+		const program = renderImplementation({ node: null, catalog: FIXTURE_CATALOG, declaration });
 
 		expect(program.lines).toEqual([]);
 		expect(program.steps).toEqual([]);
@@ -290,10 +261,10 @@ describe('渲染规则可追溯到原语定义（不许手写参数名）', () =
 		}
 	};
 
-	it.each(PHASE1_ROBOT_CATALOG.capabilities.map((capability) => capability.capabilityRef))(
+	it.each(FIXTURE_CATALOG.capabilities.map((capability) => capability.capabilityRef))(
 		'%s 的每一行调用：参数名与顺序逐字来自 catalog.primitives',
 		(capabilityRef) => {
-			const capability = findCapability(PHASE1_ROBOT_CATALOG, capabilityRef);
+			const capability = findCapability(FIXTURE_CATALOG, capabilityRef);
 			expect(capability).toBeDefined();
 			if (capability === undefined) return;
 
@@ -309,7 +280,7 @@ describe('渲染规则可追溯到原语定义（不许手写参数名）', () =
 			expect(callLines(program)).toHaveLength(calls.length);
 
 			for (const { path, statement } of calls) {
-				const primitive = findPrimitive(PHASE1_ROBOT_CATALOG, statement.primitiveRef);
+				const primitive = findPrimitive(FIXTURE_CATALOG, statement.primitiveRef);
 				expect(primitive).toBeDefined();
 				if (primitive === undefined) continue;
 
@@ -526,7 +497,7 @@ describe('语句树 → 代码：结构、缩进、优先级', () => {
 	});
 
 	it('语句树里每一条语句都渲染出来了（一条不漏，也没多出来）', () => {
-		const capability = findCapability(PHASE1_ROBOT_CATALOG, 'stop_if_obstacle');
+		const capability = findCapability(FIXTURE_CATALOG, 'stop_if_obstacle');
 		expect(capability).toBeDefined();
 		if (capability === undefined) return;
 
@@ -634,7 +605,7 @@ describe('param 解析与字面量', () => {
 describe('行 ↔ 语句树路径的映射', () => {
 	it('每一行都带顶层步骤号（0 基）与精确路径，steps[] 与顶层语句一一对应', () => {
 		const program = renderSample('move');
-		const capability = findCapability(PHASE1_ROBOT_CATALOG, 'move');
+		const capability = findCapability(FIXTURE_CATALOG, 'move');
 		expect(capability).toBeDefined();
 		if (capability === undefined) return;
 
@@ -676,7 +647,7 @@ describe('行 ↔ 语句树路径的映射', () => {
 		const parameters: JsonObject = { step_id: 's1', action: 'move', linear: 0.2, angular: 0, duration: 5 };
 		const program = renderImplementation({
 			node: nodeOf(parameters, { disabled: true, name: '前进（停用）' }),
-			catalog: PHASE1_ROBOT_CATALOG,
+			catalog: FIXTURE_CATALOG,
 			declaration: declarationOf([nodeOf(parameters)]),
 		});
 
@@ -705,7 +676,7 @@ describe('行 ↔ 语句树路径的映射', () => {
 	});
 
 	it('调用行数 = 树里的调用条数，且每一行都指向真实的语句', () => {
-		for (const capability of PHASE1_ROBOT_CATALOG.capabilities) {
+		for (const capability of FIXTURE_CATALOG.capabilities) {
 			const parameters: JsonObject = { step_id: 's1', action: capability.capabilityRef };
 			for (const parameter of capability.parameters) {
 				parameters[parameter.name] =
@@ -731,10 +702,10 @@ describe('数值不失真', () => {
 	it('渲染出来的每个数值实参读回来都是原值', () => {
 		const declaration = sampleDeclaration();
 		for (const node of declaration.nodes) {
-			const program = renderImplementation({ node, catalog: PHASE1_ROBOT_CATALOG, declaration });
+			const program = renderImplementation({ node, catalog: FIXTURE_CATALOG, declaration });
 			for (const line of callLines(program)) {
-				const capability = findCapability(PHASE1_ROBOT_CATALOG, String(node.parameters['action']));
-				const primitive = line.primitiveRef === null ? undefined : findPrimitive(PHASE1_ROBOT_CATALOG, line.primitiveRef);
+				const capability = findCapability(FIXTURE_CATALOG, String(node.parameters['action']));
+				const primitive = line.primitiveRef === null ? undefined : findPrimitive(FIXTURE_CATALOG, line.primitiveRef);
 				if (capability === undefined || primitive === undefined) continue;
 
 				const args = argsOf(line.text);
@@ -914,7 +885,7 @@ describe('目录里查不到的东西不假装认识', () => {
 			{ step_id: 's1', action: 'move' },
 			{
 				catalog: {
-					...PHASE1_ROBOT_CATALOG,
+					...FIXTURE_CATALOG,
 					capabilities: [
 						{
 							capabilityRef: 'none',
@@ -1079,5 +1050,25 @@ describe('示例语料本身', () => {
 	it('示例任务里那四步都还在，参数没被改过', () => {
 		expect(sampleNode('move').parameters).toMatchObject({ linear: 0.2, angular: 0, duration: 5 });
 		expect(sampleNode('stop_if_obstacle').parameters).toMatchObject({ sensors: ['/scan0'], distance: 0.5 });
+	});
+});
+
+describe('实参位置的局部变量', () => {
+	/**
+	 * 这条曾经是错的：实参位置（`名字=值`）遇到局部变量时，渲染器会退回节点同名字段去取值，
+	 * 取不到就渲染成 `null`——而 `set_velocity(linear=speed)` 才是这段程序真实的样子。
+	 * 局部变量的值由运行时上一条赋值决定，渲染层算不出来，写名字是唯一诚实的做法。
+	 */
+	it('写变量名，而不是退回节点字段（那会渲染成 null）', () => {
+		const program = render({ action: 'clamped_move', linear: 0.2, duration: 5 });
+		const text = texts(program).join('\n');
+		expect(text).toContain('set_velocity(linear=speed, angular=0.0)');
+		expect(text).not.toContain('null');
+		expect(program.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
+	});
+
+	it('夹限速那一支的赋值照样渲染出来（夹过才下发）', () => {
+		const program = render({ action: 'clamped_move', linear: 0.9, duration: 5 });
+		expect(texts(program).join('\n')).toContain('speed = 0.3');
 	});
 });

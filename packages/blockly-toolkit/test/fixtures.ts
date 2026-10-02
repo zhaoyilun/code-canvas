@@ -1,17 +1,24 @@
 /**
- * 测试夹具：一份覆盖七个能力的任务 JSON、一份确定性的声明、真实的一期设备目录，
+ * 测试夹具：一份覆盖七个能力的任务 JSON、一份确定性的声明、一份**夹具能力目录**，
  * 外加一份**故意有缺陷**的目录（悬空引用 / 未知原语 / 漏给实参），以及从真实 `theme.css` 读出的调色板。
  *
  * 调色板刻意**不在这里写色值**——它从 `apps/studio/src/shell/theme.css` 里解析出来，
  * 这样「主题色来自哪」在测试里也是可核对的。
  *
- * 能力目录直接用 `packages/capabilities` 的那一份（应用用的就是它）：
- * 「积木从目录推导」这条如果只对一个自造的迷你目录成立，就不算数。
+ * **能力目录是夹具，不是 `PHASE1_ROBOT_CATALOG`**：`packages/capabilities/src/phase1-robot.ts` 是示意目录，
+ * 等 RoboFrame 给出真实实现就整份替换（数据结构不变）。这里的用例断言的是「积木从目录推导」这条规则，
+ * 跟设备写了什么无关——挂到真实目录上，目录一改断言就集体失效。真实目录只留冒烟断言，见 `catalog-smoke.test.ts`。
+ *
+ * 夹具钉住的是**形状**：三种语句（`call` / `set` / `if`，含 `else` 与嵌套）、五种表达式
+ * （`literal` / `param` / `call` / `binary` / `unary`）、有 `returns` 与没有的原语、标了 `integer` 的字段，
+ * 以及一个「三步调用、最后一步是无参数原语」的能力（`move`）。
+ *
+ * 任务 JSON 仍用协议里的七个动作名与参数名：任务那侧的真值来自 `@codecanvas/contracts` 的协议描述
+ * （单位、限值、缺省值都从那儿推），夹具目录要跟它对得上。
  */
 import { readFileSync } from 'node:fs';
 import type * as Blockly from 'blockly';
 import { createDeterministicIdFactory, type CapabilityCatalog, type WorkflowDeclaration, type WorkflowNode } from '@codecanvas/contracts';
-import { PHASE1_ROBOT_CATALOG } from '@codecanvas/capabilities';
 import { importTask } from '@codecanvas/task-import';
 import { identityOfBlock } from '../src/identity';
 import { paletteFromCssVariables, type ThemePalette } from '../src/palette';
@@ -43,8 +50,272 @@ export const FIXTURE_TASK = {
 	limits: { max_linear: 0.3, max_angular: 1.2, max_duration: 30.0, require_confirmation: true },
 };
 
-/** 应用里用的那份目录（`packages/capabilities`）。 */
-export const FIXTURE_CATALOG: CapabilityCatalog = PHASE1_ROBOT_CATALOG;
+/**
+ * 夹具目录：**覆盖语法形态**，不覆盖任何真实设备的内容（理由见文件头）。
+ *
+ * 原语名与参数名跟一期协议里的动作对齐（`set_velocity` / `wait` / `stop_motion` / `brake` /
+ * `read_scan` / `read_status` / `drive_joint` / `drive_joints`），因为积木的单位、限值与缺省值
+ * 是从协议描述推出来的——夹具目录不跟它对上，量到的就不是「推导」而是「查不到」。
+ */
+export const FIXTURE_CATALOG: CapabilityCatalog = {
+	catalogRef: 'fixture_robot',
+	displayName: '夹具设备（语法形态齐全）',
+	revisionRef: 'fixture-robot-v1',
+
+	primitives: [
+		{
+			primitiveRef: 'set_velocity',
+			label: '下发速度',
+			parameters: [
+				{ name: 'linear', label: '线速度', type: 'number' },
+				{ name: 'angular', label: '角速度', type: 'number' },
+			],
+		},
+		{
+			primitiveRef: 'wait',
+			label: '等待',
+			parameters: [{ name: 'seconds', label: '时长', type: 'number' }],
+		},
+		{ primitiveRef: 'stop_motion', label: '停止运动', parameters: [] },
+		{ primitiveRef: 'brake', label: '紧急刹停', parameters: [] },
+		{
+			primitiveRef: 'read_scan',
+			label: '读取激光',
+			parameters: [{ name: 'sensors', label: '传感器', type: 'sensor' }],
+			returns: 'number',
+		},
+		{ primitiveRef: 'read_status', label: '读取运行状态', parameters: [], returns: 'string' },
+		{
+			primitiveRef: 'drive_joint',
+			label: '驱动单关节',
+			parameters: [
+				{ name: 'joint_id', label: '关节号', type: 'number', integer: true },
+				{ name: 'angle', label: '角度', type: 'number' },
+				{ name: 'time', label: '时长', type: 'number', integer: true },
+			],
+		},
+		{
+			primitiveRef: 'drive_joints',
+			label: '驱动六关节',
+			parameters: [
+				{ name: 'joint1', label: '关节1', type: 'number' },
+				{ name: 'joint2', label: '关节2', type: 'number' },
+				{ name: 'joint3', label: '关节3', type: 'number' },
+				{ name: 'joint4', label: '关节4', type: 'number' },
+				{ name: 'joint5', label: '关节5', type: 'number' },
+				{ name: 'joint6', label: '关节6', type: 'number' },
+				{ name: 'time', label: '时长', type: 'number', integer: true },
+			],
+		},
+	],
+
+	capabilities: [
+		{
+			// 三条语句的链，最后一条是**无参数原语**：三块积木串成一条链靠它。
+			capabilityRef: 'move',
+			label: '前进',
+			kind: 'skill',
+			parameters: [
+				{ name: 'linear', label: '线速度', type: 'number' },
+				{ name: 'angular', label: '角速度', type: 'number' },
+				{ name: 'duration', label: '时长', type: 'number' },
+			],
+			implementation: [
+				{
+					kind: 'call',
+					primitiveRef: 'set_velocity',
+					arguments: {
+						linear: { kind: 'param', name: 'linear' },
+						angular: { kind: 'param', name: 'angular' },
+					},
+				},
+				{ kind: 'call', primitiveRef: 'wait', arguments: { seconds: { kind: 'param', name: 'duration' } } },
+				{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} },
+			],
+		},
+		{
+			// 实参里写死的字面量（`linear: 0`，**裸值**不是表达式——画布上它是只读标签）与来自节点参数的引用并存。
+			capabilityRef: 'turn',
+			label: '转向',
+			kind: 'skill',
+			parameters: [
+				{ name: 'angular', label: '角速度', type: 'number' },
+				{ name: 'duration', label: '时长', type: 'number' },
+			],
+			implementation: [
+				{
+					kind: 'call',
+					primitiveRef: 'set_velocity',
+					arguments: { linear: 0, angular: { kind: 'param', name: 'angular' } },
+				},
+				{ kind: 'call', primitiveRef: 'wait', arguments: { seconds: { kind: 'param', name: 'duration' } } },
+				{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} },
+			],
+		},
+		{
+			// 单步、无参数的原语：零行字段。
+			capabilityRef: 'stop',
+			label: '停止',
+			kind: 'skill',
+			parameters: [],
+			implementation: [{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} }],
+		},
+		{
+			// `set` + `if`：赋值右边是**有返回值的原语调用**，条件里是比较（引用 vs 节点参数）。
+			capabilityRef: 'stop_if_obstacle',
+			label: '避障停止',
+			kind: 'skill',
+			parameters: [
+				{ name: 'sensors', label: '传感器', type: 'sensor' },
+				{ name: 'distance', label: '距离', type: 'number' },
+			],
+			implementation: [
+				{
+					kind: 'set',
+					target: 'reading',
+					value: {
+						kind: 'call',
+						primitiveRef: 'read_scan',
+						arguments: { sensors: { kind: 'param', name: 'sensors' } },
+					},
+				},
+				{
+					kind: 'if',
+					condition: {
+						kind: 'binary',
+						operator: 'lt',
+						left: { kind: 'param', name: 'reading' },
+						right: { kind: 'param', name: 'distance' },
+					},
+					then: [{ kind: 'call', primitiveRef: 'brake', arguments: {} }],
+				},
+			],
+		},
+		{
+			// 赋值右边是一个**无参数**的有返回值原语：`status = read_status()`。
+			capabilityRef: 'get_status',
+			label: '读取状态',
+			kind: 'skill',
+			parameters: [],
+			implementation: [
+				{
+					kind: 'set',
+					target: 'status',
+					value: { kind: 'call', primitiveRef: 'read_status', arguments: {} },
+				},
+			],
+		},
+		{
+			// `integer` 字段：关节号与毫秒时长取整，`angle` 照旧可小数。
+			capabilityRef: 'arm_joint',
+			label: '单关节',
+			kind: 'skill',
+			parameters: [
+				{ name: 'joint_id', label: '关节号', type: 'number', integer: true },
+				{ name: 'joint', label: '角度', type: 'number' },
+				{ name: 'time', label: '时长', type: 'number', integer: true },
+			],
+			implementation: [
+				{
+					kind: 'call',
+					primitiveRef: 'drive_joint',
+					arguments: {
+						joint_id: { kind: 'param', name: 'joint_id' },
+						angle: { kind: 'param', name: 'joint' },
+						time: { kind: 'param', name: 'time' },
+					},
+				},
+			],
+		},
+		{
+			// 七个参数的原语：一行一个字段（七行）。
+			capabilityRef: 'arm6_joints',
+			label: '六关节',
+			kind: 'skill',
+			parameters: [
+				{ name: 'joint1', label: '关节1', type: 'number' },
+				{ name: 'joint2', label: '关节2', type: 'number' },
+				{ name: 'joint3', label: '关节3', type: 'number' },
+				{ name: 'joint4', label: '关节4', type: 'number' },
+				{ name: 'joint5', label: '关节5', type: 'number' },
+				{ name: 'joint6', label: '关节6', type: 'number' },
+				{ name: 'time', label: '时长', type: 'number', integer: true },
+			],
+			implementation: [
+				{
+					kind: 'call',
+					primitiveRef: 'drive_joints',
+					arguments: {
+						joint1: { kind: 'param', name: 'joint1' },
+						joint2: { kind: 'param', name: 'joint2' },
+						joint3: { kind: 'param', name: 'joint3' },
+						joint4: { kind: 'param', name: 'joint4' },
+						joint5: { kind: 'param', name: 'joint5' },
+						joint6: { kind: 'param', name: 'joint6' },
+						time: { kind: 'param', name: 'time' },
+					},
+				},
+			],
+		},
+		{
+			/**
+			 * 嵌套 `if` + `else` + `unary`：没确认过、或关节号越界就别动，否则正常驱动。
+			 *
+			 * 一期目录里没有这个形状，但**语法形态必须有地方覆盖**：嵌套分支的 C 形块与 `not` 的写法
+			 * 不该只靠「以后真出现了再说」。（这个能力名不在协议里，所以积木不挂协议给的单位与限值。）
+			 */
+			capabilityRef: 'arm_guard',
+			label: '臂越界保护',
+			kind: 'skill',
+			parameters: [
+				{ name: 'joint_id', label: '关节号', type: 'number', integer: true },
+				{ name: 'angle', label: '角度', type: 'number' },
+				{ name: 'time', label: '时长', type: 'number', integer: true },
+				{ name: 'confirm', label: '已确认', type: 'boolean' },
+			],
+			implementation: [
+				{
+					kind: 'if',
+					condition: {
+						kind: 'binary',
+						operator: 'or',
+						left: { kind: 'unary', operator: 'not', value: { kind: 'param', name: 'confirm' } },
+						right: {
+							kind: 'binary',
+							operator: 'lt',
+							left: { kind: 'param', name: 'joint_id' },
+							right: { kind: 'literal', value: 1 },
+						},
+					},
+					then: [{ kind: 'call', primitiveRef: 'brake', arguments: {} }],
+					else: [
+						{
+							kind: 'if',
+							condition: {
+								kind: 'binary',
+								operator: 'gt',
+								left: { kind: 'param', name: 'joint_id' },
+								right: { kind: 'literal', value: 6 },
+							},
+							then: [{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} }],
+							else: [
+								{
+									kind: 'call',
+									primitiveRef: 'drive_joint',
+									arguments: {
+										joint_id: { kind: 'param', name: 'joint_id' },
+										angle: { kind: 'param', name: 'angle' },
+										time: { kind: 'param', name: 'time' },
+									},
+								},
+							],
+						},
+					],
+				},
+			],
+		},
+	],
+};
 
 /**
  * 故意有缺陷的目录：一条实现里塞了四种目录毛病。

@@ -12,12 +12,12 @@
  *   4. 点树里任意一块 → 推出它所属的**顶层语句下标**（`selectedStepIndex`）；选中步 → 那一步的顶层积木；
  *   5. 非法值写不进真相（唯一写路径仍然有两道闸）。
  *
- * 用的目录是应用真正用的那一份（`@codecanvas/capabilities` 的一期目录），
- * 任务用的是应用自带的示例任务——所以这里断言的数字就是界面上会看到的数字。
+ * 用的目录是**夹具目录**（`views/__fixtures__/catalog.ts`），任务用的是应用自带的示例任务——
+ * 所以这里断言的数字就是示例任务的数字，而目录改了内容也不该把这些断言弄红。
+ * 真实目录只留冒烟断言，见 `views/catalog-smoke.test.ts`。
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as Blockly from 'blockly';
-import { PHASE1_ROBOT_CATALOG } from '@codecanvas/capabilities';
 import {
 	activeNodeOf,
 	collectChainBlocks,
@@ -30,6 +30,7 @@ import {
 } from '@codecanvas/blockly-toolkit';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import { summarizeNodeParameters, nodeAction } from '../flow/summary';
+import { FIXTURE_CATALOG } from '../__fixtures__/catalog';
 
 const store = useStudioDocument();
 
@@ -37,7 +38,7 @@ let workspace: Blockly.Workspace;
 
 beforeEach(() => {
 	expect(loadSampleTask()).toBe(true);
-	registerImplementationBlocks(PHASE1_ROBOT_CATALOG);
+	registerImplementationBlocks(FIXTURE_CATALOG);
 	workspace = new Blockly.Workspace();
 });
 
@@ -62,7 +63,7 @@ const renderSelected = (nodeId: string | null): RenderResult =>
 	renderDeclaration({
 		workspace,
 		declaration: declaration(),
-		catalog: PHASE1_ROBOT_CATALOG,
+		catalog: FIXTURE_CATALOG,
 		selectedNodeId: nodeId,
 	});
 
@@ -161,7 +162,7 @@ describe('改积木上的数值', () => {
 		expect(cardReading('s1', 'duration')).toBe('5');
 
 		blockAt(1)?.setFieldValue(9, 'seconds');
-		const compiled = compileWorkspace({ workspace, base: declaration(), catalog: PHASE1_ROBOT_CATALOG });
+		const compiled = compileWorkspace({ workspace, base: declaration(), catalog: FIXTURE_CATALOG });
 		expect(compiled.diagnostics).toEqual([]);
 		const next = compiled.declaration;
 		if (next === null) throw new Error('9 是合法时长，应当编译出声明');
@@ -197,7 +198,7 @@ describe('改积木上的数值', () => {
 
 		// 用户改的是**嵌在条件里**的那块：写回必须走完整棵树。
 		blockAtPath('1.condition.right').setFieldValue(0.7, 'value');
-		const compiled = compileWorkspace({ workspace, base: declaration(), catalog: PHASE1_ROBOT_CATALOG });
+		const compiled = compileWorkspace({ workspace, base: declaration(), catalog: FIXTURE_CATALOG });
 		expect(compiled.diagnostics).toEqual([]);
 		const next = compiled.declaration;
 		if (next === null) throw new Error('0.7 是合法阈值，应当编译出声明');
@@ -241,7 +242,7 @@ describe('改积木上的数值', () => {
 		renderSelected(store.selectedNodeId.value);
 		blockAtPath('1.condition.right').setFieldValue(0, 'value');
 
-		const compiled = compileWorkspace({ workspace, base: declaration(), catalog: PHASE1_ROBOT_CATALOG });
+		const compiled = compileWorkspace({ workspace, base: declaration(), catalog: FIXTURE_CATALOG });
 		expect(compiled.ok).toBe(false);
 		expect(compiled.declaration).toBeNull();
 		expect(compiled.diagnostics.map((diagnostic) => diagnostic.code)).toContain(

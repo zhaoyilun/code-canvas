@@ -3,18 +3,22 @@
  *
  * ⚠ **这份 `implementation` 是示意，不是设备真实逻辑。** 一期协议（`docs/reference/task_protocol.py`）
  * 只规定「要做什么」和参数范围，没有任何「怎么做」的信息；真实实现在 RoboFrame / 设备侧。
- * 这里手写一份，是为了先把「点一个模块 → 看到它的实现」这条穿透链在演示上跑通。
+ * 这里手写一份，是为了让「点一个模块 → 看到它的实现」在演示上像那么回事：
+ * 限速保护、条件刹停、参数兜底这些真实控制器里会有的动作，都写进去。
  * 等 RoboFrame 能给出真正的实现，换掉这个文件即可，数据结构不用动。
  *
- * 实现的形状是**语句树**（见 `@codecanvas/contracts` 的 `capability.ts`）：调用、赋值、条件。
- * 所以 `避障停止` 写出来是「读一次激光 → 如果读数小于阈值就刹停」，而不是三行平铺的调用。
+ * 实现的形状是**语句树**（见 `@codecanvas/contracts` 的 `capability.ts`）。
  */
 import type { CapabilityCatalog } from '@codecanvas/contracts';
+
+/** 安全上限：线速度 0.3 m/s、角速度 1.2 rad/s —— 与协议 DEFAULT_LIMITS 一致。 */
+const MAX_LINEAR = 0.3;
+const MAX_ANGULAR = 1.2;
 
 export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 	catalogRef: 'phase1_robot',
 	displayName: '一期设备（差速底盘 + 六轴臂）',
-	revisionRef: 'phase1-robot-catalog-v2',
+	revisionRef: 'phase1-robot-catalog-v3',
 
 	primitives: [
 		{
@@ -86,12 +90,30 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 				{ name: 'angular', label: '角速度', type: 'number' },
 				{ name: 'duration', label: '时长', type: 'number' },
 			],
+			// 先把速度夹到安全上限，再下发、走满时长、收尾停住。
 			implementation: [
+				{
+					kind: 'set',
+					target: 'speed',
+					value: { kind: 'param', name: 'linear' },
+				},
+				{
+					kind: 'if',
+					condition: {
+						kind: 'binary',
+						operator: 'gt',
+						left: { kind: 'param', name: 'speed' },
+						right: { kind: 'literal', value: MAX_LINEAR },
+					},
+					then: [
+						{ kind: 'set', target: 'speed', value: { kind: 'literal', value: MAX_LINEAR } },
+					],
+				},
 				{
 					kind: 'call',
 					primitiveRef: 'set_velocity',
 					arguments: {
-						linear: { kind: 'param', name: 'linear' },
+						linear: { kind: 'param', name: 'speed' },
 						angular: { kind: 'param', name: 'angular' },
 					},
 				},
@@ -111,11 +133,25 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 				{ name: 'angular', label: '角速度', type: 'number' },
 				{ name: 'duration', label: '时长', type: 'number' },
 			],
+			// 原地转：线速度恒为 0，角速度同样要先夹上限。
 			implementation: [
+				{ kind: 'set', target: 'rate', value: { kind: 'param', name: 'angular' } },
+				{
+					kind: 'if',
+					condition: {
+						kind: 'binary',
+						operator: 'gt',
+						left: { kind: 'param', name: 'rate' },
+						right: { kind: 'literal', value: MAX_ANGULAR },
+					},
+					then: [
+						{ kind: 'set', target: 'rate', value: { kind: 'literal', value: MAX_ANGULAR } },
+					],
+				},
 				{
 					kind: 'call',
 					primitiveRef: 'set_velocity',
-					arguments: { linear: 0, angular: { kind: 'param', name: 'angular' } },
+					arguments: { linear: { kind: 'literal', value: 0 }, angular: { kind: 'param', name: 'rate' } },
 				},
 				{
 					kind: 'call',
@@ -130,7 +166,10 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 			label: '停止',
 			kind: 'skill',
 			parameters: [],
-			implementation: [{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} }],
+			implementation: [
+				{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} },
+				{ kind: 'call', primitiveRef: 'brake', arguments: {} },
+			],
 		},
 		{
 			capabilityRef: 'stop_if_obstacle',
@@ -140,7 +179,7 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 				{ name: 'sensors', label: '传感器', type: 'sensor' },
 				{ name: 'distance', label: '距离', type: 'number' },
 			],
-			// 读一次激光，读数小于阈值就紧急刹停——这一步是**有条件**的，所以是 if 而不是平铺的调用。
+			// 读一次激光；读数小于阈值就刹停并收尾。
 			implementation: [
 				{
 					kind: 'set',
@@ -159,7 +198,10 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 						left: { kind: 'param', name: 'reading' },
 						right: { kind: 'param', name: 'distance' },
 					},
-					then: [{ kind: 'call', primitiveRef: 'brake', arguments: {} }],
+					then: [
+						{ kind: 'call', primitiveRef: 'brake', arguments: {} },
+						{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} },
+					],
 				},
 			],
 		},
@@ -174,6 +216,16 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 					target: 'status',
 					value: { kind: 'call', primitiveRef: 'read_status', arguments: {} },
 				},
+				{
+					kind: 'if',
+					condition: {
+						kind: 'binary',
+						operator: 'eq',
+						left: { kind: 'param', name: 'status' },
+						right: { kind: 'literal', value: 'error' },
+					},
+					then: [{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} }],
+				},
 			],
 		},
 		{
@@ -185,15 +237,40 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 				{ name: 'joint', label: '角度', type: 'number' },
 				{ name: 'time', label: '时长', type: 'number', integer: true },
 			],
+			// 关节号越界就别动，免得把臂送到不该去的地方；否则正常驱动。
 			implementation: [
 				{
-					kind: 'call',
-					primitiveRef: 'drive_joint',
-					arguments: {
-						joint_id: { kind: 'param', name: 'joint_id' },
-						angle: { kind: 'param', name: 'joint' },
-						time: { kind: 'param', name: 'time' },
+					kind: 'if',
+					condition: {
+						kind: 'binary',
+						operator: 'lt',
+						left: { kind: 'param', name: 'joint_id' },
+						right: { kind: 'literal', value: 1 },
 					},
+					then: [{ kind: 'call', primitiveRef: 'brake', arguments: {} }],
+					else: [
+						{
+							kind: 'if',
+							condition: {
+								kind: 'binary',
+								operator: 'gt',
+								left: { kind: 'param', name: 'joint_id' },
+								right: { kind: 'literal', value: 6 },
+							},
+							then: [{ kind: 'call', primitiveRef: 'brake', arguments: {} }],
+							else: [
+								{
+									kind: 'call',
+									primitiveRef: 'drive_joint',
+									arguments: {
+										joint_id: { kind: 'param', name: 'joint_id' },
+										angle: { kind: 'param', name: 'joint' },
+										time: { kind: 'param', name: 'time' },
+									},
+								},
+							],
+						},
+					],
 				},
 			],
 		},
@@ -210,7 +287,23 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 				{ name: 'joint6', label: '关节6', type: 'number' },
 				{ name: 'time', label: '时长', type: 'number', integer: true },
 			],
+			// 动作时长有下限（太短会让电机跟不上），先兜住再下发六个角度。
 			implementation: [
+				{
+					kind: 'set',
+					target: 'duration',
+					value: { kind: 'param', name: 'time' },
+				},
+				{
+					kind: 'if',
+					condition: {
+						kind: 'binary',
+						operator: 'lt',
+						left: { kind: 'param', name: 'duration' },
+						right: { kind: 'literal', value: 100 },
+					},
+					then: [{ kind: 'set', target: 'duration', value: { kind: 'literal', value: 100 } }],
+				},
 				{
 					kind: 'call',
 					primitiveRef: 'drive_joints',
@@ -221,7 +314,7 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 						joint4: { kind: 'param', name: 'joint4' },
 						joint5: { kind: 'param', name: 'joint5' },
 						joint6: { kind: 'param', name: 'joint6' },
-						time: { kind: 'param', name: 'time' },
+						time: { kind: 'param', name: 'duration' },
 					},
 				},
 			],

@@ -658,9 +658,10 @@ const renderParam = (
 	const isLocal = locals.includes(name);
 	const isCapabilityParameter = capability.parameters.some((parameter) => parameter.name === name);
 
-	// 实参位置（`名字=值`）写不出局部变量名，只能退回节点的同名字段——
-	// 一期目录里没有这种用法，真出现了按值渲染比按名字渲染更接近机器会执行的东西。
-	if (isLocal && declaredParameter === undefined) return name;
+	// 局部变量一律写名字——**实参位置也一样**（`set_velocity(linear=speed)`）。
+	// 它的值由运行时上一条赋值决定，渲染层算不出来；退回节点的同名字段只会渲染成 `null`，
+	// 那才是把程序说错。目录里原先没有这种用法，现在有了（实现先夹一次限速再下发）。
+	if (isLocal) return name;
 
 	const value = node.parameters[name];
 	if (value === undefined) {
