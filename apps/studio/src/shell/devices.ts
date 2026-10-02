@@ -30,19 +30,27 @@ export interface StudioDevice {
 }
 
 /** 登记在册的设备。顺序就是下拉里的顺序，第一条是默认选中。 */
+/*
+ * 顺序就是下拉里的顺序，**第一条是打开页面时选中的那台**。
+ *
+ * 虚拟设备排第一，不是因为它更重要，而是因为**打开页面就能把一件事看完**：
+ * 写一句话、生成、看它动。真机排第二——它跑的是同一份技能库，差的只是"谁去下发原语"，
+ * 而现在没有硬件可接，选它只能看到一份目录事实。把一台"看不出动静"的设备放在默认位置，
+ * 演示的人第一眼就以为这东西还没做完。
+ */
 export const DEVICES: readonly StudioDevice[] = [
-	{
-		deviceRef: 'so101_robot',
-		label: 'SO-101 单臂（真机）',
-		virtual: false,
-		catalog: ROBOFRAME_SO101_CATALOG,
-		formatRef: 'skill_plan',
-	},
 	{
 		deviceRef: 'so101_sim',
 		label: '虚拟设备（SO-101 仿真）',
 		virtual: true,
 		// 同一份技能库：仿真与真机跑的是同一串技能调用，换的只是去处。
+		catalog: ROBOFRAME_SO101_CATALOG,
+		formatRef: 'skill_plan',
+	},
+	{
+		deviceRef: 'so101_robot',
+		label: 'SO-101 单臂（真机）',
+		virtual: false,
 		catalog: ROBOFRAME_SO101_CATALOG,
 		formatRef: 'skill_plan',
 	},
