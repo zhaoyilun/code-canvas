@@ -1,0 +1,1421 @@
+{
+	"provenance": {
+		"upstream": "https://gitcode.com/openeuler/IB_Robot",
+		"branch": "RoboFrame",
+		"commit": "8f364c3ffdc08dd31b510ff78011b2b960e42be3",
+		"robotConfig": "src/robot_config/config/robots/so101_single_arm.yaml",
+		"generatedBy": "tools/import-roboframe/import.mjs"
+	},
+	"catalog": {
+		"catalogRef": "roboframe_so101_single_arm",
+		"displayName": "SO-101 单臂（RoboFrame 技能库）",
+		"revisionRef": "roboframe-so101_single_arm-8f364c3f",
+		"namedPoses": [
+			"home",
+			"observe_table",
+			"zero"
+		],
+		"primitives": [
+			{
+				"primitiveRef": "move_to_named_pose",
+				"label": "移动到命名位姿",
+				"summary": "移动到命名位姿",
+				"parameters": [
+					{
+						"name": "pose_name",
+						"label": "命名位姿",
+						"type": "pose"
+					}
+				]
+			},
+			{
+				"primitiveRef": "move_to_pose",
+				"label": "移动到经过安全校验的动态 base-frame 位姿",
+				"summary": "移动到经过安全校验的动态 base-frame 位姿",
+				"parameters": [
+					{
+						"name": "target_pose",
+						"label": "目标位姿（base 系）",
+						"type": "json"
+					}
+				]
+			},
+			{
+				"primitiveRef": "move_to_configuration",
+				"label": "经 MoveIt 移动到经过校验的完整机械臂关节配置",
+				"summary": "经 MoveIt 移动到经过校验的完整机械臂关节配置",
+				"parameters": [
+					{
+						"name": "joint_positions",
+						"label": "关节配置",
+						"type": "json"
+					}
+				]
+			},
+			{
+				"primitiveRef": "move_relative_ee",
+				"label": "相对当前末端位姿做笛卡尔增量移动",
+				"summary": "相对当前末端位姿做笛卡尔增量移动",
+				"parameters": [
+					{
+						"name": "motion_direction",
+						"label": "移动方向",
+						"type": "string"
+					},
+					{
+						"name": "motion_distance",
+						"label": "移动距离（米）",
+						"type": "number"
+					}
+				]
+			},
+			{
+				"primitiveRef": "move_to_joint_positions",
+				"label": "按完整手臂关节顺序移动到单个关节目标",
+				"summary": "按完整手臂关节顺序移动到单个关节目标",
+				"parameters": [
+					{
+						"name": "joint_positions",
+						"label": "关节目标位置",
+						"type": "json"
+					},
+					{
+						"name": "duration_sec",
+						"label": "到位时间（秒）",
+						"type": "number"
+					}
+				]
+			},
+			{
+				"primitiveRef": "move_through_joint_positions",
+				"label": "按完整手臂关节顺序执行多路点关节轨迹",
+				"summary": "按完整手臂关节顺序执行多路点关节轨迹",
+				"parameters": [
+					{
+						"name": "trajectory_template",
+						"label": "轨迹模板",
+						"type": "json"
+					}
+				]
+			},
+			{
+				"primitiveRef": "open_gripper",
+				"label": "张开夹爪",
+				"summary": "张开夹爪",
+				"parameters": []
+			},
+			{
+				"primitiveRef": "close_gripper",
+				"label": "闭合夹爪",
+				"summary": "闭合夹爪",
+				"parameters": []
+			},
+			{
+				"primitiveRef": "rotate_gripper_cw",
+				"label": "绕当前末端局部 Z 轴顺时针旋转",
+				"summary": "绕当前末端局部 Z 轴顺时针旋转",
+				"parameters": [
+					{
+						"name": "motion_distance",
+						"label": "旋转角度（度）",
+						"type": "number"
+					}
+				]
+			},
+			{
+				"primitiveRef": "rotate_gripper_ccw",
+				"label": "绕当前末端局部 Z 轴逆时针旋转",
+				"summary": "绕当前末端局部 Z 轴逆时针旋转",
+				"parameters": [
+					{
+						"name": "motion_distance",
+						"label": "旋转角度（度）",
+						"type": "number"
+					}
+				]
+			}
+		],
+		"capabilities": [
+			{
+				"capabilityRef": "inspect_scene",
+				"label": "观察桌面",
+				"summary": "Move to observe_table and acquire a top-down scene view for planning.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_named_pose",
+						"arguments": {
+							"pose_name": {
+								"kind": "literal",
+								"value": "observe_table"
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "recover_safe_pose",
+				"label": "回原位",
+				"summary": "Return the arm to the 'home' safe rest pose.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_named_pose",
+						"arguments": {
+							"pose_name": {
+								"kind": "literal",
+								"value": "home"
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "recover_zero_pose",
+				"label": "零点",
+				"summary": "Return the arm to the calibration 'zero' pose (all joints at 0).",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_named_pose",
+						"arguments": {
+							"pose_name": {
+								"kind": "literal",
+								"value": "zero"
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "move_relative_ee",
+				"label": "往前一点",
+				"summary": "Translate the end-effector by a caller-supplied direction and distance.",
+				"kind": "skill",
+				"parameters": [
+					{
+						"name": "motion_direction",
+						"label": "motion_direction",
+						"type": "string"
+					},
+					{
+						"name": "motion_distance",
+						"label": "motion_distance",
+						"type": "number"
+					}
+				],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "move_relative_ee",
+						"arguments": {
+							"motion_direction": {
+								"kind": "param",
+								"name": "motion_direction"
+							},
+							"motion_distance": {
+								"kind": "param",
+								"name": "motion_distance"
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "open_gripper_skill",
+				"label": "打开夹爪",
+				"summary": "Open the gripper to its open position.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "open_gripper",
+						"arguments": {}
+					}
+				]
+			},
+			{
+				"capabilityRef": "close_gripper_skill",
+				"label": "关闭夹爪",
+				"summary": "Close the gripper to its closed position.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "close_gripper",
+						"arguments": {}
+					}
+				]
+			},
+			{
+				"capabilityRef": "rotate_gripper_cw",
+				"label": "顺时针旋转",
+				"summary": "Rotate the gripper clockwise by a caller-supplied angle.",
+				"kind": "skill",
+				"parameters": [
+					{
+						"name": "motion_distance",
+						"label": "motion_distance",
+						"type": "number"
+					}
+				],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "rotate_gripper_cw",
+						"arguments": {
+							"motion_distance": {
+								"kind": "param",
+								"name": "motion_distance"
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "rotate_gripper_ccw",
+				"label": "逆时针旋转",
+				"summary": "Rotate the gripper counter-clockwise by a caller-supplied angle.",
+				"kind": "skill",
+				"parameters": [
+					{
+						"name": "motion_distance",
+						"label": "motion_distance",
+						"type": "number"
+					}
+				],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "rotate_gripper_ccw",
+						"arguments": {
+							"motion_distance": {
+								"kind": "param",
+								"name": "motion_distance"
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "dance_basic",
+				"label": "跳舞",
+				"summary": "Play a multi-joint rhythmic dance sequence (shoulder/elbow/wrist).",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "close_gripper",
+						"arguments": {}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_joint_positions",
+						"arguments": {
+							"joint_positions": {
+								"kind": "literal",
+								"value": {
+									"1": 0.02,
+									"2": 0.57,
+									"3": -0.76,
+									"4": -0.58,
+									"5": 0.51
+								}
+							},
+							"duration_sec": {
+								"kind": "literal",
+								"value": 2
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_through_joint_positions",
+						"arguments": {
+							"trajectory_template": {
+								"kind": "literal",
+								"value": {
+									"type": "wave_dance_v1",
+									"waypoint_duration_sec": 0.05,
+									"active_waypoint_count": 120,
+									"repeat_count": 3,
+									"zero_hold_count": 4,
+									"base_pose": {
+										"1": 0.02,
+										"2": 0.54,
+										"3": -0.82,
+										"4": -0.18,
+										"5": 0.02
+									},
+									"joints": {
+										"1": {
+											"terms": [
+												{
+													"amplitude": 0,
+													"harmonic": 1,
+													"phase": 1.2
+												}
+											]
+										},
+										"2": {
+											"terms": [
+												{
+													"amplitude": 0.3,
+													"harmonic": 1,
+													"phase": 0
+												},
+												{
+													"amplitude": 0.03,
+													"harmonic": 2,
+													"phase": 1.5707963267948966
+												}
+											]
+										},
+										"3": {
+											"terms": [
+												{
+													"amplitude": 0.3,
+													"harmonic": 1,
+													"phase": 0
+												},
+												{
+													"amplitude": 0.06,
+													"harmonic": 2,
+													"phase": 1.5707963267948966
+												}
+											]
+										},
+										"4": {
+											"terms": [
+												{
+													"amplitude": -0.8,
+													"harmonic": 1,
+													"phase": 0.45
+												},
+												{
+													"amplitude": -0.05,
+													"harmonic": 2,
+													"phase": 1.8
+												}
+											]
+										},
+										"5": {
+											"terms": [
+												{
+													"amplitude": 0.5,
+													"harmonic": 1,
+													"phase": 1.8
+												}
+											]
+										}
+									},
+									"workspace_limits": {
+										"model": "so101_arm_v1",
+										"points": {
+											"joint3": {
+												"z": [
+													0.04,
+													0.55
+												]
+											},
+											"upper_arm_mid": {
+												"z": [
+													0.03,
+													0.55
+												]
+											},
+											"forearm_mid": {
+												"z": [
+													0.025,
+													0.55
+												]
+											},
+											"wrist_mid": {
+												"z": [
+													0.025,
+													0.55
+												]
+											},
+											"ee": {
+												"x": [
+													-0.32,
+													0.25
+												],
+												"y": [
+													-0.42,
+													0
+												],
+												"z": [
+													0.05,
+													0.55
+												]
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "wave_hello",
+				"label": "打招呼",
+				"summary": "Wave hello or goodbye with the wrist (casual greeting gesture).",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "close_gripper",
+						"arguments": {}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_joint_positions",
+						"arguments": {
+							"joint_positions": {
+								"kind": "literal",
+								"value": {
+									"1": 0.02,
+									"2": 0.54,
+									"3": -0.82,
+									"4": -0.18,
+									"5": 0.02
+								}
+							},
+							"duration_sec": {
+								"kind": "literal",
+								"value": 2
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_through_joint_positions",
+						"arguments": {
+							"trajectory_template": {
+								"kind": "literal",
+								"value": {
+									"type": "single_joint_wave_v1",
+									"waypoint_duration_sec": 0.05,
+									"active_waypoint_count": 16,
+									"repeat_count": 3,
+									"base_pose": {
+										"1": 0.02,
+										"2": 0.54,
+										"3": -0.82,
+										"4": -0.18,
+										"5": 0.02
+									},
+									"joint": "5",
+									"amplitude": 0.35,
+									"workspace_limits": {
+										"model": "so101_arm_v1",
+										"points": {
+											"joint3": {
+												"z": [
+													0.04,
+													0.55
+												]
+											},
+											"upper_arm_mid": {
+												"z": [
+													0.03,
+													0.55
+												]
+											},
+											"forearm_mid": {
+												"z": [
+													0.025,
+													0.55
+												]
+											},
+											"wrist_mid": {
+												"z": [
+													0.025,
+													0.55
+												]
+											},
+											"ee": {
+												"x": [
+													-0.32,
+													0.25
+												],
+												"y": [
+													-0.42,
+													0
+												],
+												"z": [
+													0.05,
+													0.55
+												]
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_joint_positions",
+						"arguments": {
+							"joint_positions": {
+								"kind": "literal",
+								"value": {
+									"1": 0.02,
+									"2": 0.54,
+									"3": -0.82,
+									"4": -0.18,
+									"5": 0.02
+								}
+							},
+							"duration_sec": {
+								"kind": "literal",
+								"value": 2
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "nod_yes",
+				"label": "点头",
+				"summary": "Nod 'yes' (agreement) with small shoulder/elbow motion.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "close_gripper",
+						"arguments": {}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_joint_positions",
+						"arguments": {
+							"joint_positions": {
+								"kind": "literal",
+								"value": {
+									"1": 0.02,
+									"2": 0.54,
+									"3": -0.82,
+									"4": -0.18,
+									"5": 0.02
+								}
+							},
+							"duration_sec": {
+								"kind": "literal",
+								"value": 2
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_through_joint_positions",
+						"arguments": {
+							"trajectory_template": {
+								"kind": "literal",
+								"value": {
+									"type": "wave_dance_v1",
+									"waypoint_duration_sec": 0.05,
+									"active_waypoint_count": 16,
+									"repeat_count": 2,
+									"zero_hold_count": 0,
+									"base_pose": {
+										"1": 0.02,
+										"2": 0.54,
+										"3": -0.82,
+										"4": -0.18,
+										"5": 0.02
+									},
+									"joints": {
+										"2": {
+											"terms": [
+												{
+													"amplitude": 0.15,
+													"harmonic": 1,
+													"phase": 0
+												}
+											]
+										},
+										"3": {
+											"terms": [
+												{
+													"amplitude": -0.15,
+													"harmonic": 1,
+													"phase": 0
+												}
+											]
+										}
+									},
+									"workspace_limits": {
+										"model": "so101_arm_v1",
+										"points": {
+											"joint3": {
+												"z": [
+													0.04,
+													0.55
+												]
+											},
+											"upper_arm_mid": {
+												"z": [
+													0.03,
+													0.55
+												]
+											},
+											"forearm_mid": {
+												"z": [
+													0.025,
+													0.55
+												]
+											},
+											"wrist_mid": {
+												"z": [
+													0.025,
+													0.55
+												]
+											},
+											"ee": {
+												"x": [
+													-0.32,
+													0.25
+												],
+												"y": [
+													-0.42,
+													0
+												],
+												"z": [
+													0.05,
+													0.55
+												]
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_joint_positions",
+						"arguments": {
+							"joint_positions": {
+								"kind": "literal",
+								"value": {
+									"1": 0.02,
+									"2": 0.54,
+									"3": -0.82,
+									"4": -0.18,
+									"5": 0.02
+								}
+							},
+							"duration_sec": {
+								"kind": "literal",
+								"value": 2
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "shake_no",
+				"label": "摇头",
+				"summary": "Shake 'no' (disagreement) with a small base-joint motion.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "close_gripper",
+						"arguments": {}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_joint_positions",
+						"arguments": {
+							"joint_positions": {
+								"kind": "literal",
+								"value": {
+									"1": 0.02,
+									"2": 0.54,
+									"3": -0.82,
+									"4": -0.18,
+									"5": 0.02
+								}
+							},
+							"duration_sec": {
+								"kind": "literal",
+								"value": 2
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_through_joint_positions",
+						"arguments": {
+							"trajectory_template": {
+								"kind": "literal",
+								"value": {
+									"type": "single_joint_wave_v1",
+									"waypoint_duration_sec": 0.05,
+									"active_waypoint_count": 16,
+									"repeat_count": 3,
+									"base_pose": {
+										"1": 0.02,
+										"2": 0.54,
+										"3": -0.82,
+										"4": -0.18,
+										"5": 0.02
+									},
+									"joint": "1",
+									"amplitude": 0.2,
+									"workspace_limits": {
+										"model": "so101_arm_v1",
+										"points": {
+											"joint3": {
+												"z": [
+													0.04,
+													0.55
+												]
+											},
+											"upper_arm_mid": {
+												"z": [
+													0.03,
+													0.55
+												]
+											},
+											"forearm_mid": {
+												"z": [
+													0.025,
+													0.55
+												]
+											},
+											"wrist_mid": {
+												"z": [
+													0.025,
+													0.55
+												]
+											},
+											"ee": {
+												"x": [
+													-0.32,
+													0.25
+												],
+												"y": [
+													-0.42,
+													0
+												],
+												"z": [
+													0.05,
+													0.55
+												]
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_joint_positions",
+						"arguments": {
+							"joint_positions": {
+								"kind": "literal",
+								"value": {
+									"1": 0.02,
+									"2": 0.54,
+									"3": -0.82,
+									"4": -0.18,
+									"5": 0.02
+								}
+							},
+							"duration_sec": {
+								"kind": "literal",
+								"value": 2
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "celebrate",
+				"label": "庆祝",
+				"summary": "Celebrate at observe_table with quick up/down/left/right relative moves.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "close_gripper",
+						"arguments": {}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_named_pose",
+						"arguments": {
+							"pose_name": {
+								"kind": "literal",
+								"value": "observe_table"
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_relative_ee",
+						"arguments": {
+							"motion_direction": {
+								"kind": "literal",
+								"value": "up"
+							},
+							"motion_distance": {
+								"kind": "literal",
+								"value": 0.04
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_relative_ee",
+						"arguments": {
+							"motion_direction": {
+								"kind": "literal",
+								"value": "down"
+							},
+							"motion_distance": {
+								"kind": "literal",
+								"value": 0.08
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_relative_ee",
+						"arguments": {
+							"motion_direction": {
+								"kind": "literal",
+								"value": "up"
+							},
+							"motion_distance": {
+								"kind": "literal",
+								"value": 0.04
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_relative_ee",
+						"arguments": {
+							"motion_direction": {
+								"kind": "literal",
+								"value": "left"
+							},
+							"motion_distance": {
+								"kind": "literal",
+								"value": 0.04
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_relative_ee",
+						"arguments": {
+							"motion_direction": {
+								"kind": "literal",
+								"value": "right"
+							},
+							"motion_distance": {
+								"kind": "literal",
+								"value": 0.08
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_relative_ee",
+						"arguments": {
+							"motion_direction": {
+								"kind": "literal",
+								"value": "left"
+							},
+							"motion_distance": {
+								"kind": "literal",
+								"value": 0.04
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_named_pose",
+						"arguments": {
+							"pose_name": {
+								"kind": "literal",
+								"value": "observe_table"
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "greet_observe_raise",
+				"label": "举手致意",
+				"summary": "Formal greet: move to observe_table, raise/lower the end-effector, return.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "close_gripper",
+						"arguments": {}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_named_pose",
+						"arguments": {
+							"pose_name": {
+								"kind": "literal",
+								"value": "observe_table"
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_relative_ee",
+						"arguments": {
+							"motion_direction": {
+								"kind": "literal",
+								"value": "up"
+							},
+							"motion_distance": {
+								"kind": "literal",
+								"value": 0.04
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_relative_ee",
+						"arguments": {
+							"motion_direction": {
+								"kind": "literal",
+								"value": "down"
+							},
+							"motion_distance": {
+								"kind": "literal",
+								"value": 0.04
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_relative_ee",
+						"arguments": {
+							"motion_direction": {
+								"kind": "literal",
+								"value": "up"
+							},
+							"motion_distance": {
+								"kind": "literal",
+								"value": 0.04
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_relative_ee",
+						"arguments": {
+							"motion_direction": {
+								"kind": "literal",
+								"value": "down"
+							},
+							"motion_distance": {
+								"kind": "literal",
+								"value": 0.04
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_named_pose",
+						"arguments": {
+							"pose_name": {
+								"kind": "literal",
+								"value": "observe_table"
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "act_cute",
+				"label": "撒娇",
+				"summary": "Act cute: small wiggle with gripper open/close to seek attention.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "close_gripper",
+						"arguments": {}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_named_pose",
+						"arguments": {
+							"pose_name": {
+								"kind": "literal",
+								"value": "home"
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_joint_positions",
+						"arguments": {
+							"joint_positions": {
+								"kind": "literal",
+								"value": {
+									"1": 0.1,
+									"2": 0.54,
+									"3": -0.82,
+									"4": -0.22,
+									"5": 0.3
+								}
+							},
+							"duration_sec": {
+								"kind": "literal",
+								"value": 2
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "open_gripper",
+						"arguments": {}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_through_joint_positions",
+						"arguments": {
+							"trajectory_template": {
+								"kind": "literal",
+								"value": {
+									"type": "wave_dance_v1",
+									"waypoint_duration_sec": 0.05,
+									"active_waypoint_count": 48,
+									"repeat_count": 2,
+									"zero_hold_count": 2,
+									"base_pose": {
+										"1": 0.02,
+										"2": 0.54,
+										"3": -0.82,
+										"4": -0.18,
+										"5": 0.02
+									},
+									"joints": {
+										"1": {
+											"terms": [
+												{
+													"amplitude": 0.08,
+													"harmonic": 1,
+													"phase": 1.5707963267948966
+												}
+											]
+										},
+										"2": {
+											"terms": [
+												{
+													"amplitude": 0.1,
+													"harmonic": 1,
+													"phase": 0
+												}
+											]
+										},
+										"3": {
+											"terms": [
+												{
+													"amplitude": 0.08,
+													"harmonic": 1,
+													"phase": 0
+												}
+											]
+										},
+										"4": {
+											"terms": [
+												{
+													"amplitude": -0.12,
+													"harmonic": 1,
+													"phase": 0.35
+												}
+											]
+										},
+										"5": {
+											"terms": [
+												{
+													"amplitude": 0.28,
+													"harmonic": 1,
+													"phase": 1.5707963267948966
+												}
+											]
+										}
+									},
+									"workspace_limits": {
+										"model": "so101_arm_v1",
+										"points": {
+											"joint3": {
+												"z": [
+													0.04,
+													0.55
+												]
+											},
+											"upper_arm_mid": {
+												"z": [
+													0.03,
+													0.55
+												]
+											},
+											"forearm_mid": {
+												"z": [
+													0.025,
+													0.55
+												]
+											},
+											"wrist_mid": {
+												"z": [
+													0.025,
+													0.55
+												]
+											},
+											"ee": {
+												"x": [
+													-0.32,
+													0.25
+												],
+												"y": [
+													-0.42,
+													0
+												],
+												"z": [
+													0.05,
+													0.55
+												]
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "close_gripper",
+						"arguments": {}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "open_gripper",
+						"arguments": {}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_joint_positions",
+						"arguments": {
+							"joint_positions": {
+								"kind": "literal",
+								"value": {
+									"1": 0.02,
+									"2": 0.54,
+									"3": -0.82,
+									"4": -0.18,
+									"5": 0.02
+								}
+							},
+							"duration_sec": {
+								"kind": "literal",
+								"value": 2
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "happy_spin_upright",
+				"label": "开心转圈",
+				"summary": "Keep an upright pose while spinning the base joint with a wrist wiggle.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "close_gripper",
+						"arguments": {}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_joint_positions",
+						"arguments": {
+							"joint_positions": {
+								"kind": "literal",
+								"value": {
+									"1": 0.02,
+									"2": 0.08,
+									"3": -1.3,
+									"4": -0.18,
+									"5": 0.02
+								}
+							},
+							"duration_sec": {
+								"kind": "literal",
+								"value": 2
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_through_joint_positions",
+						"arguments": {
+							"trajectory_template": {
+								"kind": "literal",
+								"value": {
+									"type": "wave_dance_v1",
+									"waypoint_duration_sec": 0.05,
+									"active_waypoint_count": 64,
+									"repeat_count": 2,
+									"zero_hold_count": 3,
+									"base_pose": {
+										"1": 0.02,
+										"2": 0,
+										"3": -1.22,
+										"4": -0.18,
+										"5": 0.02
+									},
+									"joints": {
+										"1": {
+											"terms": [
+												{
+													"amplitude": 0.55,
+													"harmonic": 1,
+													"phase": 0
+												}
+											]
+										},
+										"2": {
+											"terms": [
+												{
+													"amplitude": 0.08,
+													"harmonic": 2,
+													"phase": 1.5707963267948966
+												}
+											]
+										},
+										"3": {
+											"terms": [
+												{
+													"amplitude": -0.08,
+													"harmonic": 2,
+													"phase": 1.5707963267948966
+												}
+											]
+										},
+										"4": {
+											"terms": [
+												{
+													"amplitude": 0.1,
+													"harmonic": 2,
+													"phase": 0
+												}
+											]
+										},
+										"5": {
+											"terms": [
+												{
+													"amplitude": 0.35,
+													"harmonic": 2,
+													"phase": 0
+												}
+											]
+										}
+									},
+									"workspace_limits": {
+										"model": "so101_arm_v1",
+										"points": {
+											"joint3": {
+												"z": [
+													0.04,
+													0.55
+												]
+											},
+											"upper_arm_mid": {
+												"z": [
+													0.03,
+													0.55
+												]
+											},
+											"forearm_mid": {
+												"z": [
+													0.025,
+													0.55
+												]
+											},
+											"wrist_mid": {
+												"z": [
+													0.025,
+													0.55
+												]
+											},
+											"ee": {
+												"x": [
+													-0.32,
+													0.25
+												],
+												"y": [
+													-0.42,
+													0
+												],
+												"z": [
+													0.05,
+													0.55
+												]
+											}
+										}
+									}
+								}
+							}
+						}
+					},
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_joint_positions",
+						"arguments": {
+							"joint_positions": {
+								"kind": "literal",
+								"value": {
+									"1": 0.02,
+									"2": 0,
+									"3": -1.22,
+									"4": -0.18,
+									"5": 0.02
+								}
+							},
+							"duration_sec": {
+								"kind": "literal",
+								"value": 2
+							}
+						}
+					}
+				]
+			}
+		]
+	}
+}

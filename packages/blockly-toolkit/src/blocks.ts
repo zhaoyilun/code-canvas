@@ -32,6 +32,7 @@ import {
 	type ImplArgument,
 	type ImplExpression,
 	type ImplStatement,
+	type JsonValue,
 	type PrimitiveSpec,
 	type ProtocolFieldSummary,
 	type TaskAction,
@@ -219,7 +220,7 @@ export const isUnknownShape = (shape: ImplementationBlockShape): boolean =>
 export type ArgumentBinding =
 	| { readonly kind: 'parameter'; readonly parameter: string }
 	| { readonly kind: 'local'; readonly name: string }
-	| { readonly kind: 'literal'; readonly value: ImplArgument }
+	| { readonly kind: 'literal'; readonly value: JsonValue }
 	| { readonly kind: 'not-a-value'; readonly name: string }
 	| { readonly kind: 'dangling'; readonly name: string }
 	| { readonly kind: 'unbound' };
@@ -487,11 +488,29 @@ const describeBinding = (binding: ArgumentBinding): string => {
 	}
 };
 
-/** 字面量的显示文本：数字/布尔照原样，字符串照抄，数组按协议写法列出来。 */
-export const literalText = (value: ImplArgument): string => {
-	if (Array.isArray(value)) return value.join(' ');
+/**
+ * 字面量的显示文本。
+ *
+ * 标量与字符串数组照旧（`["/scan0"]` 读成 `/scan0`）；**结构化载荷摊成紧凑 JSON**——
+ * 真原语的实参就是关节位置映射、轨迹模板这种一整个对象，
+ * 老写法会把它变成 `[object Object]`，那是把程序说错。
+ */
+export const literalText = (value: JsonValue): string => {
+	if (Array.isArray(value) && value.every((item) => typeof item === 'string')) return value.join(' ');
+	if (value !== null && typeof value === 'object') return JSON.stringify(value) ?? 'null';
 	return String(value);
 };
+
+/**
+ * 积木上字面量字段的显示上限。
+ *
+ * 代码面板不截断（那是不许的），但积木是画出来的东西：一个字面量四千字符会把整块画布撑爆。
+ * 这里截断**明说**——尾巴上写着总共多少字，全文在 tooltip 里，一个字都没丢。
+ */
+export const LITERAL_FIELD_LIMIT = 48;
+
+export const truncateLiteralText = (text: string): string =>
+	text.length <= LITERAL_FIELD_LIMIT ? text : `${text.slice(0, LITERAL_FIELD_LIMIT)}…（共 ${text.length} 字）`;
 
 /**
  * tooltip：参数名、它绑到哪、显示名、单位与取值范围（协议有的话）都留着——
@@ -762,8 +781,9 @@ const describeExpression = (
 	path: string,
 ): ImplementationBlockShape => {
 	if (expression.kind === 'literal') {
+		const full = literalText(expression.value);
 		const text =
-			typeof expression.value === 'boolean' ? (expression.value ? '真' : '假') : String(expression.value);
+			typeof expression.value === 'boolean' ? (expression.value ? '真' : '假') : truncateLiteralText(full);
 		const role: ImplementationNodeRole =
 			typeof expression.value === 'number'
 				? 'literal-number'
@@ -781,7 +801,7 @@ const describeExpression = (
 					parameter: VALUE_FIELD_NAME,
 					binding: { kind: 'literal', value: expression.value },
 					text,
-					tooltip: `实现里写死的值 ${text}（画布不回写它）`,
+					tooltip: `实现里写死的值 ${full}（画布不回写它）`,
 				},
 			],
 			rows: [],

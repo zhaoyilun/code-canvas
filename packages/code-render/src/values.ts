@@ -47,8 +47,34 @@ export const formatIntegerLiteral = (value: number): string =>
 export const formatSensorArrayLiteral = (sensors: readonly string[]): string =>
 	`[${sensors.map((sensor) => JSON.stringify(sensor)).join(', ')}]`;
 
-/** 能直接渲染的取值：数字、字符串、布尔、字符串数组。 */
-export type Renderable = number | string | boolean | readonly string[];
+/** 数组字面量，元素是任意 JSON——`["/scan0"]` 这种写法读起来比紧凑 JSON 松快一点。 */
+const formatJsonArrayLiteral = (items: readonly JsonValue[]): string =>
+	`[${items.map((item) => JSON.stringify(item) ?? 'null').join(', ')}]`;
+
+/**
+ * 结构化载荷（`json` 类型的实参）的文本。
+ *
+ * 紧凑 JSON 是**默认**——一条语句一行，行号与步骤的映射才是准的。
+ * 只有在调用方明确允许换行（顶层语句的实参）且紧凑形态长到读不下去时，才摊成缩进 JSON；
+ * 摊开后的续行由渲染器按语句缩进推，所以这里从 0 缩进开始写。
+ */
+export const COMPACT_JSON_LIMIT = 72;
+
+export const compactJsonText = (value: JsonValue): string => JSON.stringify(value) ?? 'null';
+
+export const formatJsonLiteral = (value: JsonValue, multiline: boolean): string => {
+	const compact = compactJsonText(value);
+	if (!multiline || compact.length <= COMPACT_JSON_LIMIT) return compact;
+	return JSON.stringify(value, null, 4) ?? compact;
+};
+
+/**
+ * 能直接渲染的取值。
+ *
+ * 现在是整个 JSON 值域：`json` 类型的参数收对象与嵌套数组，那是真实原语（关节位置映射、
+ * 轨迹模板）的常态，不收就等于把一整个结构悄悄变成 `null`。
+ */
+export type Renderable = JsonValue;
 
 export interface RenderedArgument {
 	/** 参数名，逐字来自原语定义。 */
@@ -96,12 +122,18 @@ export const renderByType = (
 		case 'sensor':
 			if (!Array.isArray(value)) return { text: '[]', code: 'code_render.argument.not_sensor_array' };
 			if (value.length === 0) return { text: '[]', code: 'code_render.argument.empty_sensor_array' };
-			return { text: formatSensorArrayLiteral(value), code: null };
+			return { text: formatJsonArrayLiteral(value), code: null };
 		case 'string':
 		case 'pose':
 			if (typeof value === 'string') return { text: JSON.stringify(value), code: null };
-			if (Array.isArray(value)) return { text: formatSensorArrayLiteral(value), code: null };
+			if (Array.isArray(value)) return { text: formatJsonArrayLiteral(value), code: null };
 			return { text: 'null', code: 'code_render.argument.not_a_string' };
+		case 'json':
+			// 结构化载荷：只要有值就照原样写出来（对象、嵌套数组、标量都算数），
+			// 这里恒为紧凑形态——多行那条路只在顶层语句的实参上开。
+			return value === undefined
+				? { text: 'null', code: 'code_render.argument.missing_json' }
+				: { text: formatJsonLiteral(value, false), code: null };
 	}
 };
 
@@ -111,7 +143,7 @@ const TYPE_MESSAGES: Readonly<Record<string, string>> = {
 	'code_render.argument.not_sensor_array': '不是字符串数组，渲染成 []',
 	'code_render.argument.empty_sensor_array': '是空数组，渲染成 []',
 	'code_render.argument.not_a_string': '取不到字符串，渲染成 null',
-	'code_render.value.unsupported': '不是能写进代码的取值（数字 / 字符串 / 布尔 / 字符串数组），渲染成 null',
+	'code_render.argument.missing_json': '没有取值，渲染成 null',
 };
 
 export const valueMessage = (code: string): string =>
@@ -147,11 +179,16 @@ export const renderConstant = (
 	} else if (typeof value === 'string') {
 		rendered = { text: JSON.stringify(value), code: null };
 	} else if (Array.isArray(value)) {
-		rendered = value.every((item) => typeof item === 'string')
-			? { text: formatSensorArrayLiteral(value as readonly string[]), code: null }
-			: { text: 'null', code: 'code_render.value.unsupported' };
+		// 字符串数组仍是老样子（`["/scan0"]` 比 JSON 好看）；其余数组按结构化载荷写出来。
+		const sensors = value.filter((item): item is string => typeof item === 'string');
+		rendered =
+			sensors.length === value.length
+				? { text: formatSensorArrayLiteral(sensors), code: null }
+				: { text: compactJsonText(value), code: null };
 	} else {
-		rendered = { text: 'null', code: 'code_render.value.unsupported' };
+		// 剩下的是 null 与对象。契约放开了 JSON 字面量，两者都是**能写出来的取值**——
+		// 早先它们走「类型不符」给诊断，现在真原语的实参就长这样，拒收等于把结构吃掉。
+		rendered = { text: compactJsonText(value), code: null };
 	}
 
 	if (rendered.code === null) return rendered;

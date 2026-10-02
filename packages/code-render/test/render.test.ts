@@ -258,6 +258,8 @@ describe('渲染规则可追溯到原语定义（不许手写参数名）', () =
 			case 'string':
 			case 'pose':
 				return 'x';
+			case 'json':
+				return { joint: 0.5 };
 		}
 	};
 
@@ -288,9 +290,13 @@ describe('渲染规则可追溯到原语定义（不许手写参数名）', () =
 				expect(line).not.toBeNull();
 				if (line === null) continue;
 
-				const text = lineText(program, line);
-				expect(text).not.toBeNull();
-				if (text === null) continue;
+				// 一条语句可能摊成多行（结构化载荷摊不下时），实参表要**整段**拼起来看，
+				// 只看头一行会把摊在后面的实参漏掉。按精确路径取，嵌套调用不会把外层那行带进来。
+				const text = program.lines
+					.filter((item) => item.stepPath === path)
+					.map((item) => item.text.trim())
+					.join('');
+				expect(text).not.toBe('');
 
 				// 原语名 + 参数名序列 + 顺序，全部来自定义，测试这边只做对照
 				expect(text.trim().startsWith(`${statement.primitiveRef}(`)).toBe(true);
@@ -1070,5 +1076,72 @@ describe('实参位置的局部变量', () => {
 	it('夹限速那一支的赋值照样渲染出来（夹过才下发）', () => {
 		const program = render({ action: 'clamped_move', linear: 0.9, duration: 5 });
 		expect(texts(program).join('\n')).toContain('speed = 0.3');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 结构化载荷（`json` 类型的实参）
+// ---------------------------------------------------------------------------
+
+describe('结构化载荷：短的就地写，长的摊开，续行仍属于同一步', () => {
+	/** `pose_dance` 的第 2 步是一整个嵌套结构，紧凑形态远超一行的容忍宽度。 */
+	const LONG = {
+		type: 'wave_dance_v1',
+		active_waypoint_count: 48,
+		base_pose: { '1': 0.02, '2': 0.54, '3': -0.82 },
+		joints: { '5': { terms: [{ amplitude: 0.28, harmonic: 1 }] } },
+	};
+
+	const poseDance = (): RenderedImplementation => render({ step_id: 's1', action: 'pose_dance', duration: 2 });
+
+	it('短的写成一行的紧凑 JSON，一条语句还是一行', () => {
+		const program = poseDance();
+		const first = program.lines[0];
+		expect(first?.kind).toBe('call');
+		expect(first?.text.trim()).toBe(
+			'move_to_joint_positions(joint_positions={"1":0.02,"2":0.54}, duration_sec=2.0)',
+		);
+	});
+
+	it('长的摊成多行：头一行是语句，续行标成 argument，收尾那行退回语句缩进', () => {
+		const program = poseDance();
+		const lines = linesOfTopStep(program, 1);
+		expect(lines.length).toBeGreaterThan(3);
+		expect(lines[0]?.kind).toBe('call');
+		expect(lines[0]?.text.trimEnd().endsWith('joint_positions={')).toBe(true);
+		expect(lines.at(-1)?.text.trim()).toBe('}, duration_sec=2.0)');
+		for (const line of lines.slice(1)) {
+			expect(line.kind, line.text).toBe('argument');
+			expect(line.stepIndex).toBe(1);
+			expect(line.stepPath).toBe('1');
+			// 续行比语句深一档；只有收尾那行退回语句的缩进（读起来才像一次调用）。
+			expect(line.indent).toBe(line === lines.at(-1) ? 0 : 1);
+		}
+		// 「几个原语」只数真正的调用行：两步就两个，续行不算。
+		expect(callLines(program).length).toBe(2);
+		expect(program.steps.length).toBe(2);
+	});
+
+	it('摊开的 JSON 读回来必须还是原值（不截断、不改写）', () => {
+		const program = poseDance();
+		const joined = linesOfTopStep(program, 1)
+			.map((line) => line.text.trim())
+			.join('\n');
+		const prefix = 'move_to_joint_positions(joint_positions=';
+		const suffix = ', duration_sec=2.0)';
+		expect(joined.startsWith(prefix)).toBe(true);
+		expect(joined.endsWith(suffix)).toBe(true);
+		const body = joined.slice(prefix.length, joined.length - suffix.length);
+		expect(body).toContain('\n');
+		expect(JSON.parse(body)).toEqual(LONG);
+	});
+
+	it('行 ↔ 步骤的映射不被续行带偏：续行属于它那一句，且指向的那一行仍是语句头', () => {
+		const program = poseDance();
+		const lines = linesOfTopStep(program, 1);
+		for (const line of lines) expect(stepIndexAtLine(program, line.line)).toBe(1);
+		// 正向查询取到的是**头一行**（不是某条续行）——界面据此把整段高亮起来。
+		expect(lineOfStep(program, '1')).toBe(lines[0]?.line);
+		expect(lineText(program, lines[0]?.line ?? 0)?.trimEnd().endsWith('joint_positions={')).toBe(true);
 	});
 });

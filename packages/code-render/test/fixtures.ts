@@ -64,6 +64,15 @@ export const FIXTURE_CATALOG: CapabilityCatalog = {
 			],
 		},
 		{
+			// 结构化载荷（`json`）：关节位置映射是真实上游原语最常见的实参形状。
+			primitiveRef: 'move_to_joint_positions',
+			label: '移动到关节目标',
+			parameters: [
+				{ name: 'joint_positions', label: '关节目标位置', type: 'json' },
+				{ name: 'duration_sec', label: '到位时间（秒）', type: 'number' },
+			],
+		},
+		{
 			primitiveRef: 'drive_joints',
 			label: '驱动六关节',
 			parameters: [
@@ -321,6 +330,45 @@ export const FIXTURE_CATALOG: CapabilityCatalog = {
 					kind: 'call',
 					primitiveRef: 'wait',
 					arguments: { seconds: { kind: 'param', name: 'duration' } },
+				},
+			],
+		},
+		{
+			/**
+			 * 结构化载荷写在实现里：关节位置映射（短，一行放得下）与一整个嵌套结构（长，得摊开）。
+			 *
+			 * 上游 RoboFrame 的技能模板长这样——`joint_positions={"1": 0.02, …}`、
+			 * 轨迹模板是一棵几百字的对象树。这一条守两件事：短的就地写紧凑 JSON；
+			 * 长的摊成多行**续行**，续行仍属于同一步（不许被算成新的原语调用）。
+			 */
+			capabilityRef: 'pose_dance',
+			label: '摆姿势',
+			kind: 'skill',
+			parameters: [{ name: 'duration', label: '时长', type: 'number' }],
+			implementation: [
+				{
+					kind: 'call',
+					primitiveRef: 'move_to_joint_positions',
+					arguments: {
+						joint_positions: { kind: 'literal', value: { '1': 0.02, '2': 0.54 } },
+						duration_sec: { kind: 'param', name: 'duration' },
+					},
+				},
+				{
+					kind: 'call',
+					primitiveRef: 'move_to_joint_positions',
+					arguments: {
+						joint_positions: {
+							kind: 'literal',
+							value: {
+								type: 'wave_dance_v1',
+								active_waypoint_count: 48,
+								base_pose: { '1': 0.02, '2': 0.54, '3': -0.82 },
+								joints: { '5': { terms: [{ amplitude: 0.28, harmonic: 1 }] } },
+							},
+						},
+						duration_sec: { kind: 'literal', value: 2 },
+					},
 				},
 			],
 		},

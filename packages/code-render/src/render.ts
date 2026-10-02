@@ -33,7 +33,7 @@ import {
 	type WorkflowNode,
 } from '@codecanvas/contracts';
 import { EMPTY_LIMITS, describeLimits, type RenderedLimits } from './limits';
-import { asRenderable, renderByType, renderConstant, valueMessage } from './values';
+import { asRenderable, formatJsonLiteral, renderByType, renderConstant, valueMessage } from './values';
 
 /** 缩进一档 = 4 个空格。 */
 export const INDENT_UNIT = '    ';
@@ -46,7 +46,13 @@ export interface RenderedLine {
 	/** 缩进档数（0 = 顶层）。 */
 	readonly indent: number;
 	/** `call`/`set` = 一条语句；`if`/`else` = 分支头；`unsupported` = 目录里查不到；`comment` = 节点自身的注记。 */
-	readonly kind: 'call' | 'set' | 'if' | 'else' | 'unsupported' | 'comment';
+	/**
+	 * `call`/`set` = 一条语句；`if`/`else` = 分支头；`unsupported` = 目录里查不到；
+	 * `comment` = 节点自身的注记；`argument` = 一条**续行**——
+	 * 实参是结构化载荷、摊位摊不下时才摊开的那几行。它属于上面那条语句，
+	 * 所以不计入「几个原语」，也不单独占一步。
+	 */
+	readonly kind: 'call' | 'set' | 'if' | 'else' | 'unsupported' | 'comment' | 'argument';
 	/** 这一行所属的**顶层**语句下标（0 基）；注释行是 null。界面联动只认它。 */
 	readonly stepIndex: number | null;
 	/** 这一行精确对应的树路径，例如 `"1"`、`"1.then.0"`、`"1.else.2"`；注释行是 null。 */
@@ -330,15 +336,21 @@ const renderStatement = (
 			);
 			return;
 		}
-		push(
-			`${statement.primitiveRef}(${renderArguments(state, primitive, statement.arguments, path)})`,
-			'call',
-			depth,
-			topIndex,
+		// 顶层语句的实参允许摊成多行（结构化载荷摊不下时）。头一行是语句本身，
+		// 续行标成 `argument`——它们属于同一步，不该被算成新的原语调用。
+		const [head, ...rest] = `${statement.primitiveRef}(${renderArguments(
+			state,
+			primitive,
+			statement.arguments,
 			path,
-			statement.primitiveRef,
 			true,
-		);
+		)})`.split('\n');
+		push(head ?? '', 'call', depth, topIndex, path, statement.primitiveRef, true);
+		rest.forEach((line, index) => {
+			// 最后一行是收尾的 `})`：退回到语句本身的缩进，读起来才像一次调用。
+			const lineDepth = index === rest.length - 1 ? depth : depth + 1;
+			push(line, 'argument', lineDepth, topIndex, path, statement.primitiveRef, true);
+		});
 		return;
 	}
 
@@ -410,6 +422,7 @@ const renderArguments = (
 	primitive: PrimitiveSpec,
 	args: Readonly<Record<string, ImplArgument>>,
 	path: string,
+	multiline = false,
 ): string => {
 	const { node, collector } = state;
 	const declared = new Set(primitive.parameters.map((parameter) => parameter.name));
@@ -427,7 +440,7 @@ const renderArguments = (
 
 	return primitive.parameters
 		.map((parameter) =>
-			`${parameter.name}=${renderArgument(state, primitive, parameter, args[parameter.name], path)}`,
+			`${parameter.name}=${renderArgument(state, primitive, parameter, args[parameter.name], path, multiline)}`,
 		)
 		.join(', ');
 };
@@ -443,6 +456,7 @@ const renderArgument = (
 	parameter: PrimitiveSpec['parameters'][number],
 	raw: ImplArgument | undefined,
 	path: string,
+	multiline = false,
 ): string => {
 	const { node, collector } = state;
 	const where = `${at(node, path)} 的 ${primitive.primitiveRef}.${parameter.name}`;
@@ -456,6 +470,12 @@ const renderArgument = (
 			details: { primitive: primitive.primitiveRef, parameter: parameter.name, stepPath: path },
 		});
 		return renderByType(parameter.type, undefined, parameter.integer === true).text;
+	}
+
+	// 结构化载荷：写死的字面量（`{"1": 0.02, …}`）是常态，摊不开就摊成多行。
+	// 这一条要在表达式那条路之前——字面量也是表达式，先走那边就永远只有紧凑形态。
+	if (parameter.type === 'json' && isImplExpression(raw) && raw.kind === 'literal') {
+		return formatJsonLiteral(raw.value, multiline);
 	}
 
 	// 表达式实参：值（数字/字符串/布尔）按**原语定义**提示类型，结构（比较、嵌套调用……）自带形状。
@@ -560,6 +580,9 @@ const renderExpression = (
 			});
 			// 字面量落在实参位置上：原语定义说这个参数是什么类型，就按它渲染（`integer` 也认）。
 			// 字面量本身是叶子：`(1.0) + (2.0)` 只是噪音，所以它从不被裹括号。
+			if (declaredParameter !== undefined && declaredParameter.type === 'json') {
+				return formatJsonLiteral(expression.value, false);
+			}
 			if (declaredParameter !== undefined && declaredParameter.type !== 'sensor') {
 				return renderByType(
 					declaredParameter.type,
@@ -681,6 +704,7 @@ const renderParam = (
 	if (declaredParameter !== undefined) {
 		// 实参位置：按原语定义渲染（含 `integer`）。取不到合法取值时给诊断 + 占位符，
 		// 与实现里直接写死的实参走同一条码（引用与字面量不该有两套口径）。
+		if (declaredParameter.type === 'json') return formatJsonLiteral(value, false);
 		const asValue = asRenderable(value);
 		const rendered = renderByType(declaredParameter.type, asValue, declaredParameter.integer === true);
 		if (rendered.code !== null) {

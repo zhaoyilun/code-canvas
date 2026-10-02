@@ -37,7 +37,9 @@ import {
 	isImplementationBlockType,
 	isUnknownShape,
 	literalFieldName,
+	LITERAL_FIELD_LIMIT,
 	literalText,
+	truncateLiteralText,
 	registerImplementationBlocks,
 	resolveImplementationPath,
 	sensorFieldName,
@@ -46,6 +48,7 @@ import {
 	type ImplementationBlockShape,
 	type ImplementationWidget,
 } from '../src/blocks';
+import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import { BROKEN_CATALOG, FIXTURE_CATALOG } from './fixtures';
 
 const capabilityOf = (catalog: CapabilityCatalog, ref: string): CapabilitySpec => {
@@ -516,5 +519,52 @@ describe('目录有缺陷时', () => {
 		// 字段上的 `parameter` 是**这一行**（原语参数的槽位），绑到哪个能力参数由 binding 说。
 		expect(wait.widgets[0]?.parameter).toBe('seconds');
 		expect(wait.widgets[0]?.binding).toEqual({ kind: 'parameter', parameter: 'duration' });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 结构化载荷（`json` 类型的实参）画到积木上
+// ---------------------------------------------------------------------------
+
+describe('结构化载荷：画得下，且截断是明说的', () => {
+	it('短的结构化载荷摊成紧凑 JSON，不是 `[object Object]`', () => {
+		expect(literalText({ '1': 0.02, '2': 0.54 })).toBe('{"1":0.02,"2":0.54}');
+		expect(literalText([1, 2])).toBe('[1,2]');
+		// 字符串数组仍是老写法（`/scan0` 比 `["/scan0"]` 好读）
+		expect(literalText(['/scan0'])).toBe('/scan0');
+	});
+
+	it('长到画布放不下的截断**明说**：尾巴上写着总共多少字，短的一字不动', () => {
+		const payload = { type: 'wave_dance_v1', joints: { '5': { terms: [{ amplitude: 0.28 }] } } };
+		const full = literalText(payload);
+		const shown = truncateLiteralText(full);
+		expect(full.length).toBeGreaterThan(LITERAL_FIELD_LIMIT);
+		expect(shown.startsWith(full.slice(0, LITERAL_FIELD_LIMIT))).toBe(true);
+		expect(shown).toContain(`共 ${full.length} 字`);
+		expect(truncateLiteralText('{"1":0.02}')).toBe('{"1":0.02}');
+	});
+
+	it('上游真实的轨迹模板：积木上截断显示，全文进 tooltip——一个字都没丢', () => {
+		// `wave_hello` 的第 3 步 `move_through_joint_positions`，实参是一整棵轨迹模板。
+		const capability = capabilityOf(ROBOFRAME_SO101_CATALOG, 'wave_hello');
+		const call = describeNodeAtPath(ROBOFRAME_SO101_CATALOG, capability, '2');
+		if (call === null) throw new Error('预期第 3 步有一个节点');
+		const literal = describeNodeAtPath(ROBOFRAME_SO101_CATALOG, capability, '2.arguments.trajectory_template');
+		if (literal === null) throw new Error('预期轨迹模板那个实参有一个节点');
+
+		const widget = literal.widgets[0];
+		expect(widget?.kind).toBe('literal');
+		if (widget?.kind !== 'literal') throw new Error('预期是只读字面量字段');
+		expect(widget.binding.kind).toBe('literal');
+		if (widget.binding.kind !== 'literal') throw new Error('预期绑定是字面量');
+
+		const full = literalText(widget.binding.value);
+		expect(full.length).toBeGreaterThan(LITERAL_FIELD_LIMIT);
+		expect(widget.text).toBe(truncateLiteralText(full));
+		expect(widget.tooltip).toContain(full);
+		// 载荷本身原样留在绑定里（画布不回写它，但形状里记着真值）。
+		expect(widget.binding.value).toMatchObject({ type: 'single_joint_wave_v1', joint: '5', amplitude: 0.35 });
+		// 积木上写的是原语名，不是整坨 JSON。
+		expect(call.detail).toContain('move_through_joint_positions');
 	});
 });

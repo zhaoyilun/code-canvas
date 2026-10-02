@@ -1,16 +1,20 @@
 /**
  * 能力目录的自检。
  *
- * 目录是手写的，所以这里钉住几件容易写歪的事：
- *  1. 它符合契约 schema；
- *  2. 实现里引用的原语真的存在（要**递归遍历语句树**，包括 if 的两个分支）；
- *  3. 每个 `{kind:'param', name}` 都能解析——要么是本能力实现里 `set` 过的局部变量，要么是本能力的参数；
- *  4. 实参名确实是那个原语声明的参数名。
+ * 目录有两份：`phase1-robot.ts`（手写的示意目录）和 `roboframe/`（从上游 RoboFrame 转出来的真实目录）。
+ * 所以这里分两层：
  *
- * 等 RoboFrame 交来真实目录时，这四条同样适用——那时它们就是接收数据的闸。
+ * - **共同定律**（`describe.each`）：两份目录都适用的四条容易写歪的事——
+ *   符合契约 schema、实现里引用的原语真的存在（**递归遍历语句树**，含 if 的两个分支）、
+ *   每个 `{kind:'param'}` 都能解析（局部变量或本能力参数）、实参名确实是那个原语声明的参数名。
+ *   这一层就是接真实数据时的**接收闸**。
+ * - **各自的实情**：一期目录要覆盖协议七种动作；RoboFrame 目录要覆盖上游那份技能表与白名单，
+ *   并且**记着它从哪儿来**（上游 commit），以及几处上游语义确实被搬对了
+ *   （夹爪归一化会在最前面插一条、`*_from_request` 落成参数引用而不是写死的值）。
  */
 import { describe, expect, it } from 'vitest';
 import {
+	type CapabilityCatalog,
 	type CapabilitySpec,
 	type ImplArgument,
 	type ImplExpression,
@@ -18,9 +22,7 @@ import {
 	capabilityCatalogSchema,
 	findPrimitive,
 } from '@codecanvas/contracts';
-import { PHASE1_ROBOT_CATALOG } from '../src/index';
-
-const catalog = PHASE1_ROBOT_CATALOG;
+import { PHASE1_ROBOT_CATALOG, ROBOFRAME_SO101_CATALOG, ROBOFRAME_SO101_PROVENANCE } from '../src/index';
 
 /** 深度优先遍历语句树里的每条语句。 */
 const eachStatement = (statements: readonly ImplStatement[], visit: (s: ImplStatement) => void): void => {
@@ -65,7 +67,13 @@ const expressionsOf = (statement: ImplStatement): ImplExpression[] => {
 const statementArguments = (statement: ImplStatement): Record<string, ImplArgument> | null =>
 	statement.kind === 'call' ? statement.arguments : null;
 
-const capabilityRefs = (capability: CapabilitySpec): Set<string> => {
+/** 实参是不是写死的字面量；是就取出它的值（结构化载荷在断言里要能直接看）。 */
+const literalValueOf = (argument: ImplArgument | undefined): unknown => {
+	if (typeof argument !== 'object' || argument === null || Array.isArray(argument)) return undefined;
+	return argument.kind === 'literal' ? argument.value : undefined;
+};
+
+const localsOf = (capability: CapabilitySpec): Set<string> => {
 	const locals = new Set<string>();
 	eachStatement(capability.implementation, (statement) => {
 		if (statement.kind === 'set') locals.add(statement.target);
@@ -73,28 +81,18 @@ const capabilityRefs = (capability: CapabilitySpec): Set<string> => {
 	return locals;
 };
 
-describe('一期设备目录', () => {
+const CATALOGS: readonly { readonly name: string; readonly catalog: CapabilityCatalog }[] = [
+	{ name: '一期设备目录（示意实现）', catalog: PHASE1_ROBOT_CATALOG },
+	{ name: 'RoboFrame SO-101 目录（上游真实技能库）', catalog: ROBOFRAME_SO101_CATALOG },
+];
+
+describe.each(CATALOGS)('$name', ({ catalog }) => {
 	it('符合契约 schema', () => {
 		const parsed = capabilityCatalogSchema.safeParse(catalog);
 		if (!parsed.success) {
 			throw new Error(`catalog invalid: ${JSON.stringify(parsed.error.issues.slice(0, 3))}`);
 		}
 		expect(parsed.success).toBe(true);
-	});
-
-	it('一期协议的七种动作都在目录里', () => {
-		const refs = catalog.capabilities.map((capability) => capability.capabilityRef);
-		for (const action of [
-			'move',
-			'turn',
-			'stop',
-			'stop_if_obstacle',
-			'get_status',
-			'arm_joint',
-			'arm6_joints',
-		]) {
-			expect(refs, `missing capability: ${action}`).toContain(action);
-		}
 	});
 
 	it('实现里引用的原语都存在（含 if 分支里的）', () => {
@@ -119,34 +117,27 @@ describe('一期设备目录', () => {
 
 	it('每个 param 引用都能解析（局部变量或能力参数）', () => {
 		for (const capability of catalog.capabilities) {
-			const locals = capabilityRefs(capability);
+			const locals = localsOf(capability);
 			const parameters = new Set(capability.parameters.map((parameter) => parameter.name));
+			const unresolved: string[] = [];
+			const check = (e: ImplExpression): void => {
+				eachExpression(e, (node) => {
+					if (node.kind === 'param' && !locals.has(node.name) && !parameters.has(node.name)) {
+						unresolved.push(`${capability.capabilityRef} → ${node.name}`);
+					}
+				});
+			};
 			eachStatement(capability.implementation, (statement) => {
 				for (const expression of expressionsOf(statement)) {
-					eachExpression(expression, (e) => {
-						if (e.kind !== 'param') return;
-						expect(
-							locals.has(e.name) || parameters.has(e.name),
-							`${capability.capabilityRef} 引用了未定义的名字 ${e.name}`,
-						).toBe(true);
-					});
+					check(expression);
 					// 实参里嵌的表达式也要查
-					eachExpression(expression, (e) => {
-						if (e.kind !== 'call') return;
-						for (const argument of Object.values(e.arguments)) {
-							eachArgument(argument, (inner) => {
-								eachExpression(inner, (deep) => {
-									if (deep.kind !== 'param') return;
-									expect(
-										locals.has(deep.name) || parameters.has(deep.name),
-										`${capability.capabilityRef} 实参里引用了未定义的名字 ${deep.name}`,
-									).toBe(true);
-								});
-							});
-						}
+					eachExpression(expression, (node) => {
+						if (node.kind !== 'call') return;
+						for (const argument of Object.values(node.arguments)) eachArgument(argument, check);
 					});
 				}
 			});
+			expect(unresolved).toEqual([]);
 		}
 	});
 
@@ -173,6 +164,17 @@ describe('一期设备目录', () => {
 			expect(capability.implementation.length, capability.capabilityRef).toBeGreaterThan(0);
 		}
 	});
+});
+
+describe('一期设备目录的实情', () => {
+	const catalog = PHASE1_ROBOT_CATALOG;
+
+	it('一期协议的七种动作都在目录里', () => {
+		const refs = catalog.capabilities.map((capability) => capability.capabilityRef);
+		for (const action of ['move', 'turn', 'stop', 'stop_if_obstacle', 'get_status', 'arm_joint', 'arm6_joints']) {
+			expect(refs, `missing capability: ${action}`).toContain(action);
+		}
+	});
 
 	it('至少有一个能力带条件分支（树结构不是摆设）', () => {
 		const withBranch = catalog.capabilities.filter((capability) => {
@@ -183,5 +185,124 @@ describe('一期设备目录', () => {
 			return found;
 		});
 		expect(withBranch.map((capability) => capability.capabilityRef)).toContain('stop_if_obstacle');
+	});
+});
+
+describe('RoboFrame SO-101 目录的实情', () => {
+	const catalog = ROBOFRAME_SO101_CATALOG;
+	const implementationOf = (capabilityRef: string): readonly ImplStatement[] => {
+		const capability = catalog.capabilities.find((item) => item.capabilityRef === capabilityRef);
+		if (capability === undefined) throw new Error(`目录里没有 ${capabilityRef}`);
+		return capability.implementation;
+	};
+
+	it('带出了它在上游的出处（数据不是凭空来的）', () => {
+		expect(ROBOFRAME_SO101_PROVENANCE.upstream).toContain('IB_Robot');
+		expect(ROBOFRAME_SO101_PROVENANCE.branch).toBe('RoboFrame');
+		expect(ROBOFRAME_SO101_PROVENANCE.commit).toMatch(/^[0-9a-f]{40}$/);
+		expect(ROBOFRAME_SO101_PROVENANCE.robotConfig).toContain('so101_single_arm.yaml');
+	});
+
+	it('上游 skill_library 白名单里的十个原语都在', () => {
+		const refs = catalog.primitives.map((primitive) => primitive.primitiveRef);
+		for (const primitive of [
+			'move_to_named_pose',
+			'move_to_pose',
+			'move_to_configuration',
+			'move_relative_ee',
+			'move_to_joint_positions',
+			'move_through_joint_positions',
+			'open_gripper',
+			'close_gripper',
+			'rotate_gripper_cw',
+			'rotate_gripper_ccw',
+		]) {
+			expect(refs, `missing primitive: ${primitive}`).toContain(primitive);
+		}
+	});
+
+	it('上游 so101_single_arm.yaml 的十六个技能都在，且中文别名当了 label', () => {
+		const refs = catalog.capabilities.map((capability) => capability.capabilityRef);
+		for (const skill of [
+			'inspect_scene',
+			'recover_safe_pose',
+			'recover_zero_pose',
+			'move_relative_ee',
+			'open_gripper_skill',
+			'close_gripper_skill',
+			'rotate_gripper_cw',
+			'rotate_gripper_ccw',
+			'dance_basic',
+			'wave_hello',
+			'nod_yes',
+			'shake_no',
+			'celebrate',
+			'greet_observe_raise',
+			'act_cute',
+			'happy_spin_upright',
+		]) {
+			expect(refs, `missing skill: ${skill}`).toContain(skill);
+		}
+		expect(catalog.capabilities.find((item) => item.capabilityRef === 'wave_hello')?.label).toBe('打招呼');
+	});
+
+	it('命名位姿来自上游 robot_config', () => {
+		expect(catalog.namedPoses).toEqual(['home', 'observe_table', 'zero']);
+	});
+
+	it('夹爪归一化照上游 resolver 的行为展开在最前面', () => {
+		// 上游 `initial_gripper_state: closed` 的技能，展开时会在序列最前面插一条 `close_gripper`。
+		for (const capabilityRef of ['wave_hello', 'dance_basic', 'celebrate', 'act_cute']) {
+			expect(implementationOf(capabilityRef)[0], capabilityRef).toEqual({
+				kind: 'call',
+				primitiveRef: 'close_gripper',
+				arguments: {},
+			});
+		}
+		// 纯夹爪技能不带这个字段，也就不该多出一条。
+		expect(implementationOf('open_gripper_skill')).toEqual([
+			{ kind: 'call', primitiveRef: 'open_gripper', arguments: {} },
+		]);
+	});
+
+	it('`*_from_request` 落成参数引用，写死的值落成字面量', () => {
+		// `move_relative_ee` 的方向与距离来自任务请求——这正是「同一份实现被不同参数复用」那条链。
+		expect(implementationOf('move_relative_ee')).toEqual([
+			{
+				kind: 'call',
+				primitiveRef: 'move_relative_ee',
+				arguments: {
+					motion_direction: { kind: 'param', name: 'motion_direction' },
+					motion_distance: { kind: 'param', name: 'motion_distance' },
+				},
+			},
+		]);
+		// `celebrate` 写死了方向与距离，落成字面量。
+		expect(implementationOf('celebrate')[2]).toEqual({
+			kind: 'call',
+			primitiveRef: 'move_relative_ee',
+			arguments: {
+				motion_direction: { kind: 'literal', value: 'up' },
+				motion_distance: { kind: 'literal', value: 0.04 },
+			},
+		});
+	});
+
+	it('关节位置映射与轨迹模板原样带过来（结构化载荷没被吃掉）', () => {
+		const jointCall = implementationOf('wave_hello')[1];
+		expect(jointCall?.kind).toBe('call');
+		if (jointCall?.kind !== 'call') throw new Error('预期是一次调用');
+		expect(jointCall.arguments['joint_positions']).toEqual({
+			kind: 'literal',
+			value: { '1': 0.02, '2': 0.54, '3': -0.82, '4': -0.18, '5': 0.02 },
+		});
+
+		const trajectoryCall = implementationOf('wave_hello')[2];
+		if (trajectoryCall?.kind !== 'call') throw new Error('预期是一次调用');
+		expect(literalValueOf(trajectoryCall.arguments['trajectory_template'])).toMatchObject({
+			type: 'single_joint_wave_v1',
+			joint: '5',
+			amplitude: 0.35,
+		});
 	});
 });

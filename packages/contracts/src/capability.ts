@@ -19,10 +19,18 @@
  * 见 docs/spec.md §5。
  */
 import { z } from 'zod';
+import { jsonValueSchema, type JsonValue } from './json';
 import { stableReferenceSchema } from './stable-ids';
 
-/** 参数与返回值的取值类型。`sensor` 与 `pose` 是给渲染层看的语义提示。 */
-export const catalogValueTypeSchema = z.enum(['number', 'string', 'boolean', 'sensor', 'pose']);
+/**
+ * 参数与返回值的取值类型。
+ *
+ * `sensor` 与 `pose` 是给渲染层看的语义提示；`json` 是**结构化载荷**——
+ * 关节位置映射（`{"1": 0.02, …}`）、轨迹模板这类原语实参不是标量，
+ * 真实设备（RoboFrame 的技能库）里到处都是。声明成 `json` 才渲染得出来，
+ * 也才不至于把一整个对象悄悄变成 `null`。
+ */
+export const catalogValueTypeSchema = z.enum(['number', 'string', 'boolean', 'sensor', 'pose', 'json']);
 export type CatalogValueType = z.infer<typeof catalogValueTypeSchema>;
 
 /** 只有这些类型能出现在表达式里（sensor / pose 是参数侧的概念，不是值）。 */
@@ -51,6 +59,8 @@ export const primitiveSpecSchema = z
 	.object({
 		primitiveRef: stableReferenceSchema,
 		label: z.string().trim().min(1).max(64),
+		/** 这个原子动作做什么，一句话（上游文档里那句）。 */
+		summary: z.string().trim().min(1).max(200).optional(),
 		parameters: z.array(catalogParameterSchema),
 		returns: expressionValueTypeSchema.optional(),
 	})
@@ -77,7 +87,12 @@ export type ImplArgument = number | string | boolean | string[] | ImplExpression
 /** 表达式：有值的东西。 */
 export const implExpressionSchema: z.ZodType<ImplExpression> = z.lazy(() =>
 	z.discriminatedUnion('kind', [
-		z.object({ kind: z.literal('literal'), value: z.union([z.number(), z.string(), z.boolean()]) }).strict(),
+		/**
+		 * 写死的取值。除了标量，也可以是**任意 JSON**——真实原语的实参常常是一整个结构
+		 * （`joint_positions={"1": 0.02, …}`、轨迹模板）。它们是实现的一部分，
+		 * 因此与结构一样只读，不给编辑入口。
+		 */
+		z.object({ kind: z.literal('literal'), value: jsonValueSchema }).strict(),
 		/** 按名字取：先找本能力实现里 `set` 过的局部变量，再找本能力的参数。 */
 		z.object({ kind: z.literal('param'), name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/) }).strict(),
 		/** 有返回值的原语调用，例如 `read_scan("/scan0")`。 */
@@ -119,7 +134,7 @@ export const implExpressionSchema: z.ZodType<ImplExpression> = z.lazy(() =>
 	]),
 );
 export type ImplExpression =
-	| { kind: 'literal'; value: number | string | boolean }
+	| { kind: 'literal'; value: JsonValue }
 	| { kind: 'param'; name: string }
 	| { kind: 'call'; primitiveRef: string; arguments: Record<string, ImplArgument> }
 	| { kind: 'binary'; operator: BinaryOperator; left: ImplExpression; right: ImplExpression }
@@ -179,6 +194,8 @@ export const capabilitySpecSchema = z
 	.object({
 		capabilityRef: stableReferenceSchema,
 		label: z.string().trim().min(1).max(64),
+		/** 这个动作是干什么的，一句话。目录有就显示，没有也不编。 */
+		summary: z.string().trim().min(1).max(200).optional(),
 		kind: z.enum(['skill', 'primitive']),
 		/** 这个能力接收的参数；实现里用 `{kind:'param', name}` 引用它们。 */
 		parameters: z.array(catalogParameterSchema),

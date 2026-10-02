@@ -442,6 +442,34 @@ interface CapabilityCatalog {
 设备上报的能力目录直接决定积木里出现哪些设备积木——**「设备连上」和「积木长出来」是同一件事**，
 不需要两套机制。
 
+### 5.1 目录从哪儿来：从设备源码转，不手抄
+
+真实目录不是手写的。`tools/import-roboframe/import.mjs` 从上游 RoboFrame 仓库
+（`gitcode.com/openeuler/IB_Robot`，分支 `RoboFrame`）机械地转出
+`packages/capabilities/src/roboframe/<robot>.catalog.json`：
+
+| 目录里的东西 | 上游出处 |
+| --- | --- |
+| 技能（capabilities） | `src/robot_config/config/robots/<robot>.yaml` 的 `skill_templates` |
+| 实现（`implementation`） | 同一个技能的 `primitive_sequence`，逐条转成语句树 |
+| 原语白名单 | `src/skill_library/README.md` §3（上游自己维护的「有限原语」表） |
+| 命名位姿 | 同一份 YAML 的 `named_poses` |
+| 中文名 | 技能的 `description.aliases_zh[0]` |
+
+三处翻译写在脚本头上，一条都不藏：`initial_gripper_state` 会在序列最前面插一条夹爪动作
+（照抄上游 resolver 的行为）；`<字段>_from_request: true` 落成参数引用而不是写死的值；
+上游模板层与 ROS action 层的字段名不同（`duration_sec` vs `primitive_duration_sec`），
+目录记的是**模板层**——技能作者写的那一层。
+
+转换脚本读不懂的地方**当场报错**，不猜。所以目录里每一个字都能追到上游某一行，
+`provenance` 里记着是哪一次 commit。手抄一遍迟早与上游分叉，而且分叉了没人知道。
+
+**真实数据带来的形状变化**：上游原语的实参不只是标量——关节位置映射
+（`joint_positions={"1": 0.02, …}`）、轨迹模板都是**结构化载荷**。
+所以实现里的字面量放开了任意 JSON（`ImplExpression` 的 `literal.value`），
+参数类型多了一个 `json`；渲染时紧凑 JSON 摊不下就摊成多行，
+那些续行与结构一样**只读**。
+
 ---
 
 ## 6. 生命周期
