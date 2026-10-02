@@ -7,7 +7,7 @@
  * 三栏本身没有分区切换控件（唯一的 tab 条在右栏**里面**，切的是「代码 / 任务 JSON」，
  * 跟「切哪一栏显示」不是一回事）。
  *
- * 真实观感（入口带的高度、转译链的胶囊、右栏比例）在浏览器里量，见交付报告。
+ * 真实观感（入口带的高度、右栏比例）在浏览器里量，见交付报告。
  */
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -48,7 +48,9 @@ describe('外壳 · 上层入口带', () => {
 		expect(wrapper.find('[data-testid="device-select"]').exists()).toBe(true);
 		expect(wrapper.find('[data-testid="instruction-input"]').exists()).toBe(true);
 		expect(wrapper.find('[data-testid="task-generate"]').exists()).toBe(true);
-		expect(wrapper.find('[data-testid="translation-chain"]').exists()).toBe(true);
+		// 链块是**状态线**，不是常在的标签：静止（没跑过）时它不该在屏幕上。
+		// 和下一行同一条道理——常态不占位的东西，这里都验「不在」。
+		expect(wrapper.find('[data-testid="translation-chain"]').exists()).toBe(false);
 		// 旧的形态没了：不再有占掉小半屏的任务 JSON 文本框
 		expect(wrapper.find('[data-testid="task-json-input"]').exists()).toBe(false);
 
@@ -90,8 +92,10 @@ describe('外壳 · 上层入口带', () => {
 
 		expect(doc.declaration.value).not.toBe(beforeDeclaration);
 		expect(doc.declaration.value?.meta.description).toBe('从外壳里换掉的描述');
-		// 右栏的代码面板跟着变——「一份声明，三个视图」在真链路上成立
-		expect(wrapper.get('[data-testid="code-panel"]').text()).toContain('从外壳里换掉的描述');
+		// 右栏的代码面板跟着变——「一份声明，三个视图」在真链路上成立。
+		// 断言落在模块标题上（那份任务只有一步 stop）：面板字面上换成了新声明的实现，
+		// 面板上原先那个任务名（cp-task）已随页脚小字一起去掉，这里不再拿它当凭据。
+		expect(wrapper.get('[data-testid="code-panel"]').text()).toContain('停止 · 实现');
 	});
 
 	it('切到任务 JSON tab：同一份声明在右栏那边以 JSON 呈现', async () => {

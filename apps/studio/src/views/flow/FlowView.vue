@@ -74,8 +74,6 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 	<section class="flow-view" data-testid="view-flow">
 		<header class="flow-header">
 			<span class="flow-title">流程画布</span>
-			<span class="flow-tag">WORKFLOW</span>
-			<span class="flow-tag">只读</span>
 			<span v-if="store.hasDeclaration.value" class="flow-task" data-testid="flow-task-name">
 				{{ taskTitle }}
 			</span>
@@ -171,12 +169,9 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 			</p>
 		</div>
 
-		<footer class="flow-footer">
-			<span v-if="store.hasDeclaration.value" class="footer-count" data-testid="flow-count">
-				{{ cards.length }} 步 · {{ connectorCount }} 条连线
-			</span>
+		<!-- 限值芯片：声明里写了 meta.limits 才有；没有就不画这条页脚（空容器会白占一段栏间距） -->
+		<footer v-if="limitChips.length > 0" class="flow-footer">
 			<span v-for="chip in limitChips" :key="chip" class="footer-chip">{{ chip }}</span>
-			<span class="footer-note">只读：参数在积木画布上改</span>
 		</footer>
 	</section>
 </template>
@@ -204,17 +199,6 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 	font-size: var(--cc-fs-lg);
 	font-weight: 600;
 	color: var(--cc-text);
-}
-
-.flow-tag {
-	padding: 2px var(--cc-space-2);
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-xs);
-	letter-spacing: 0.06em;
-	color: var(--cc-accent);
-	background: var(--cc-accent-veil);
-	border: 1px solid var(--cc-accent-dim);
-	border-radius: var(--cc-radius-sm);
 }
 
 .flow-task {
@@ -466,17 +450,9 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 	color: var(--cc-text-faint);
 }
 
-.footer-count {
-	color: var(--cc-text-dim);
-}
-
 .footer-chip {
 	padding: 1px var(--cc-space-2);
 	border: 1px solid var(--cc-line);
 	border-radius: var(--cc-radius-sm);
-}
-
-.footer-note {
-	margin-left: auto;
 }
 </style>

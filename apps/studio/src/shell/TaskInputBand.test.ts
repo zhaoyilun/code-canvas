@@ -68,6 +68,16 @@ const pasteInput = (wrapper: Wrapper) =>
 const statusText = (wrapper: Wrapper): string =>
 	wrapper.get('[data-testid="task-input-status"]').text();
 
+/**
+ * 链块与它的徽标。
+ *
+ * 新形态下链块**只在「正在跑」与「跑失败」时露头**，而且里面只剩徽标那一行字——
+ * 胶囊名单（任务 JSON / 积木 / 流程 / 代码）已经删掉，于是「逐段点亮」这类断言没有了观察对象；
+ * 徽标报的是**结论**（生成中 / 失败停在第几段），不再报过程。
+ */
+const chainBlock = (wrapper: Wrapper) => wrapper.find('[data-testid="translation-chain"]');
+const chainState = (wrapper: Wrapper) => wrapper.get('[data-testid="translation-chain-state"]');
+
 /** 折起来的那两块的开关。 */
 const togglePaste = async (wrapper: Wrapper): Promise<void> => {
 	await wrapper.get('[data-testid="task-paste-toggle"]').trigger('click');
@@ -117,13 +127,17 @@ describe('入口带 · 形态', () => {
 		expect(wrapper.find('[data-testid="task-endpoint-toggle"]').exists()).toBe(true);
 	});
 
-	it('指令是「一句话」：一行高、占位就是图里那句例子', () => {
+	it('指令是「一句话」：一行高、占位就是图里那句例子', async () => {
 		const wrapper = mount(TaskInputBand);
 		const input = instructionInput(wrapper);
 
 		// input 而不是 textarea：它不该再吃掉小半屏
 		expect(input.element.tagName).toBe('INPUT');
+		// 例子跟着设备格式走：一期那台听「前进1米」，SO-101 听技能话。
 		expect(input.attributes('placeholder')).toBe('前进1米，避障后停止');
+		setSelectedDevice('so101_robot');
+		await nextTick();
+		expect(input.attributes('placeholder')).toBe('看一眼桌面，再挥挥手打个招呼');
 		expect(input.element.value).toBe('');
 	});
 
@@ -180,18 +194,6 @@ describe('入口带 · 设备下拉', () => {
 		expect(options.filter((option) => option.attributes('data-virtual') === 'false')).toHaveLength(
 			DEVICES.length - virtual.length,
 		);
-	});
-
-	it('下拉旁边单独说清当前设备是真机还是仿真（不靠设备名里那对括号）', async () => {
-		const wrapper = mount(TaskInputBand);
-
-		setSelectedDevice('phase1_robot');
-		await nextTick();
-		expect(wrapper.get('[data-testid="device-note"]').text()).toBe('真机');
-
-		setSelectedDevice('so101_sim');
-		await nextTick();
-		expect(wrapper.get('[data-testid="device-note"]').text()).toBe('虚拟设备 · 仿真');
 	});
 
 	it('不在册的设备不认：换成一个查不到的 ref，选中的还是原来那台', async () => {
@@ -266,6 +268,13 @@ describe('入口带 · 生成', () => {
 	/** 挂起中的请求：放行由测试自己决定，好在「进行中」那一刻做断言。 */
 	const held: Array<(response: StubResponse) => void> = [];
 	const stubPendingFetch = (): void => {
+		/*
+		 * 每条挂起用例从**自己这一批**开始记。`held` 是这一组共用的，不清空的话，
+		 * 上一条用例没来得及放行的那次请求会留在里面——下一条用例 `releaseFetch` 时
+		 * 它跟着被放行，那条**已经被丢掉的旧组件**就会往共享的 doc 里灌一份结果，
+		 * 把这一条用例刚灌进去的东西盖掉（真发生过：失败表现在看起来毫不相干的地方）。
+		 */
+		held.length = 0;
 		stubFetch(
 			() =>
 				new Promise<StubResponse>((resolve) => {
@@ -280,13 +289,6 @@ describe('入口带 · 生成', () => {
 	const sentBody = (call: FetchCall): Record<string, unknown> =>
 		JSON.parse(String(call.init?.body ?? '{}')) as Record<string, unknown>;
 
-	const chainState = (wrapper: Wrapper) => wrapper.get('[data-testid="translation-chain-state"]');
-	const litNodes = (wrapper: Wrapper) =>
-		wrapper.findAll('[data-testid="translation-chain"] .chain-node.is-lit');
-	const liveNodes = (wrapper: Wrapper) =>
-		wrapper.findAll('[data-testid="translation-chain"] .chain-node.is-live');
-	const failedNodes = (wrapper: Wrapper) =>
-		wrapper.findAll('[data-testid="translation-chain"] .chain-node.is-failed');
 	const diagnosticTexts = (wrapper: Wrapper): string[] =>
 		wrapper.findAll('[data-testid="task-input-diagnostic"]').map((row) => row.text());
 
@@ -295,7 +297,7 @@ describe('入口带 · 生成', () => {
 		await flushPromises();
 	};
 
-	/** 跑完逐段点亮那 ~0.4s（但不越过成功后的 1.2s 停留）。 */
+	/** 推过生成落定前那段 ~0.4s 的等待（跨过它，但不到成功之后那次停留 1.2s）。 */
 	const runReveal = async (): Promise<void> => {
 		await vi.advanceTimersByTimeAsync(500);
 		await nextTick();
@@ -354,11 +356,11 @@ describe('入口带 · 生成', () => {
 		expect(doc.declaration.value?.meta.description).toBe('换成新任务：先转再停');
 		expect(doc.declaration.value?.nodes).toHaveLength(3);
 
-		// 终态明确：全亮 + 「已完成 · N 个节点」
-		expect(litNodes(wrapper)).toHaveLength(4);
-		expect(chainState(wrapper).text()).toContain('已完成');
-		expect(chainState(wrapper).text()).toContain('3 个节点');
+		// 终态明确，但**不留状态线**：跑完了结果本身就在三个视图里，不必再摆一条链。
+		// 「3 个节点」这条事实没丢——它挪到入口本体那行字上（`已生成 · N 个节点`）。
+		expect(chainBlock(wrapper).exists()).toBe(false);
 		expect(statusText(wrapper)).toContain('已生成');
+		expect(statusText(wrapper)).toContain('3 个节点');
 		expect(wrapper.find('[data-testid="task-input-feedback"]').exists()).toBe(false);
 	});
 
@@ -438,39 +440,26 @@ describe('入口带 · 生成', () => {
 		expect(pasteInput(wrapper).element.value).toContain('换成新任务：先转再停');
 	});
 
-	it('成功后的全亮只停一小会儿：链路回常态，「已完成」标记留着（不许一直闪）', async () => {
-		stubFetch(async () => envelope(editedJson()));
-		const wrapper = mount(TaskInputBand);
-
-		await say(wrapper, '一句话');
-		await clickGenerate(wrapper);
-		await runReveal();
-		expect(litNodes(wrapper)).toHaveLength(4);
-
-		await vi.advanceTimersByTimeAsync(2000);
-		await nextTick();
-
-		expect(litNodes(wrapper)).toHaveLength(0);
-		expect(liveNodes(wrapper)).toHaveLength(0);
-		expect(chainState(wrapper).text()).toContain('已完成');
-	});
-
-	it('请求还挂着的时候链路是「进行中」：亮着、在呼吸，生成按钮禁用', async () => {
+	it('请求还挂着的时候链路是「进行中」：链块在、徽标说生成中，生成按钮禁用', async () => {
 		stubPendingFetch();
 		const wrapper = mount(TaskInputBand);
 
 		await say(wrapper, '一句话');
 		await clickGenerate(wrapper);
 
-		expect(liveNodes(wrapper)).toHaveLength(1);
+		// 只有请求还在飞这一段时间该有状态线——这正是链块留下来说的那一件事
+		expect(chainBlock(wrapper).exists()).toBe(true);
 		expect(chainState(wrapper).text()).toContain('生成中');
 		expect(generateButton(wrapper).attributes('disabled')).toBeDefined();
 
-		// 放行，链路接着往下一段走
+		// 放行：结果落定，链块整块退场（不再是「回常态」，而是根本不留）
 		releaseFetch(envelope(editedJson()));
 		await flushPromises();
-		await nextTick();
-		expect(litNodes(wrapper)).toHaveLength(2);
+		await runReveal();
+		await flushPromises();
+
+		expect(chainBlock(wrapper).exists()).toBe(false);
+		expect(statusText(wrapper)).toContain('已生成');
 	});
 
 	it('地址连不上 → 入口下方出生成失败诊断（带尝试次数），真相一个字节都不动，停在第 1 段', async () => {
@@ -498,9 +487,10 @@ describe('入口带 · 生成', () => {
 		expect(doc.declaration.value).toBe(before);
 		expect(doc.declaration.value?.nodes).toHaveLength(4);
 
-		// 红灯停在第 1 段（任务 JSON 就没生成出来），后面三段没亮
-		expect(failedNodes(wrapper)).toHaveLength(1);
-		expect(litNodes(wrapper)).toHaveLength(0);
+		// 红灯停在第 1 段（任务 JSON 就没生成出来）——失败那一条**留着**，
+		// 它指出停在哪一段，底下紧跟着具体诊断（分了段的点亮已经没了，只报结论）
+		expect(chainBlock(wrapper).exists()).toBe(true);
+		expect(chainState(wrapper).text()).toContain('失败');
 		expect(chainState(wrapper).text()).toContain('第 1 段');
 		// 诊断是给人看的，alert 不是
 		expect(alert).not.toHaveBeenCalled();
@@ -536,7 +526,9 @@ describe('入口带 · 生成', () => {
 		const rows = diagnosticTexts(wrapper);
 		expect(rows.some((text) => text.includes('不是 JSON'))).toBe(true);
 		expect(doc.declaration.value).toBe(before);
-		expect(failedNodes(wrapper)).toHaveLength(1);
+		// 响应层没拿到任务 JSON：和第 1 段那类失败同一个落点（红灯不在协议层）
+		expect(chainBlock(wrapper).exists()).toBe(true);
+		expect(chainState(wrapper).text()).toContain('第 1 段');
 	});
 
 	it('生成回来一个非法任务（distance = 0）→ 校验诊断，真相不动，红灯停在第 2 段', async () => {
@@ -556,10 +548,10 @@ describe('入口带 · 生成', () => {
 		// 重试一次仍然不合协议
 		expect(calls).toHaveLength(2);
 
-		// 任务 JSON 到手了（第 1 段是亮的），积木那一段没产出（红灯）
-		expect(litNodes(wrapper)).toHaveLength(1);
-		expect(failedNodes(wrapper)).toHaveLength(1);
-		expect(chainState(wrapper).text()).toContain('第 2 段');
+		// 停在第 2 段 = 任务 JSON 到手了、积木那一段没产出。
+		// 「第 1 段是亮的」这种分段点亮已经没有观察对象了——徽标只报停在**哪一段**。
+		expect(chainBlock(wrapper).exists()).toBe(true);
+		expect(chainState(wrapper).text()).toContain('停在第 2 段');
 	});
 
 	it('失败路径不弹窗：诊断在带子里，alert / confirm 一次都不响', async () => {
@@ -599,6 +591,8 @@ describe('入口带 · 生成', () => {
 
 		expect(doc.declaration.value?.meta.description).toBe('换成新任务：先转再停');
 		expect(generateButton(wrapper).attributes('disabled')).toBeUndefined();
+		// 手工那一下已经把链块收到终态；在途那次回来也不许把它重新挂回屏幕上
+		expect(chainBlock(wrapper).exists()).toBe(false);
 	});
 });
 
@@ -736,22 +730,34 @@ describe('入口带 · 拖入文件', () => {
 	});
 });
 
+/**
+ * 链块（原「转译链」）现在是**一条只在「正在跑」或「跑失败」时露头的状态线**：
+ * 名字还在，里面只剩徽标那一行字——四段胶囊的清单删了。
+ *
+ * 所以这里守的是新形态下真的还成立的两件事：静止时它**不存在**（标签不该常在），
+ * 露头时它也只是读指示——不带任何控件，也不动真相。
+ */
 describe('入口带 · 转译链指示', () => {
-	it('静态链条把「生成接口给 JSON、我们转三视图」说清楚', () => {
+	it('静止时不摆状态线；露头时也不冒充入口：不带按钮 / 输入框，也不改真相', async () => {
 		const wrapper = mount(TaskInputBand);
-		const chain = wrapper.get('[data-testid="translation-chain"]');
 
-		expect(chain.text()).toContain('任务 JSON');
-		expect(chain.text()).toContain('积木');
-		expect(chain.text()).toContain('流程');
-		expect(chain.text()).toContain('代码');
-		expect(chain.findAll('.chain-arrow')).toHaveLength(1);
-	});
+		// 没跑过就是静止：链块不该存在（四个胶囊删掉之后，它就只剩「跑着/跑败」这两种出场理由）
+		expect(chainBlock(wrapper).exists()).toBe(false);
 
-	it('链条不冒充入口：它不带按钮，也不改真相', () => {
-		const wrapper = mount(TaskInputBand);
-		expect(wrapper.get('[data-testid="translation-chain"]').findAll('button')).toHaveLength(0);
-		expect(wrapper.get('[data-testid="translation-chain"]').findAll('textarea')).toHaveLength(0);
-		expect(wrapper.get('[data-testid="translation-chain"]').findAll('input')).toHaveLength(0);
+		// 把请求挂住，让链块露头；这一刻真相还一个字节都没动
+		vi.stubGlobal('fetch', vi.fn(() => new Promise<never>(() => undefined)));
+		const before = doc.declaration.value;
+		await say(wrapper, '一句话');
+		await generateButton(wrapper).trigger('click');
+		await flushPromises();
+
+		const chain = chainBlock(wrapper);
+		expect(chain.exists()).toBe(true);
+		// 它是指示，不是第二个入口：按钮 / 输入 / 文本域 / 下拉一个都不许有
+		expect(chain.findAll('button')).toHaveLength(0);
+		expect(chain.findAll('input')).toHaveLength(0);
+		expect(chain.findAll('textarea')).toHaveLength(0);
+		expect(chain.findAll('select')).toHaveLength(0);
+		expect(doc.declaration.value).toBe(before);
 	});
 });

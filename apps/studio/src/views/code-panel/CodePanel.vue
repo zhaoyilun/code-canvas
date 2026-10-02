@@ -15,7 +15,10 @@
  * - 行首的序号徽标是这个模块里的**第几条顶层语句**（`SequenceBadge`，与流程卡片、积木同一个组件、
  *   同一组 `--cc-seq-*` 变量）。一个 `if` 的子语句行不再挂徽标（它们和分支头是同一步），
  *   否则同一个数字会在三行上重复，反倒看不出一共几步。
- * - 安全限值常驻底部——它属于**整个任务**（`meta.limits`），不随选中哪个模块变。
+ *
+ * 原先底部还常驻一栏「安全限值」（整个任务的 `meta.limits`）与三行页脚小字，都已去掉：
+ * 限值是声明级的事实，不随这块面板看什么变，摆在只读面板底下只是一堆数字与标签，
+ * 页脚那几句更是把已经看得见的事又说了一遍。
  */
 import { computed, nextTick, ref, watch } from 'vue';
 import { renderImplementation, type RenderedLine } from '@codecanvas/code-render';
@@ -27,9 +30,6 @@ const doc = useStudioDocument();
 
 /** 当前显示的模块：选中的那个；没选中时退到第一个（不改共享状态）。 */
 const activeNode = computed(() => doc.selectedNode.value ?? doc.nodes.value[0] ?? null);
-
-/** 退档显示：面板显示的不是「选中的」模块，页脚要如实说出来。 */
-const isFallback = computed(() => doc.selectedNodeId.value === null && activeNode.value !== null);
 
 /*
  * 目录从 store 取（`declarationCatalog`），**不在这里写死哪一份**：
@@ -53,10 +53,6 @@ const nodeOrdinal = computed(() => {
 	return stepNumbersOf(doc.nodes.value).get(node.id) ?? null;
 });
 
-/** 它属于哪份任务：面板是任务级视图（限值也是任务级的），顶上说清这一点。 */
-const taskName = computed(() => doc.declaration.value?.name ?? '');
-
-const limits = computed(() => program.value.limits);
 const warnings = computed(() => program.value.diagnostics);
 
 const scroller = ref<HTMLElement | null>(null);
@@ -135,11 +131,7 @@ watch(selectedStep, async (index) => {
 			<div class="cp-head-row">
 				<SequenceBadge v-if="nodeOrdinal !== null" :index="nodeOrdinal" testid="code-node-index" />
 				<span class="cp-title" data-testid="code-title">{{ program.title ?? '代码' }}</span>
-				<span class="cp-tag">编译产物</span>
-				<span class="cp-tag cp-tag-readonly">只读</span>
-				<span v-if="program.nodeId !== null" class="cp-count">{{ program.callCount }} 个原语</span>
 			</div>
-			<span v-if="taskName !== ''" class="cp-task" data-testid="code-task-name">{{ taskName }}</span>
 		</header>
 
 		<div v-if="!doc.hasDeclaration.value" class="cp-empty" data-testid="code-empty-task">
@@ -207,51 +199,9 @@ watch(selectedStep, async (index) => {
 
 			<ul v-if="warnings.length > 0" class="cp-warnings" data-testid="code-warnings">
 				<li v-for="(diagnostic, index) in warnings" :key="`${index}-${diagnostic.code}`">
-					<span class="cp-warn-code">{{ diagnostic.code }}</span>
 					{{ diagnostic.message }}
 				</li>
 			</ul>
-
-			<section class="cp-limits" data-testid="code-limits">
-				<header class="cp-limits-head">
-					<span class="cp-limits-title">安全限值</span>
-					<span class="cp-limits-note">整个任务的上限</span>
-					<span v-if="!limits.present" class="cp-limits-note">声明里没有，显示协议安全上限</span>
-				</header>
-				<!--
-					限值排成一行可折的芯片，不排成表：它属于整个任务、不随选中模块变，
-					但也不能把上面那块实现挤到只剩一行。四条信息一条不漏，只是更紧。
-					「已收紧」只在真的比安全上限紧时才占位置——常态下每个都挂着「上限」是噪音。
-				-->
-				<ul class="cp-limit-list">
-					<li
-						v-for="limit in limits.numeric"
-						:key="limit.name"
-						class="cp-limit"
-						:title="limit.tightened ? '比协议安全上限更紧' : '协议安全上限'"
-					>
-						<span class="cp-limit-name">{{ limit.name }}</span>
-						<span class="cp-limit-value">{{ limit.text }}</span>
-						<span v-if="limit.tightened" class="cp-limit-flag">已收紧</span>
-					</li>
-					<li class="cp-limit cp-limit-confirm">
-						运行前需确认：<strong>{{ limits.requireConfirmation ? '是' : '否' }}</strong>
-					</li>
-				</ul>
-			</section>
-
-			<footer class="cp-footer">
-				<span v-if="isFallback" class="cp-footer-hint" data-testid="code-footer-fallback">
-					还没选中模块，先显示第 {{ nodeOrdinal }} 个：{{ program.nodeName }}
-				</span>
-				<span v-else-if="program.nodeId !== null" class="cp-footer-selected" data-testid="code-footer-selected">
-					选中 {{ program.nodeName }} · 实现 {{ program.lines.length }} 行
-				</span>
-				<span v-else class="cp-footer-hint">在流程画布或积木里点一个模块，这里显示它的实现</span>
-				<span v-if="doc.declarationCatalog.value !== null" class="cp-footer-source" data-testid="code-footer-catalog">
-					实现来自目录：{{ doc.declarationCatalog.value.displayName }}
-				</span>
-			</footer>
 		</template>
 	</section>
 </template>
@@ -280,41 +230,10 @@ watch(selectedStep, async (index) => {
 	flex-wrap: wrap;
 }
 
-/* 任务名：退到第二行，字号最小——它是上下文（这个模块属于哪份任务），不是标题。 */
-.cp-task {
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-text-faint);
-}
-
 .cp-title {
 	font-size: var(--cc-fs-md);
 	font-weight: 600;
 	color: var(--cc-text);
-}
-
-.cp-tag {
-	padding: 2px var(--cc-space-2);
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-xs);
-	letter-spacing: 0.06em;
-	color: var(--cc-accent);
-	background: var(--cc-accent-veil);
-	border: 1px solid var(--cc-accent-dim);
-	border-radius: var(--cc-radius-sm);
-}
-
-.cp-tag-readonly {
-	color: var(--cc-text-dim);
-	background: transparent;
-	border-color: var(--cc-line-strong);
-}
-
-.cp-count {
-	margin-left: auto;
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-sm);
-	color: var(--cc-text-faint);
 }
 
 .cp-empty {
@@ -329,7 +248,7 @@ watch(selectedStep, async (index) => {
 
 .cp-code {
 	flex: 1 1 auto;
-	/* 再挤也要留住三行实现的可见高度：这块是面板的主体，限值与页脚不许把它顶没。 */
+	/* 再挤也要留住三行实现的可见高度：这块是面板的主体，下面的警告条不许把它顶没。 */
 	min-height: 7em;
 	overflow: auto;
 	padding: var(--cc-space-3) 0;
@@ -436,94 +355,5 @@ watch(selectedStep, async (index) => {
 	color: var(--cc-danger-strong);
 	background: var(--cc-danger-veil);
 	border-top: 1px solid var(--cc-line);
-}
-
-.cp-warn-code {
-	font-family: var(--cc-font-mono);
-	color: var(--cc-text-faint);
-	margin-right: var(--cc-space-2);
-}
-
-.cp-limits {
-	padding: var(--cc-space-3) var(--cc-space-4);
-	border-top: 1px solid var(--cc-line);
-}
-
-.cp-limits-head {
-	display: flex;
-	align-items: baseline;
-	gap: var(--cc-space-2);
-	flex-wrap: wrap;
-	margin-bottom: var(--cc-space-2);
-}
-
-.cp-limits-title {
-	font-size: var(--cc-fs-sm);
-	letter-spacing: 0.08em;
-	color: var(--cc-text-dim);
-}
-
-.cp-limits-note {
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-text-faint);
-}
-
-.cp-limit-list {
-	margin: 0;
-	padding: 0;
-	list-style: none;
-	display: flex;
-	flex-wrap: wrap;
-	gap: var(--cc-space-1) var(--cc-space-2);
-}
-
-.cp-limit {
-	display: inline-flex;
-	align-items: baseline;
-	gap: var(--cc-space-1);
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-sm);
-}
-
-.cp-limit-name {
-	color: var(--cc-text-dim);
-}
-
-.cp-limit-value {
-	color: var(--cc-accent);
-}
-
-.cp-limit-flag {
-	padding: 0 var(--cc-space-1);
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-accent-dim);
-	border: 1px solid var(--cc-accent-dim);
-	border-radius: var(--cc-radius-sm);
-}
-
-.cp-limit-confirm {
-	color: var(--cc-text-dim);
-}
-
-.cp-limit-confirm strong {
-	color: var(--cc-text);
-}
-
-.cp-footer {
-	display: flex;
-	align-items: baseline;
-	flex-wrap: wrap;
-	gap: var(--cc-space-1) var(--cc-space-2);
-	padding: var(--cc-space-2) var(--cc-space-4);
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-sm);
-	color: var(--cc-text-faint);
-	border-top: 1px solid var(--cc-line);
-}
-
-.cp-footer-source {
-	margin-left: auto;
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-text-faint);
 }
 </style>

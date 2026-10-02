@@ -2,6 +2,10 @@
  * 安全限值的展示形态：名字来自 `LIMIT_NAMES`，安全上限来自 `DEFAULT_LIMITS`，
  * 单位从引用该限值的字段上取（`max_linear` 的单位就是 `move.linear` 的 `m/s`）——
  * 三样都不在这里另抄一份。限值是声明 `meta.limits` 里的真值（spec §1.1）。
+ *
+ * **`meta.limits` 缺省不是缺陷。** 它是一期协议那台设备的字段；别的任务格式（技能计划）
+ * 本来就没有限值这一栏，缺了就是缺了。早先这里会为此报一条警告，于是换到 SO-101 之后，
+ * 每一份完全合法的技能计划头上都挂着一条红字——那是拿一期的尺子量别人，不是它有问题。
  */
 import {
 	ACTION_SPECS,
@@ -28,7 +32,7 @@ export interface RenderedLimit {
 }
 
 export interface RenderedLimits {
-	/** 声明里有没有 `meta.limits`；没有时退到安全上限显示并给诊断。 */
+	/** 声明里有没有 `meta.limits`；没有时退到安全上限（那不是缺陷，见文件头）。 */
 	readonly present: boolean;
 	readonly numeric: readonly RenderedLimit[];
 	readonly requireConfirmation: boolean;
@@ -66,15 +70,7 @@ export const describeLimits = (
 ): RenderedLimits => {
 	const raw = meta['limits'];
 	const present = isJsonObject(raw);
-	if (!present) {
-		collector.warning({
-			code: 'code_render.limits.missing',
-			message: '声明里没有 meta.limits，限值一栏退到协议安全上限',
-			path: 'meta.limits',
-			ref,
-			details: { value: jsonDetail(raw) },
-		});
-	}
+	// 缺了**不报**：限值是设备自己的事，没有这一栏的格式（技能计划）照样是合法声明。
 	const source: JsonObject = present ? raw : {};
 
 	const numeric = LIMIT_NAMES.map((name): RenderedLimit => {

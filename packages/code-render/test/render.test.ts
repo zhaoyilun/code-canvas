@@ -951,14 +951,15 @@ describe('安全限值必须看得见（属于整个任务，不随选中的模�
 		expect(exceeded?.details).toEqual({ value: 5, safety_ceiling: 0.3 });
 	});
 
-	it('没有 meta.limits 时退到安全上限显示并给诊断', () => {
+	it('没有 meta.limits 时退到安全上限，**但不报诊断**（不是每种任务格式都有这一栏）', () => {
 		const program = render(
 			{ step_id: 's1', action: 'stop' },
 			{ declaration: declarationOf([nodeOf({ step_id: 's1', action: 'stop' })], {}) },
 		);
 		expect(program.limits.present).toBe(false);
 		expect(program.limits.numeric.map((limit) => limit.value)).toEqual([0.3, 1.2, 30.0]);
-		expect(program.diagnostics.map((diagnostic) => diagnostic.code)).toContain('code_render.limits.missing');
+		// 技能计划的 `meta` 里本来就没有 limits；为此报红字等于拿一期的尺子量别人。
+		expect(program.diagnostics).toEqual([]);
 	});
 });
 

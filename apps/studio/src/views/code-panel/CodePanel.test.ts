@@ -5,7 +5,7 @@
  * 3. 改一个参数 → 面板那个数字跟着变；
  * 4. 行 ↔ 步骤的映射写在 DOM 上（`data-line` / `data-step` / `data-path`），不在视图里重算；
  * 5. **点某一行 → `selectStep(顶层下标)`**；`selectedStepIndex` 变了 → 那一步的所有行全亮；
- * 6. 安全限值仍常驻；面板是只读的派生（退档不改共享选中状态，也不自己校验）。
+ * 6. 面板是只读的派生（退档不改共享选中状态，也不自己校验）。
  *
  * **面板读哪份目录**：`CodePanel.vue` 里那个 `PHASE1_ROBOT_CATALOG` 是写死的，只能从模块边界换掉——
  * 下面 `vi.mock` 把它换成夹具目录（`views/__fixtures__/catalog.ts`）。理由：示意目录会被真实实现整份替换，
@@ -106,9 +106,6 @@ describe('CodePanel · 当前模块的实现', () => {
 			'stop_motion()',
 		]);
 		expect(lineNumbers(wrapper)).toEqual(['1', '2', '3']);
-		expect(wrapper.text()).toContain('3 个原语');
-		// 退档显示得说出来：现在显示的模块并不是「选中的」那个
-		expect(wrapper.get('[data-testid="code-footer-fallback"]').text()).toContain('还没选中模块');
 	});
 
 	it('退档只是显示，不去改写共享的选中状态', () => {
@@ -137,7 +134,6 @@ describe('CodePanel · 当前模块的实现', () => {
 		).toEqual(['set', 'if', 'call']);
 		// 选中态是共享的：面板显示的正是流程卡片上那张卡
 		expect(doc.selectedNodeId.value).toBe(declaration().nodes[1]?.id);
-		expect(panel.find('[data-testid="code-footer-fallback"]').exists()).toBe(false);
 	});
 
 	it('选中别的模块，标题与实现整块换掉（不是叠一份上去）', async () => {
@@ -243,28 +239,9 @@ describe('CodePanel · 当前模块的实现', () => {
 		expect(doc.diagnostics.value.length).toBeGreaterThan(0);
 	});
 
-	it('安全限值仍常驻，且说明它是整个任务的上限', () => {
-		const wrapper = mount(CodePanel);
-		const limits = wrapper.get('[data-testid="code-limits"]');
-
-		expect(limits.text()).toContain('max_linear');
-		expect(limits.text()).toContain('0.3 m/s');
-		expect(limits.text()).toContain('1.2 rad/s');
-		expect(limits.text()).toContain('30 s');
-		expect(limits.text()).toContain('运行前需确认：是');
-		expect(limits.text()).toContain('整个任务的上限');
-
-		// 换个模块，限值一栏不动
-		doc.select(declaration().nodes[1]?.id ?? null);
-		return wrapper.vm.$nextTick().then(() => {
-			expect(wrapper.get('[data-testid="code-limits"]').text()).toBe(limits.text());
-		});
-	});
-
 	it('只读：面板里没有任何写入口（没有输入框、没有按钮）', () => {
 		const wrapper = mount(CodePanel);
 		expect(wrapper.findAll('input, textarea, select, button')).toHaveLength(0);
-		expect(wrapper.text()).toContain('只读');
 	});
 
 	it('面板是声明的纯函数：同一份声明 + 同一个选中 → 同一份文本', () => {

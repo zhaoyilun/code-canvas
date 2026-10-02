@@ -19,27 +19,19 @@ const {
 	status,
 	statusText,
 	failure,
-	blockCount,
 	writeSuspended,
 	selectedBlockId,
-	decoratedBlocks,
 	moduleTitle,
 	activeStepIndex,
 } = useBlocklyCanvas();
 
 const taskName = computed(() => store.declaration.value?.name ?? '');
-
-/** 已经挂上 `data-node-id` 与序号徽标的积木数——三个视图之间「同一件事」的锚点数。 */
-const anchoredCount = computed(() => decoratedBlocks.value.length);
 </script>
 
 <template>
 	<section class="blockly-view" data-testid="view-blockly">
 		<header class="view-header">
 			<span class="view-title">积木画布</span>
-			<span class="view-tag">BLOCKLY</span>
-			<span class="view-tag">唯一可写</span>
-			<span class="view-count" data-testid="blockly-block-count">{{ blockCount }} 块</span>
 		</header>
 
 		<p class="view-module" data-testid="blockly-module-title">{{ moduleTitle }}</p>
@@ -53,14 +45,6 @@ const anchoredCount = computed(() => decoratedBlocks.value.length);
 
 		<footer class="view-footer">
 			<span class="write-state" :class="status" data-testid="blockly-write-state">{{ statusText }}</span>
-			<span
-				v-if="anchoredCount > 0"
-				class="footer-hint"
-				data-testid="blockly-anchored-count"
-				title="每块积木的 SVG 上都挂了 data-node-id，跨栏连线只靠它定位"
-			>
-				{{ anchoredCount }} 块带 nodeId 锚点
-			</span>
 			<span
 				v-if="activeStepIndex !== null"
 				class="footer-hint footer-step"
@@ -102,24 +86,6 @@ const anchoredCount = computed(() => decoratedBlocks.value.length);
 	font-size: var(--cc-fs-lg);
 	font-weight: 600;
 	color: var(--cc-text);
-}
-
-.view-tag {
-	padding: 2px var(--cc-space-2);
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-xs);
-	letter-spacing: 0.06em;
-	color: var(--cc-accent);
-	background: var(--cc-accent-veil);
-	border: 1px solid var(--cc-accent-dim);
-	border-radius: var(--cc-radius-sm);
-}
-
-.view-count {
-	margin-left: auto;
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-sm);
-	color: var(--cc-text-faint);
 }
 
 .view-task {

@@ -71,7 +71,6 @@ describe('流程画布 · 链与连线', () => {
 			'3',
 			'4',
 		]);
-		expect(wrapper.find('[data-testid="flow-count"]').text()).toContain('4 步 · 3 条连线');
 	});
 
 	it('链是自上而下的：卡片与连线在链里交替出现，连线夹在两张卡片之间', () => {

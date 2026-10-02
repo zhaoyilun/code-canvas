@@ -2,6 +2,9 @@
 /**
  * 诊断列表：编译诊断（积木侧）与声明诊断（store 侧）摆在一起。
  * 非法值被拒时，这里就是「为什么没写进去」的答案。
+ *
+ * 没有诊断时整块不画（连同它的上分隔线）：空列表的「诊断 0 / 没有诊断」只是噪音，
+ * 而这块占了位置又什么都不说，还会把画布挤窄。
  */
 import type { Diagnostic } from '@codecanvas/contracts';
 import type { DiagnosticRow } from './blockly-canvas';
@@ -22,12 +25,12 @@ const location = (diagnostic: Diagnostic): string => {
 </script>
 
 <template>
-	<section class="diagnostics" data-testid="blockly-diagnostics">
+	<section v-if="rows.length > 0" class="diagnostics" data-testid="blockly-diagnostics">
 		<header class="diagnostics-head">
 			<span class="diagnostics-title">诊断</span>
 			<span class="diagnostics-count" data-testid="blockly-diagnostic-count">{{ rows.length }}</span>
 		</header>
-		<ul v-if="rows.length > 0" class="diagnostics-list">
+		<ul class="diagnostics-list">
 			<li
 				v-for="row in rows"
 				:key="`${row.source}:${row.diagnostic.code}:${row.diagnostic.path ?? ''}:${row.diagnostic.message}`"
@@ -43,7 +46,6 @@ const location = (diagnostic: Diagnostic): string => {
 				<span v-if="location(row.diagnostic) !== ''" class="diagnostic-where">{{ location(row.diagnostic) }}</span>
 			</li>
 		</ul>
-		<p v-else class="diagnostics-empty">没有诊断</p>
 	</section>
 </template>
 
@@ -144,11 +146,5 @@ const location = (diagnostic: Diagnostic): string => {
 	font-size: var(--cc-fs-xs);
 	color: var(--cc-text-faint);
 	overflow-wrap: anywhere;
-}
-
-.diagnostics-empty {
-	margin: 0;
-	font-size: var(--cc-fs-sm);
-	color: var(--cc-text-faint);
 }
 </style>

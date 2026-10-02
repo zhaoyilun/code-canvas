@@ -28,8 +28,6 @@ export interface LinkRow {
 	/** 箭头端点在积木那侧（第一段）还是卡片那侧（第二段）。 */
 	readonly kind: 'block' | 'card';
 	readonly geometry: LinkGeometry;
-	/** 悬停提示：这一段说的是哪两处。 */
-	readonly title: string;
 }
 
 export interface LinkMeasurement {
@@ -122,7 +120,6 @@ export const measureLinks = ({ overlay, root, declaration }: MeasureInput): Link
 				step,
 				kind: 'block',
 				geometry: curveOf(blockRight, cardLeft),
-				title: `第 ${String(step)} 步：积木 → 流程`,
 			});
 		}
 
@@ -136,7 +133,6 @@ export const measureLinks = ({ overlay, root, declaration }: MeasureInput): Link
 				step,
 				kind: 'card',
 				geometry: curveOf(cardRight, codeLeft),
-				title: `第 ${String(step)} 步：流程 → 代码`,
 			});
 		}
 

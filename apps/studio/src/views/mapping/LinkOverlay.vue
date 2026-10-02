@@ -18,8 +18,9 @@
  *    选中那一步换成实心强调色 + 辉光，**同时把其余的线再压暗一档**
  *    （`.is-dimmed`）——不然只是「亮了一条」，看不出「其余的不是我要看的」。
  *
- * 4. **不挡任何交互。** overlay 与里面的每一段线都是 `pointer-events: none`，
- *    悬停提示也只挂在线上（`pointer-events: stroke` 会挡住卡片点击，所以不用）。
+ * 4. **不挡任何交互。** overlay 与里面的每一段线都是 `pointer-events: none`。
+ *    线上**不写字**：跟着线走的小字既盖住栏里的内容，又得随滚动重排，
+ *    而「这一段连的是哪两处」箭头已经说完（从哪出来、落到哪，看端点就知道）。
  *
  * 重算的触发面：声明变化、选中变化（这两条走 watch）、窗口尺寸与栏宽（ResizeObserver）、
  * 任意容器滚动（document 捕获阶段，滚动不冒泡）、积木画布缩放平移——
@@ -47,7 +48,7 @@ const overlayRef = ref<SVGSVGElement | null>(null);
 const links = shallowRef<readonly LinkRow[]>([]);
 const activeNodeId = computed(() => store.selectedNodeId.value);
 
-/** 悬停提示要显示「第几步 → 哪一栏」，所以每段线带一个 `title`（SVG 里 `title` 就是 tooltip）。 */
+/** 选中那一步有几段线（落在 `data-active-link-count` 上，量页面时看得见）。 */
 const activeLinkCount = computed(() => {
 	const active = activeNodeId.value;
 	return active === null ? 0 : links.value.filter((link) => link.nodeId === active).length;
@@ -231,7 +232,6 @@ watch(
 			:data-to="`${link.geometry.end.x},${link.geometry.end.y}`"
 			:data-straight="link.geometry.straight ? 'true' : 'false'"
 		>
-			<title>{{ link.title }}</title>
 			<path
 				class="cc-link__line"
 				:d="link.geometry.path"

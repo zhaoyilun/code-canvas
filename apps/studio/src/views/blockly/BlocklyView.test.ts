@@ -79,7 +79,6 @@ describe('积木画布 · 主题前提', () => {
 		const failure = wrapper.find('[data-testid="blockly-failure"]');
 		expect(failure.exists()).toBe(true);
 		expect(failure.text()).toContain('--cc-accent');
-		expect(wrapper.find('[data-testid="blockly-block-count"]').text()).toBe('0 块');
 
 		wrapper.unmount();
 	});

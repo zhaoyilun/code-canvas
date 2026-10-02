@@ -61,16 +61,6 @@ const pastePlaceholder = computed(() =>
 );
 
 /**
- * 真机还是仿真：设备名里也有括号说明，但那是一串长文字里的一部分，容易被略过。
- * 这一行是**单独说的**——发给仿真还是发给真机，是这条链上最要紧的一个区别。
- */
-const deviceNote = computed(() => {
-	const device = selectedDevice.value;
-	if (device === null) return '没有可用设备';
-	return device.virtual ? '虚拟设备 · 仿真' : '真机';
-});
-
-/**
  * 接口地址记在本地。联调时那个地址要反复填，刷新一次就没了最烦人；
  * 但它不是真相的一部分，所以只进 localStorage，不进 store。
  *
@@ -79,7 +69,19 @@ const deviceNote = computed(() => {
  */
 const ENDPOINT_STORAGE_KEY = 'codecanvas.task-endpoint';
 const DEFAULT_ENDPOINT = DEFAULT_LLM_ENDPOINT;
-const INSTRUCTION_PLACEHOLDER = '前进1米，避障后停止';
+/**
+ * 指令框里的例子**跟着当前设备的格式走**。
+ *
+ * 「前进1米」是那台差速底盘听得懂的话；SO-101 听不懂，照着它写只会拿回一份不合目录的计划。
+ * 例子是给人照抄的，抄错方向比空着更坏——和粘贴框那条是同一个道理。
+ */
+const INSTRUCTION_PLACEHOLDER: Readonly<Record<TaskFormatRef, string>> = {
+	phase1_task: '前进1米，避障后停止',
+	skill_plan: '看一眼桌面，再挥挥手打个招呼',
+};
+const instructionPlaceholder = computed(() =>
+	formatRef.value === null ? '' : INSTRUCTION_PLACEHOLDER[formatRef.value],
+);
 
 const readEndpoint = (): string => {
 	try {
@@ -128,21 +130,10 @@ const generateDisabled = computed(
 	() => busy.value || instruction.value.trim() === '' || selectedDevice.value === null,
 );
 
-/** 链路四段：任务 JSON → 积木 / 流程 / 代码。 */
-const CHAIN_STEPS = 4;
-/** 逐段点亮每段的停留。三段加起来 ~0.4s——够看清「在推进」，不演。 */
-const CHAIN_STEP_MS = 130;
-/** 成功后全亮的停留，之后回常态；「已完成」标记留着不动。 */
-const CHAIN_HOLD_MS = 1200;
-
-type ChainPhase = 'idle' | 'running' | 'done' | 'failed';
+type ChainPhase = 'idle' | 'running' | 'failed';
 
 const chainPhase = ref<ChainPhase>('idle');
-/** 已点亮到第几段（0 = 没点亮，都没动过）。 */
-const chainStep = ref(0);
-/** 停在第几段（0 = 没失败）。失败时这一段染危险色。 */
-const chainFailAt = ref(0);
-/** 终态标记。空串 = 不显示。 */
+/** 状态一行字。空串 = 那一块整块不显示（跑完了结果就在三个视图里，不必再摆一条状态线）。 */
 const chainNote = ref('');
 
 /**
@@ -151,17 +142,10 @@ const chainNote = ref('');
  * 否则「生成中」的回调会把用户后来手动转出来的结果覆盖掉。
  */
 let runId = 0;
-let timers: ReturnType<typeof setTimeout>[] = [];
-
-const wait = (ms: number): Promise<void> =>
-	new Promise((resolve) => {
-		timers.push(setTimeout(resolve, ms));
-	});
 
 onBeforeUnmount(() => {
+	// 卸载即作废：在途的那次生成回来时 `runId` 已经变了，自己走掉，不碰真相、也不碰已卸载的组件。
 	runId += 1;
-	for (const timer of timers) clearTimeout(timer);
-	timers = [];
 });
 
 watch(endpoint, (value) => {
@@ -186,16 +170,8 @@ const failStage = (): number =>
 
 const resetChain = (): void => {
 	chainPhase.value = 'idle';
-	chainStep.value = 0;
-	chainFailAt.value = 0;
 	chainNote.value = '';
 };
-
-const chainClass = (index: number): Record<string, boolean> => ({
-	'is-lit': chainStep.value >= index && chainFailAt.value !== index,
-	'is-live': chainPhase.value === 'running' && chainStep.value >= index && chainFailAt.value === 0,
-	'is-failed': chainFailAt.value === index,
-});
 
 /** 换真相那一步。生成与粘贴两条路都走它，失败时真相一个字节都不动。 */
 const loadInto = (body: string): boolean => {
@@ -211,25 +187,14 @@ const loadInto = (body: string): boolean => {
  */
 const settleChain = (converted: boolean, failAt: number): boolean => {
 	if (!converted) {
-		chainStep.value = failAt;
-		chainFailAt.value = failAt;
 		chainPhase.value = 'failed';
 		chainNote.value = `失败 · 停在第 ${String(failAt)} 段`;
 		return false;
 	}
 
-	chainPhase.value = 'done';
-	chainStep.value = CHAIN_STEPS;
-	chainFailAt.value = 0;
-	chainNote.value = `已完成 · ${String(nodeCount.value)} 个节点`;
-
-	// 全亮只停一小会儿就回常态，不允许一直闪；「已完成」这四个字留在原地当终态。
-	const mine = runId;
-	void wait(CHAIN_HOLD_MS).then(() => {
-		if (runId !== mine || chainPhase.value !== 'done') return;
-		chainPhase.value = 'idle';
-		chainStep.value = 0;
-	});
+	// 成了就不留状态线：结果本身就在三个视图里，再摆一行「已完成 · N 个节点」是重复的。
+	chainPhase.value = 'idle';
+	chainNote.value = '';
 	return true;
 };
 
@@ -239,7 +204,6 @@ function convert(): void {
 	transportDiagnostics.value = null;
 	failureLabel.value = '转换失败';
 	lastPath.value = 'paste';
-	chainFailAt.value = 0;
 	status.value = loadInto(pasteText.value) ? 'ok' : 'failed';
 }
 
@@ -276,8 +240,6 @@ async function generate(): Promise<void> {
 	failureLabel.value = '生成失败';
 	lastPath.value = 'generate';
 	chainPhase.value = 'running';
-	chainStep.value = 1;
-	chainFailAt.value = 0;
 	chainNote.value = '生成中…';
 
 	/*
@@ -322,19 +284,14 @@ async function generate(): Promise<void> {
 			if (result.kind === 'rejected') {
 				// 取回来了，但协议不过：诊断由 loadTaskJson 给，红灯停在没过的那一段。
 				failureLabel.value = '生成结果不合协议';
-				const failAt = failStage();
-				chainStep.value = failAt;
-				chainFailAt.value = failAt;
 				chainPhase.value = 'failed';
-				chainNote.value = `失败 · 停在第 ${String(failAt)} 段`;
+				chainNote.value = `失败 · 停在第 ${String(failStage())} 段`;
 			} else {
 				// 传输 / 响应形状坏掉：这一层的诊断（含重试次数），红灯停在第 1 段。
 				failureLabel.value = '生成失败';
 				transportDiagnostics.value = [
 					generationDiagnostic(`${result.message}（已尝试 ${String(result.attempts)} 次）`, url),
 				];
-				chainStep.value = 1;
-				chainFailAt.value = 1;
 				chainPhase.value = 'failed';
 				chainNote.value = '生成失败 · 停在第 1 段';
 			}
@@ -342,13 +299,8 @@ async function generate(): Promise<void> {
 			return;
 		}
 
-		// 转换是同步的，先把结论拿到手，再让链路把「积木 / 流程 / 代码」逐段点亮到该满的地方。
-		for (let index = 2; index <= CHAIN_STEPS; index += 1) {
-			chainStep.value = index;
-			await wait(CHAIN_STEP_MS);
-			if (runId !== mine) return;
-		}
-
+		// 转换是同步的：拿到结论就落定，不演。原先这里为了把四个胶囊逐段点亮，
+		// 硬等了 ~0.39s——胶囊已经没有了，那就是纯粹给落定加延迟。
 		status.value = settleChain(true, 0) ? 'ok' : 'failed';
 	} finally {
 		busy.value = false;
@@ -404,8 +356,6 @@ const location = (diagnostic: Diagnostic): string => {
 			<!-- 入口本体：设备 + 一句话 + 生成。常态就这一行。 -->
 			<div class="entry">
 				<header class="entry-head">
-					<span class="entry-title">程序入口</span>
-					<span class="entry-hint">选设备 → 说一句话 → 生成</span>
 					<span class="entry-meta">
 						<!-- 顺利时不占第二行：带子高度由变量钉住，失败或带诊断才往下长 -->
 						<span
@@ -440,8 +390,6 @@ const location = (diagnostic: Diagnostic): string => {
 								{{ device.label }}
 							</option>
 						</select>
-						<!-- 真机 / 仿真单独说一行：label 里的括号在一串字里，太容易略过 -->
-						<span class="field-note" data-testid="device-note">{{ deviceNote }}</span>
 					</label>
 
 					<label class="field field-instruction">
@@ -453,7 +401,7 @@ const location = (diagnostic: Diagnostic): string => {
 							data-testid="instruction-input"
 							aria-label="一句话指令"
 							spellcheck="false"
-							:placeholder="INSTRUCTION_PLACEHOLDER"
+							:placeholder="instructionPlaceholder"
 							@keydown.enter.prevent="generate"
 						/>
 					</label>
@@ -490,7 +438,6 @@ const location = (diagnostic: Diagnostic): string => {
 					>
 						直接粘贴 JSON
 					</button>
-					<span class="toggle-note">接口联调前，粘贴这条路照样能把任务灌进来</span>
 				</div>
 
 				<div v-if="showEndpoint" class="settings-row" data-testid="task-endpoint-row">
@@ -547,31 +494,19 @@ const location = (diagnostic: Diagnostic): string => {
 				</div>
 			</div>
 
-			<div class="chain" data-testid="translation-chain">
-				<div class="chain-head">
-					<span class="chain-title">TRANSLATION</span>
-					<!-- 终态标记：成功后一直留着，失败则指出停在哪一段。它不闪。 -->
-					<span
-						v-if="chainNote !== ''"
-						class="chain-badge"
-						:class="chainPhase"
-						data-testid="translation-chain-state"
-					>
-						{{ chainNote }}
-					</span>
-				</div>
-				<ol class="chain-list">
-					<li class="chain-node chain-source" :class="chainClass(1)">
-						<span class="chain-dot" aria-hidden="true"></span>任务 JSON
-					</li>
-					<li class="chain-arrow" aria-hidden="true">→</li>
-					<li class="chain-node" :class="chainClass(2)">积木</li>
-					<li class="chain-slash" aria-hidden="true">/</li>
-					<li class="chain-node" :class="chainClass(3)">流程</li>
-					<li class="chain-slash" aria-hidden="true">/</li>
-					<li class="chain-node" :class="chainClass(4)">代码</li>
-				</ol>
-				<span class="chain-note">生成接口负责「一句话 → 任务 JSON」；这里只把它取回来</span>
+			<!--
+				只在「正在跑」与「跑失败」时露头：跑完了结果就在三个视图里，不必再摆一条状态线；
+				而那四个胶囊（任务 JSON / 积木 / 流程 / 代码）是**标签**，静止时只是噪音。
+				失败那一条要留着——它指出停在哪一段，且底下还跟着具体诊断。
+			-->
+			<div
+				v-if="chainPhase === 'running' || chainPhase === 'failed'"
+				class="chain"
+				data-testid="translation-chain"
+			>
+				<span class="chain-badge" :class="chainPhase" data-testid="translation-chain-state">
+					{{ chainNote }}
+				</span>
 			</div>
 		</div>
 
@@ -665,21 +600,6 @@ const location = (diagnostic: Diagnostic): string => {
 	line-height: 1.2;
 }
 
-.entry-title {
-	font-size: var(--cc-fs-sm);
-	font-weight: 600;
-	color: var(--cc-text);
-}
-
-.entry-hint {
-	min-width: 0;
-	overflow: hidden;
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-text-faint);
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
 .entry-meta {
 	display: flex;
 	align-items: baseline;
@@ -728,17 +648,6 @@ const location = (diagnostic: Diagnostic): string => {
 .field-device,
 .field-instruction {
 	min-width: 0;
-}
-
-/*
- * 真机 / 仿真那一行小字：紧挨着下拉，**不参与收缩**——它一共就几个字，
- * 让位的结果是把「仿真」这两个字截掉，那这一行就白放了。要挤先挤下拉（原生下拉截断不影响选）。
- */
-.field-note {
-	flex: 0 0 auto;
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-text-faint);
-	white-space: nowrap;
 }
 
 .field-select,
@@ -803,15 +712,6 @@ const location = (diagnostic: Diagnostic): string => {
 .toggle-sep {
 	font-size: var(--cc-fs-xs);
 	color: var(--cc-line-strong);
-}
-
-.toggle-note {
-	min-width: 0;
-	overflow: hidden;
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-text-faint);
-	text-overflow: ellipsis;
-	white-space: nowrap;
 }
 
 .settings-row,
@@ -942,32 +842,21 @@ const location = (diagnostic: Diagnostic): string => {
 	background: var(--cc-surface-raised);
 }
 
-/* 转译链：与底部 PIPELINE 同一套观感（胶囊 + 箭头 + 淡色标题） */
+/*
+ * 状态线：**只在跑着或跑败时存在**（见模板上的 v-if）。
+ * 四个胶囊（任务 JSON / 积木 / 流程 / 代码）已经删掉——静止时它们只是标签，
+ * 而跑完的结果就在三个视图里，不需要再摆一条线重复一遍。
+ */
 .chain {
 	display: flex;
-	flex-direction: column;
-	justify-content: center;
-	gap: var(--cc-space-1);
+	align-items: center;
 	flex: 0 0 auto;
-	min-height: 0;
-	overflow: hidden;
-	padding: 0 var(--cc-space-1) 0 var(--cc-space-2);
-}
-
-.chain-head {
-	display: flex;
-	align-items: baseline;
-	gap: var(--cc-space-2);
 	min-width: 0;
+	overflow: hidden;
+	padding: 0 var(--cc-space-2);
 }
 
-.chain-title {
-	font-size: var(--cc-fs-xs);
-	letter-spacing: 0.18em;
-	color: var(--cc-text-faint);
-}
-
-/* 终态标记：安静的一行字，靠颜色说话，不靠闪 */
+/* 一行字，靠颜色说话。跑着的时候轻轻呼吸一下——那是「看得出在干活」唯一的视觉信号。 */
 .chain-badge {
 	min-width: 0;
 	overflow: hidden;
@@ -980,92 +869,11 @@ const location = (diagnostic: Diagnostic): string => {
 
 .chain-badge.running {
 	color: var(--cc-chain-live);
-}
-
-.chain-badge.done {
-	color: var(--cc-chain-lit);
+	animation: chain-breathe 0.9s ease-in-out infinite;
 }
 
 .chain-badge.failed {
 	color: var(--cc-chain-failed);
-}
-
-.chain-list {
-	display: flex;
-	align-items: center;
-	gap: var(--cc-space-1);
-	margin: 0;
-	padding: 0;
-	list-style: none;
-}
-
-.chain-node {
-	display: flex;
-	align-items: center;
-	gap: var(--cc-space-2);
-	padding: 3px var(--cc-space-2);
-	font-size: var(--cc-fs-sm);
-	color: var(--cc-text-dim);
-	border: 1px solid var(--cc-line-strong);
-	border-radius: 999px;
-	white-space: nowrap;
-	transition:
-		color 0.12s ease,
-		background 0.12s ease,
-		border-color 0.12s ease,
-		box-shadow 0.12s ease;
-}
-
-.chain-source {
-	color: var(--cc-accent);
-	background: var(--cc-accent-veil);
-	border-color: var(--cc-accent-dim);
-}
-
-.chain-dot {
-	width: 6px;
-	height: 6px;
-	border-radius: 50%;
-	background: currentColor;
-	opacity: 0.55;
-}
-
-/* 已点亮：这一段过了。安静版强调色，不发光。 */
-.chain-node.is-lit {
-	color: var(--cc-chain-lit);
-	background: var(--cc-chain-lit-veil);
-	border-color: var(--cc-chain-lit-border);
-}
-
-.chain-node.is-lit .chain-dot {
-	opacity: 1;
-}
-
-/*
- * 进行中：唯一会动的东西。呼吸很浅（只改不透明度），动完就停——
- * 目的是「看得出在干活」，不是表演；全亮之后不会一直闪。
- */
-.chain-node.is-live {
-	color: var(--cc-chain-live);
-	border-color: var(--cc-chain-lit);
-	box-shadow: 0 0 10px var(--cc-accent-glow);
-	animation: chain-breathe 0.9s ease-in-out infinite;
-}
-
-.chain-node.is-live .chain-dot {
-	opacity: 1;
-}
-
-/* 停在出错的那一段 */
-.chain-node.is-failed {
-	color: var(--cc-chain-failed);
-	background: var(--cc-chain-failed-veil);
-	border-color: var(--cc-chain-failed-border);
-}
-
-.chain-node.is-failed .chain-dot {
-	background: var(--cc-chain-failed);
-	opacity: 1;
 }
 
 @keyframes chain-breathe {
@@ -1079,26 +887,11 @@ const location = (diagnostic: Diagnostic): string => {
 	}
 }
 
-/* 降级：不要动效的人看到的是一段稳定常亮的灯，信息一个不少 */
+/* 降级：不要动效的人看到的是一行稳定常亮的字，信息一个不少 */
 @media (prefers-reduced-motion: reduce) {
-	.chain-node.is-live {
+	.chain-badge.running {
 		animation: none;
 	}
-
-	.chain-node {
-		transition: none;
-	}
-}
-
-.chain-arrow,
-.chain-slash {
-	font-size: var(--cc-fs-sm);
-	color: var(--cc-line-strong);
-}
-
-.chain-note {
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-text-faint);
 }
 
 /* 诊断：与积木侧那份同一形状（左侧色条区分严重度），摆在入口下方 */
@@ -1196,15 +989,7 @@ const location = (diagnostic: Diagnostic): string => {
 	overflow-wrap: anywhere;
 }
 
-/* 窄窗：先舍注释，再舍整条链——入口永远留着，它才是这一带的功能 */
-@media (max-width: 1180px) {
-	.chain-note,
-	.toggle-note {
-		display: none;
-	}
-}
-
-/* 再窄一点：字段名也舍掉，控件本身留着（placeholder 与 aria-label 还在） */
+/* 窄窗：字段名也舍掉，控件本身留着（placeholder 与 aria-label 还在） */
 @media (max-width: 1020px) {
 	.field-label {
 		display: none;
