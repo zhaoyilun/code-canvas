@@ -5,12 +5,13 @@
  * 「卡片行 + 它自己的臂行」，模板照着画；缩进的语义是 DOM 嵌套（臂里的卡片在 `.flow-arm` 里），
  * 不是拿 CSS 猜出来的——否则「哪张卡属于哪条臂」在 DOM 上就无迹可查，验收只能靠肉眼。
  *
- * 卡片上的参数摘要仍走 `summary.ts` 那一套（判据只有校验器一个来源）；
- * 分支卡是唯一的例外：它没有 `action`，参数**只有条件本身**，所以卡头旁边画的是条件的人话，
- * 而不是「这个动作没有参数」——那句话在分支上是错的（它不是动作，也就谈不上没有参数）。
+ * 卡片上的参数摘要仍走 `summary.ts` 那一套（判据只有校验器一个来源）；两张卡是例外，
+ * 它们都不是「调一个能力」：分支卡画的是条件的人话（它没有 `action`），
+ * 等待卡的秒数写在卡头（「等待 2 秒」）——两张卡都不摆那句「这个动作没有参数」，
+ * 那句话在它们身上是对的，但没说清这一步是什么（它们不是动作）。
  */
 import { findCapability, type CapabilityCatalog, type Diagnostic, type WorkflowNode } from '@codecanvas/contracts';
-import { TASK_BRANCH_NODE_TYPE } from '@codecanvas/task-import';
+import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
 import {
 	actionLabel,
 	nodeAction,
@@ -21,21 +22,31 @@ import {
 	type NodeLimits,
 	type ParameterSummary,
 } from './summary';
-import { conditionViewOf, type ConditionView, type PlanStep } from '../shared/plan-structure';
+import {
+	conditionViewOf,
+	waitLabelOf,
+	type ConditionView,
+	type PlanStep,
+} from '../shared/plan-structure';
 
 export interface FlowCardModel {
 	readonly node: WorkflowNode;
 	/** 声明里的位置（0 基）。徽标上的「第几步」= `index + 1`。 */
 	readonly index: number;
-	/** 卡头显示的文字：动作的中文名，分支卡是「分支」。 */
+	/** 卡头显示的文字：动作的中文名，分支卡是「分支」，等待卡是「等待 2 秒」。 */
 	readonly action: string;
-	/** 协议里的名字（分支卡是节点类型），只进 `data-action`。 */
+	/** 协议里的名字（分支卡与等待卡是节点类型），只进 `data-action`。 */
 	readonly actionName: string;
 	readonly stepId: string | null;
 	readonly parameters: readonly ParameterSummary[];
 	readonly diagnostics: readonly Diagnostic[];
 	/** 只有分支卡有：这一层的条件（人话 + 原值）。 */
 	readonly condition: ConditionView | null;
+	/**
+	 * 参数区那句说明。`null` = 用默认那句「这个动作没有参数」——
+	 * 等待卡要自己说一句，因为「没有参数」在它身上是对的但没说清它是什么（它不是动作）。
+	 */
+	readonly paramsNote: string | null;
 }
 
 export interface FlowCardRow {
@@ -90,14 +101,23 @@ const cardOf = (
 	return {
 		node: step.node,
 		index: step.index,
-		action: step.isBranch ? '分支' : actionLabel(step.node, capability),
-		actionName: step.isBranch ? TASK_BRANCH_NODE_TYPE : nodeActionName(step.node),
+		action: step.isBranch ? '分支' : step.isWait ? waitLabelOf(step.node.parameters['seconds']) : actionLabel(step.node, capability),
+		actionName: step.isBranch
+			? TASK_BRANCH_NODE_TYPE
+			: step.isWait
+				? TASK_WAIT_NODE_TYPE
+				: nodeActionName(step.node),
 		stepId: nodeStepId(step.node),
+		// 等待步的秒数已经在卡头那句「等待 2 秒」里了，不再摆一行参数（摆一遍是把同一个数说两次）；
+		// 参数区照旧给一句说明——「这个动作没有参数」在它不是动作时是一句没说清的话。
 		parameters: step.isBranch
 			? branchExtraParameters(step.node, limits)
-			: summarizeNodeParameters(step.node.parameters, protocolAction, limits, capability),
+			: step.isWait
+				? []
+				: summarizeNodeParameters(step.node.parameters, protocolAction, limits, capability),
 		diagnostics: nodeDiagnostics(diagnostics, step.node, step.index),
 		condition: step.isBranch ? conditionViewOf(step.node) : null,
+		paramsNote: step.isWait ? '等待步没有参数：它只是停一下，不改动上一步的结果。' : null,
 	};
 };
 

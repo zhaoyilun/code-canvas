@@ -356,6 +356,37 @@ describe('mountVirtualDevice · 跑一步', () => {
 		device.dispose();
 	});
 
+	it('等待步真的等，且 device.cancel() 能打断它（真执行器 + 真取消订阅）', async () => {
+		const { device, frames } = mountOn(hostOf());
+		const reported: string[] = [];
+		device.onPlanStep((event) => reported.push(`${event.path} ${event.arm ?? '-'} ${event.state} ${event.step.step}`));
+
+		const pending = device.run({
+			schemaVersion: 1,
+			robot: 'test_arm',
+			// 30 秒：要是 `cancel()` 打不断这次等待，下面那个 await 会一直挂着（测试超时就是红）
+			plan: [
+				{ step: 'skill', skill: 'greet' },
+				{ step: 'wait', seconds: 30 },
+				{ step: 'skill', skill: 'never_reached' },
+			],
+		});
+		await frames.pump(60, pending);
+		// 走到等待步了：它照报一步，`arm` 是 null（等待没有臂）
+		expect(reported.at(-1)).toBe('1 - running wait');
+
+		device.cancel();
+		// 不再泵帧：等待是被信号打断的，不是等满 30 秒
+		const outcome = await pending;
+		expect(outcome.ok).toBe(false);
+		expect(outcome.reason).toContain('已取消');
+		expect(reported.at(-1)).toBe('1 - failed wait');
+		// 后面那一步一步没动：设备那边只收到第一条技能
+		expect(device.stepEvents.map((event) => event.capabilityRef)).toEqual(['greet']);
+
+		device.dispose();
+	});
+
 	it('取消订阅之后不再收到事件', async () => {
 		const { device, frames } = mountOn(hostOf());
 		const listener = vi.fn();

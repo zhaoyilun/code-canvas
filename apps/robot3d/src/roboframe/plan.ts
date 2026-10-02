@@ -38,7 +38,41 @@ export interface PlanRunner {
 	 */
 	setPlanContext?(context: { readonly planIndex: number; readonly taskId: string }): void;
 	cancel(): void;
+	/**
+	 * 订阅「这次执行被取消了」。**计划层的 `wait` 要能被真打断就靠它**：
+	 * 执行器对外只有 `cancel()` 一个动作，而等待是一次 `setTimeout`——订阅到了才收得了摊，
+	 * 不是等完再看一眼标记（那还是把执行器挂在那儿傻等）。
+	 * 返回退订函数，跑完这一趟就退订（别把上一趟的等待留在集合里）。
+	 */
+	onCancel(listener: () => void): () => void;
 }
+
+/**
+ * 计划层的等待：默认那条是**可打断的 `setTimeout`**（见 `interruptibleSleep`）。
+ * 测试注入假的，别让单测真的等两秒；真身不需要换。
+ */
+export type PlanSleep = (ms: number, signal: AbortSignal) => Promise<void>;
+
+/**
+ * 可打断的等待：`signal` 一 abort，`setTimeout` 当场被清掉、Promise 立刻收摊。
+ *
+ * 为什么不能「等完再检查 signal」：那样取消按钮按下去要等到这一步自己醒过来才生效，
+ * 计划里一个 600 秒的等待就会让「取消」看上去失灵——事情做了没有，是两回事。
+ */
+const interruptibleSleep: PlanSleep = (ms, signal) =>
+	new Promise<void>((resolve) => {
+		if (signal.aborted) {
+			resolve();
+			return;
+		}
+		function finish(): void {
+			signal.removeEventListener('abort', finish);
+			clearTimeout(timer);
+			resolve();
+		}
+		const timer = setTimeout(finish, ms);
+		signal.addEventListener('abort', finish, { once: true });
+	});
 
 export type IntakeResult =
 	| { readonly ok: true; readonly plan: SkillPlan }
@@ -152,6 +186,20 @@ const conditionHolds = (condition: BranchCondition, lastSuccess: boolean): boole
 	condition.op === '==' ? lastSuccess === condition.value : lastSuccess !== condition.value;
 
 /**
+ * 一个计划步在界面上叫什么：技能步报技能名（那是设备那边真收到的调用），
+ * 分支步说这是个判断，等待步说等了多久。
+ *
+ * 为什么放在执行侧而不是各界面各写一份：这几种说法说的是**同一件事实**（这一步是什么），
+ * 两个界面（机器人应用自己的日志、studio 右栏）不该各有一套叫法。
+ * 「等多久」就写声明里那个数——不摆一张「几秒怎么说」的表。
+ */
+export function planStepLabel(step: SkillPlanStep): string {
+	if (step.step === 'if') return '分支';
+	if (step.step === 'wait') return `等待 ${String(step.seconds)} 秒`;
+	return step.skill;
+}
+
+/**
  * 嵌套步的失败原因要点名它是哪一步。
  *
  * 顶层步不加前缀：「第 2 步」本来就说得清，理由原样透出更好读。臂里的步不属于任何单独的
@@ -171,10 +219,15 @@ type StepResult = { readonly ok: true } | { readonly ok: false; readonly reason:
  * （臂里还能再有 `if`，深度由契约挡在 8 层）。分支自己也算一步，照报 `running` → `done`/`failed`，
  * 并在事件里说清走了哪条臂（`arm`）与它在树的哪一格（`path`）。
  *
- * **`last.success` 的语义**：最近一次**真正执行过的技能步**成没成。两个要点：
+ * **`last.success` 的语义**：最近一次**真正执行过的技能步**成没成。三个要点：
  * ① 分支步自己不更新它——它不是技能步，没做成的事由臂里的那一步去说；
- * ② **计划第一步之前没有上一步，那时算 `true`**（什么都还没失败），于是「第一步就是
+ * ② **`wait` 步也不更新它**——它什么也没「成」也没「败」，所以它后面那个 `if` 看到的
+ *    仍是 `wait` **之前**那个技能步的结果（`plan.test.ts` 里钉着这一条）；
+ * ③ **计划第一步之前没有上一步，那时算 `true`**（什么都还没失败），于是「第一步就是
  * `if`」的计划按条件成立那条路走。这个初值在 `plan.test.ts` 里钉着。
+ *
+ * **`wait` 步真的等**（`setTimeout` 那一层），但**可被打断**：`cancel()` 一订阅到就当场收摊，
+ * 那一步照报 `failed`（原因「已取消」）——与「跑到一半被取消的技能步」同一个口径。
  *
  * 顶层一格 → 臂里一格 → 再嵌套，走的是同一个递归（`runStep` / `runSteps`），
  * 所以「怎么算一步、怎么报一步」只有一份。
@@ -186,14 +239,25 @@ export async function runPlan(
 		readonly runner: PlanRunner;
 		readonly onPlanStep?: (event: PlanStepReport) => void;
 		readonly onPrimitive?: (event: Extract<PlanStepEvent, { kind: 'primitive' }>) => void;
+		/** 计划层的等待怎么等。缺省 `interruptibleSleep`；测试注入假的，别真等两秒。 */
+		readonly sleep?: PlanSleep;
 	},
 ): Promise<PlanRunOutcome> {
 	const { catalog, runner } = options;
+	const sleep = options.sleep ?? interruptibleSleep;
 	const total = plan.plan.length;
 	runner.beginRun();
 	/** 见上面「`last.success` 的语义」：初值是 `true`（第一步之前没有任何上一步） */
 	let lastSuccess = true;
 	let completed = 0;
+	/**
+	 * 这一趟的取消信号。`cancel()` 的信息从 runner 那边订阅过来（`onCancel`），
+	 * 订阅一次全程共用：等待步收到的就是同一个信号，所以「取消」这件事在计划层只有一份说法。
+	 */
+	const cancelled = new AbortController();
+	const unsubscribe = runner.onCancel(() => {
+		cancelled.abort();
+	});
 
 	/** 跑一串步骤（顶层那一串，或某条臂里那一串）。任何一步没成就把原因原样往上带。 */
 	const runSteps = async (steps: readonly SkillPlanStep[], basePath: string, topIndex: number): Promise<StepResult> => {
@@ -233,6 +297,25 @@ export async function runPlan(
 		}
 
 		/*
+		 * 等待步：只是停一下。三件事在这儿说清：
+		 * ① 它**照报一步**（`running` → `done`），`arm` 是 `null`——它没有臂（没走哪条一说）；
+		 * ② 它**不碰 `last.success`**：这里一个字都不写它，所以后面那个 `if` 看到的仍是
+		 *    `wait` 之前那个技能步的结果（契约里也写着这一条，`plan.test.ts` 里钉着）；
+		 * ③ 等的是**真时间**，但可被打断：`cancel()` 一到信号就 abort，等待当场收摊
+		 *    （见 `interruptibleSleep`），那一步照报 `failed`——与「跑到一半被取消的技能步」同一个口径。
+		 */
+		if (step.step === 'wait') {
+			options.onPlanStep?.({ ...header, arm: null, state: 'running' });
+			await sleep(step.seconds * 1000, cancelled.signal);
+			if (cancelled.signal.aborted) {
+				options.onPlanStep?.({ ...header, arm: null, state: 'failed' });
+				return { ok: false, reason: atPath(path, '已取消') };
+			}
+			options.onPlanStep?.({ ...header, arm: null, state: 'done' });
+			return { ok: true };
+		}
+
+		/*
 		 * 分支：条件在这一步**开头**就判定了，所以 `running` 事件里已经带着走哪条臂——
 		 * 界面因此能在这一步开始时就把「走 then」写出来，而不是等臂跑完才知道。
 		 * 条件不成立又没有 `else` 时 `arm` 是 `null`：这一步什么也不做，但它确实走完了（报 `done`）。
@@ -254,13 +337,19 @@ export async function runPlan(
 		return nested;
 	};
 
-	for (const [index, step] of plan.plan.entries()) {
-		// 顶层步号就是它自己的下标 + 1；臂里的步由 `runSteps` 把同一个号带下去
-		const result = await runStep(step, String(index), index + 1);
-		if (!result.ok) return { ok: false, completed, total, reason: result.reason };
-		completed += 1;
+	try {
+		for (const [index, step] of plan.plan.entries()) {
+			// 顶层步号就是它自己的下标 + 1；臂里的步由 `runSteps` 把同一个号带下去
+			const result = await runStep(step, String(index), index + 1);
+			if (!result.ok) return { ok: false, completed, total, reason: result.reason };
+			completed += 1;
+		}
+		return { ok: true, completed, total };
+	} finally {
+		// 这一趟跑完就退订：订阅是「这一次执行」的，留着下一次就会有一份没人管的等待
+		// （`beginRun()` 之后是另一趟，信号也该是新的——那是下一次 `runPlan` 的事）。
+		unsubscribe();
 	}
-	return { ok: true, completed, total };
 }
 
 /** 界面上的示例：技能名与参数名都照目录原名写，开机就是一份能跑通的计划 */

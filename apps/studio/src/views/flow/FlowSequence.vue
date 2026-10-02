@@ -108,7 +108,7 @@ const connectorAfter = (position: number): boolean => {
 					</dd>
 				</div>
 			</dl>
-			<p v-else class="card-params-empty">这个动作没有参数</p>
+			<p v-else class="card-params-empty">{{ row.card.paramsNote ?? '这个动作没有参数' }}</p>
 
 			<ul v-if="row.card.diagnostics.length > 0" class="card-diagnostics" data-testid="flow-node-diagnostics">
 				<li

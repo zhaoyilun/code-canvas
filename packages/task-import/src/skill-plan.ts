@@ -27,6 +27,17 @@
  * - `main[2]` 是「`if` 执行完了接着往下走」的那一步，**接在分支节点自己身上**，
  *   与走了哪一臂无关——结构化语句本来就是这个语义。所以它**不是回汇**：
  *   回汇是两条边收进同一个节点，这里两条臂仍然各自收尾，只是分支节点多了一条往后的边。
+ *
+ * 一个 `wait` 步 → 一个 `task.wait` 节点，**只有一格出边**（与技能步一样是单格）：
+ *
+ * ```text
+ * { step: 'wait', seconds: 2 }
+ *   →  parameters: { seconds: 2 }
+ * ```
+ *
+ * 为什么不开三格：三格是**分支专用**的（位置就是 then / else / 后续）。等待没有臂，
+ * 给它三格等于让下游以为「这一步能分叉」，视图与逆映射都得跟着猜哪一格才算数。
+ * 秒数原样进参数，还原时原样收回——`seconds` 是这一步的全部内容，不翻译成别的键。
  */
 import {
 	computeWorkflowDigest,
@@ -44,6 +55,7 @@ import {
 	type SkillPlanStep,
 	type SkillStep,
 	type StableIdFactory,
+	type WaitStep,
 	type WorkflowConnections,
 	type WorkflowDeclaration,
 	type WorkflowDeclarationDraft,
@@ -57,6 +69,21 @@ import { NODE_HORIZONTAL_SPACING, TASK_ACTION_NODE_TYPE, TASK_ACTION_NODE_TYPE_V
  */
 export const TASK_BRANCH_NODE_TYPE = 'task.branch';
 export const TASK_BRANCH_NODE_TYPE_VERSION = 1;
+
+/**
+ * 等待步的节点类型。与上面两个并列——同一层里的第三种节点，不是另一套协议。
+ * 它没有 `action`（不是技能），也没有 `condition`（不是判断）：参数只有 `seconds`。
+ */
+export const TASK_WAIT_NODE_TYPE = 'task.wait';
+export const TASK_WAIT_NODE_TYPE_VERSION = 1;
+
+/**
+ * 等待步的显示名：`3. 等待 2 秒`。
+ *
+ * 一句话写在这儿而不是散在三个视图里：卡片头、积木标题、节点名说的是同一件事，
+ * 各写一遍就会各漂各的。数字就是声明里那一个（不换算成分钟、不四舍五入）。
+ */
+const waitLabel = (seconds: number): string => `等待 ${String(seconds)} 秒`;
 
 /** 臂的纵向偏移。x 严格按创建序递增（节点因此不会重叠），y 只用来分开主干与两条臂。 */
 const NODE_VERTICAL_SPACING = 140;
@@ -143,12 +170,35 @@ export const buildDeclarationFromPlan = (
 	const port = (headId: string | undefined): ConnectionTarget[] =>
 		headId === undefined ? [] : [{ node: headId, input: 0 }];
 
+	/**
+	 * 一个 `wait` 步 → 一个节点，参数只有 `seconds`（原样）。
+	 * 它的出边由下面那条通用规则给（普通步骤一格），这里不开三格——见文件头。
+	 */
+	const waitNode = (step: WaitStep, y: number): WorkflowNode => {
+		const { order, position } = takePosition(y);
+		return {
+			id: idFactory.nodeId(),
+			name: `${String(order + 1)}. ${waitLabel(step.seconds)}`,
+			type: TASK_WAIT_NODE_TYPE,
+			typeVersion: TASK_WAIT_NODE_TYPE_VERSION,
+			parameters: { seconds: step.seconds },
+			position,
+			disabled: false,
+		};
+	};
+
 	/** 把一串步串成一条链，返回链头的节点 id（空链给 `undefined`）。嵌套的 `if` 在这里递归下去。 */
 	const buildList = (steps: readonly SkillPlanStep[], y: number): string | undefined => {
 		const built: BuiltStep[] = [];
 		for (const step of steps) {
 			if (step.step === 'skill') {
 				const node = skillNode(step, y);
+				nodes.push(node);
+				built.push({ id: node.id });
+				continue;
+			}
+			if (step.step === 'wait') {
+				const node = waitNode(step, y);
 				nodes.push(node);
 				built.push({ id: node.id });
 				continue;

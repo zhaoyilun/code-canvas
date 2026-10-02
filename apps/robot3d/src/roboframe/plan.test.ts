@@ -1,7 +1,17 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { ROBOFRAME_SO101_CATALOG as catalog } from '@codecanvas/capabilities';
 import type { CapabilitySpec, Diagnostic, JsonObject, SkillPlan, SkillPlanStep, SkillStep } from '@codecanvas/contracts';
-import { intake, makeTaskId, normalizeCommand, runPlan, SAMPLE_PLAN_JSON, type PlanRunner, type PlanStepEvent } from './plan';
+import {
+	intake,
+	makeTaskId,
+	normalizeCommand,
+	planStepLabel,
+	runPlan,
+	SAMPLE_PLAN_JSON,
+	type PlanRunner,
+	type PlanSleep,
+	type PlanStepEvent,
+} from './plan';
 import type { RunOutcome } from './executor';
 
 const codes = (diagnostics: readonly Diagnostic[]): string[] => diagnostics.map((d) => d.code);
@@ -23,10 +33,23 @@ const asSkill = (step: SkillPlanStep | undefined): SkillStep => {
 function fakeRunner(failOn?: string) {
 	const ran: string[] = [];
 	const calls: { ref: string; params: Record<string, unknown> }[] = [];
+	/**
+	 * 取消的订阅者。真身（`RoboFrameExecutor`）也是这个口径：等待步靠订阅被打断，
+	 * 所以这张假替身必须能通知——不然「取消能打断等待」那条测试测的就是一张不会取消的替身。
+	 */
+	const cancelListeners = new Set<() => void>();
 	const runner: PlanRunner = {
 		// 只是清取消标记——连续执行时不该动机械臂，这里记一笔好断言
 		beginRun: () => {},
-		cancel: () => {},
+		cancel: () => {
+			for (const listener of cancelListeners) listener();
+		},
+		onCancel: (listener) => {
+			cancelListeners.add(listener);
+			return () => {
+				cancelListeners.delete(listener);
+			};
+		},
 		run: async (capability: CapabilitySpec, params: Record<string, unknown>): Promise<RunOutcome> => {
 			ran.push(capability.capabilityRef);
 			calls.push({ ref: capability.capabilityRef, params });
@@ -36,7 +59,7 @@ function fakeRunner(failOn?: string) {
 			return { ok: true, steps: [] };
 		},
 	};
-	return { runner, ran, calls };
+	return { runner, ran, calls, cancel: () => runner.cancel() };
 }
 
 describe('intake', () => {
@@ -115,6 +138,7 @@ describe('runPlan', () => {
 		const runner: PlanRunner = {
 			beginRun: () => events.push('beginRun'),
 			cancel: () => {},
+			onCancel: () => () => {},
 			run: async () => ({ ok: true, steps: [] }),
 		};
 		await runPlan({ schemaVersion: 1, robot: 'so101_single_arm', plan: [{ step: 'skill', skill: 'inspect_scene' }] }, { catalog, runner });
@@ -331,5 +355,164 @@ describe('runPlan', () => {
 		expect(id.length).toBeGreaterThan(0);
 		expect(id.length).toBeLessThanOrEqual(128);
 		expect(id.startsWith('plan-3-')).toBe(true);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 等待步（`wait`）：真的等、能被打断、不改「上一步成没成」
+// ---------------------------------------------------------------------------
+
+describe('runPlan · 等待步', () => {
+	/** 一条等待步。 */
+	const wait = (seconds: number): SkillPlanStep => ({ step: 'wait', seconds });
+
+	/** 一条技能步（与上面那一组同一个写法：这两个辅助在各组里各来一份，省得跨组共享夹具）。 */
+	const call = (skill: string): SkillPlanStep => ({ step: 'skill', skill });
+
+	/** 一棵分支：条件照契约的口径写。 */
+	const branch = (
+		value: boolean,
+		then: readonly SkillPlanStep[],
+		other?: readonly SkillPlanStep[],
+	): SkillPlanStep => ({
+		step: 'if',
+		condition: { field: 'last.success', op: '==', value },
+		then,
+		...(other === undefined ? {} : { else: other }),
+	});
+
+	const branchPlan = (steps: readonly SkillPlanStep[]): SkillPlan => ({
+		schemaVersion: 1,
+		robot: 'so101_single_arm',
+		plan: steps,
+	});
+
+	/** 不等的那条 sleep：与「等多久」无关的用例用它，别让单测真的等两秒。 */
+	const instantSleep: PlanSleep = async () => {};
+
+	const traceOfEvent = (e: Extract<PlanStepEvent, { kind: 'plan-step' }>): string =>
+		`${String(e.index)}@${e.path} ${e.arm ?? '-'} ${e.state} ${e.step.step}`;
+
+	it('真的等了：差一毫秒都还没往下走（假时钟，不真等）', async () => {
+		vi.useFakeTimers();
+		try {
+			const { runner, ran } = fakeRunner();
+			const trace: string[] = [];
+			const promise = runPlan(
+				{ schemaVersion: 1, robot: 'so101_single_arm', plan: [call('inspect_scene'), wait(2), call('wave_hello')] },
+				{ catalog, runner, onPlanStep: (e) => trace.push(traceOfEvent(e)) },
+			);
+
+			// 走到等待步了：等这一步的 `running` 报出来（技能步已经做完）
+			await vi.advanceTimersByTimeAsync(0);
+			expect(trace).toEqual(['1@0 - running skill', '1@0 - done skill', '2@1 - running wait']);
+			expect(ran).toEqual(['inspect_scene']);
+
+			// 差 1 毫秒：这一步还没有结论，后面那一步也没开始
+			await vi.advanceTimersByTimeAsync(1999);
+			expect(trace.at(-1)).toBe('2@1 - running wait');
+			expect(ran).toEqual(['inspect_scene']);
+
+			// 等够了才结束，然后才轮到下一步
+			await vi.advanceTimersByTimeAsync(1);
+			const outcome = await promise;
+			expect(outcome.ok).toBe(true);
+			expect(outcome.completed).toBe(3);
+			expect(ran).toEqual(['inspect_scene', 'wave_hello']);
+			expect(trace).toEqual([
+				'1@0 - running skill',
+				'1@0 - done skill',
+				'2@1 - running wait',
+				'2@1 - done wait',
+				'3@2 - running skill',
+				'3@2 - done skill',
+			]);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('取消能**真打断**等待：cancel() 之后当场结束，不等到点', async () => {
+		vi.useFakeTimers();
+		try {
+			const { runner, ran, cancel } = fakeRunner();
+			const trace: string[] = [];
+			// 600 秒：要是没被打断，下面那个 await 会一直挂到测试超时（那就是红）
+			const promise = runPlan(
+				{ schemaVersion: 1, robot: 'so101_single_arm', plan: [call('inspect_scene'), wait(600), call('wave_hello')] },
+				{ catalog, runner, onPlanStep: (e) => trace.push(traceOfEvent(e)) },
+			);
+
+			await vi.advanceTimersByTimeAsync(0);
+			expect(trace.at(-1)).toBe('2@1 - running wait');
+
+			cancel();
+			// 一点都不推进时钟：等待是被信号打断的，不是等完再检查
+			const outcome = await promise;
+			expect(outcome.ok).toBe(false);
+			// 只有第一步走完了；被取消的那一步没走完，后面的也没跑
+			expect(outcome.completed).toBe(1);
+			expect(outcome.reason).toContain('已取消');
+			expect(trace.at(-1)).toBe('2@1 - failed wait');
+			expect(ran).toEqual(['inspect_scene']);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
+
+	it('等待步不改 last.success：后面的 if 看的是它**前面**那个技能步的结果', async () => {
+		const { runner, ran } = fakeRunner();
+		const trace: string[] = [];
+		// 「看一眼（成了）→ 停一下 → 上一步成没成？」：若等待步把 last.success 改掉，条件就会翻面
+		const outcome = await runPlan(
+			{
+				schemaVersion: 1,
+				robot: 'so101_single_arm',
+				plan: [call('inspect_scene'), wait(1), branch(true, [call('wave_hello')], [call('recover_safe_pose')])],
+			},
+			{ catalog, runner, sleep: instantSleep, onPlanStep: (e) => trace.push(traceOfEvent(e)) },
+		);
+
+		expect(outcome.ok).toBe(true);
+		expect(ran).toEqual(['inspect_scene', 'wave_hello']);
+		expect(trace).toEqual([
+			'1@0 - running skill',
+			'1@0 - done skill',
+			'2@1 - running wait',
+			'2@1 - done wait',
+			// 条件照第一步的「成了」判：走 then
+			'3@2 then running if',
+			'3@2.then.0 - running skill',
+			'3@2.then.0 - done skill',
+			'3@2 then done if',
+		]);
+	});
+
+	it('臂里的等待步：照报一步、路径说清它在哪一格、臂照样往下走', async () => {
+		const { runner, ran } = fakeRunner();
+		const trace: string[] = [];
+		const outcome = await runPlan(branchPlan([branch(true, [wait(1), call('wave_hello')])]), {
+			catalog,
+			runner,
+			sleep: instantSleep,
+			onPlanStep: (e) => trace.push(traceOfEvent(e)),
+		});
+
+		expect(outcome.ok).toBe(true);
+		expect(ran).toEqual(['wave_hello']);
+		expect(trace).toEqual([
+			'1@0 then running if',
+			'1@0.then.0 - running wait',
+			'1@0.then.0 - done wait',
+			'1@0.then.1 - running skill',
+			'1@0.then.1 - done skill',
+			'1@0 then done if',
+		]);
+	});
+
+	it('面板上那行写的是「等待 N 秒」，不是技能名（一行字一个说法）', () => {
+		expect(planStepLabel({ step: 'wait', seconds: 2 })).toBe('等待 2 秒');
+		expect(planStepLabel({ step: 'skill', skill: 'wave_hello' })).toBe('wave_hello');
+		expect(planStepLabel({ step: 'if', condition: { field: 'last.success', op: '==', value: true }, then: [] })).toBe('分支');
 	});
 });

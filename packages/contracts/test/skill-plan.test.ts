@@ -7,7 +7,9 @@
  *    界面能据此指出是哪一步的哪个字段；
  * 3. 缺参数只**提醒**（目录没有必填这一栏，执行侧有默认值），不许因此拦下整份计划；
  * 4. 分支（`if` 步）的每一条规矩都是硬规矩：条件只认 `last.success`（字段 / 运算符 / 取值各自有码）、
- *    嵌套有深度上限、`then` 非空、`else` 给了就非空，且诊断的 `path` 要指到嵌套里的那一层。
+ *    嵌套有深度上限、`then` 非空、`else` 给了就非空，且诊断的 `path` 要指到嵌套里的那一层；
+ * 5. 等待（`wait` 步）的秒数必须是正数、不超十分钟，且**不参与**分支的深度计数——
+ *    「等一会儿」不该占掉分支的表达空间。
  */
 import { describe, expect, it } from 'vitest';
 import { capabilityCatalogSchema, type CapabilityCatalog } from '../src/capability';
@@ -148,9 +150,10 @@ describe('技能计划的校验', () => {
 	});
 
 	it('别的步种类明说不做，不静默当成技能', () => {
-		const result = validateSkillPlan(step({ step: 'wait', seconds: 2 }), { catalog: CATALOG });
+		const result = validateSkillPlan(step({ step: 'primitive', name: 'grab' }), { catalog: CATALOG });
 		expect(codes(result)).toEqual(['plan.step.kind_unsupported']);
-		expect(result.diagnostics[0]?.message).toContain('primitive / wait / skipIf 还没做');
+		expect(result.diagnostics[0]?.message).toContain('primitive / skipIf 还没做');
+		expect(result.diagnostics[0]?.details?.['supported']).toEqual(['skill', 'if', 'wait']);
 	});
 
 	it('超时必须正数', () => {
@@ -178,11 +181,11 @@ const condition = (overrides: Record<string, unknown> = {}): Record<string, unkn
 	...overrides,
 });
 
-/** 把 `levels` 层 `if` 叠起来，最里面是一个技能步——用来量深度上限。 */
-const nest = (levels: number): Record<string, unknown> => {
-	let innermost: Record<string, unknown> = { step: 'skill', skill: 'wave_hello' };
-	for (let level = 0; level < levels; level += 1) innermost = branch({ then: [innermost] });
-	return innermost;
+/** 把 `levels` 层 `if` 叠起来，最里面是 `innermost`（缺省是一个技能步）——用来量深度上限。 */
+const nest = (levels: number, innermost: Record<string, unknown> = { step: 'skill', skill: 'wave_hello' }): Record<string, unknown> => {
+	let nested: Record<string, unknown> = innermost;
+	for (let level = 0; level < levels; level += 1) nested = branch({ then: [nested] });
+	return nested;
 };
 
 const planOf = (...steps: Record<string, unknown>[]) => ({
@@ -325,5 +328,82 @@ describe('技能计划的分支', () => {
 			'plan.step.param.missing@plan[0].then[0].then[0].params',
 			'plan.step.skill.unknown@plan[0].then[0].else[0].skill',
 		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 等待（`wait` 步）
+// ---------------------------------------------------------------------------
+
+/** 一条 `wait` 步。 */
+const wait = (seconds: unknown): Record<string, unknown> => ({ step: 'wait', seconds });
+
+describe('技能计划的等待', () => {
+	it('合法通过，秒数原样带进结果（键序照冻结的形状：step / seconds）', () => {
+		const result = validateSkillPlan(step(wait(2)), { catalog: CATALOG });
+		expect(codes(result)).toEqual([]);
+		if (!result.ok) throw new Error('应当通过');
+		expect(result.plan.plan).toStrictEqual([{ step: 'wait', seconds: 2 }]);
+		expect(Object.keys(result.plan.plan[0] ?? {})).toEqual(['step', 'seconds']);
+		// 6 分钟（360）照收：上限是十分钟，不是「不能太久」
+		expect(codes(validateSkillPlan(step(wait(360)), { catalog: CATALOG }))).toEqual([]);
+	});
+
+	it('秒数不是正数：0 / 负数 / 字符串 / 缺，各自报同一个稳定的码', () => {
+		// 判据只有一条「正数」，四种坏形状都说同一件事——界面据此写一句「秒数不对」，
+		// 不必按收到什么类型再分四种说法。
+		for (const bad of [wait(0), wait(-1), wait('2'), { step: 'wait' }]) {
+			const result = validateSkillPlan(step(bad), { catalog: CATALOG });
+			expect(codes(result)).toEqual(['plan.step.wait.seconds_invalid']);
+			expect(result.ok).toBe(false);
+			const [first] = result.diagnostics;
+			expect(first?.path).toBe('plan[0].seconds');
+			expect(first?.ref).toBe('wait');
+		}
+		// 整份计划别的问题照报：等待步的秒数不对，不挡着后面的诊断
+		expect(
+			codes(
+				validateSkillPlan(
+					{ schemaVersion: SKILL_PLAN_SCHEMA_VERSION, robot: 'so101_single_arm', plan: [wait(0), { step: 'skill', skill: 'fly' }] },
+					{ catalog: CATALOG },
+				),
+			),
+		).toEqual(['plan.step.wait.seconds_invalid', 'plan.step.skill.unknown']);
+	});
+
+	it('超过十分钟（600 秒）报错：给的是「太大」那个码，400 与 601 说的是两件事', () => {
+		expect(codes(validateSkillPlan(step(wait(600)), { catalog: CATALOG }))).toEqual([]);
+
+		const result = validateSkillPlan(step(wait(601)), { catalog: CATALOG });
+		expect(codes(result)).toEqual(['plan.step.wait.seconds_out_of_range']);
+		expect(result.diagnostics[0]?.path).toBe('plan[0].seconds');
+		expect(result.diagnostics[0]?.details).toEqual({ value: 601, limit: 600 });
+		// 86400 这种「等一天」不是等待，是把执行器挂在那儿——同一个码拦下
+		expect(codes(validateSkillPlan(step(wait(86400)), { catalog: CATALOG }))).toEqual(['plan.step.wait.seconds_out_of_range']);
+	});
+
+	it('等待步不参与深度计数：8 层 if 里外都有等待照样通过，9 层照旧被拒', () => {
+		// 最里面放等待步：深度还是 8 层（等待不是一层结构）
+		expect(codes(validateSkillPlan(step(nest(8, wait(2))), { catalog: CATALOG }))).toEqual([]);
+
+		// 每一层的臂里除了下一层 if 还多放一步等待：深度仍是 8，一个码都不报
+		let nested: Record<string, unknown> = wait(1);
+		for (let level = 0; level < 8; level += 1) nested = branch({ then: [wait(1), nested] });
+		expect(codes(validateSkillPlan(step(nested), { catalog: CATALOG }))).toEqual([]);
+
+		// 9 层 if 照旧被拒，且 path 与没有等待步时一模一样（等待没有多算一层）
+		const tooDeep = validateSkillPlan(step(nest(9, wait(2))), { catalog: CATALOG });
+		expect(codes(tooDeep)).toEqual(['plan.step.depth_exceeded']);
+		expect(tooDeep.diagnostics[0]?.path).toBe(`plan[0]${'.then[0]'.repeat(8)}`);
+	});
+
+	it('等待步与技能步、分支混排在同一条链上：顺序照写的那样', () => {
+		const result = validateSkillPlan(
+			planOf({ step: 'skill', skill: 'wave_hello' }, wait(1), branch(), wait(0.5)),
+			{ catalog: CATALOG },
+		);
+		expect(codes(result)).toEqual([]);
+		if (!result.ok) throw new Error('应当通过');
+		expect(result.plan.plan.map((item) => item.step)).toEqual(['skill', 'wait', 'if', 'wait']);
 	});
 });

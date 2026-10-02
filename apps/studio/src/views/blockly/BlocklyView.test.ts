@@ -26,10 +26,16 @@ import {
 	identityOfBlock,
 } from '@codecanvas/blockly-toolkit';
 import { findCapability, type WorkflowDeclaration } from '@codecanvas/contracts';
-import { TASK_BRANCH_NODE_TYPE, importSkillPlan } from '@codecanvas/task-import';
+import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE, importSkillPlan } from '@codecanvas/task-import';
 import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
-import { BRANCH_PLAN_JSON, BRANCH_PLAN_SKILLS, NESTED_NO_ELSE_PLAN_JSON } from '../flow/__fixtures__/branch-plan';
+import {
+	BRANCH_PLAN_JSON,
+	BRANCH_PLAN_SKILLS,
+	BRANCH_WAIT_PLAN_JSON,
+	NESTED_NO_ELSE_PLAN_JSON,
+	WAIT_PLAN_JSON,
+} from '../flow/__fixtures__/branch-plan';
 import {
 	PLAN_BLOCK_DEFINITIONS,
 	PLAN_BRANCH_BLOCK_TYPE,
@@ -39,6 +45,8 @@ import {
 	PLAN_STEP_BLOCK_TYPE,
 	PLAN_STEP_FIELD,
 	PLAN_STEP_NODE_TAG,
+	PLAN_WAIT_BLOCK_TYPE,
+	PLAN_WAIT_FIELD,
 	renderPlanInto,
 } from './blockly-canvas';
 import BlocklyView from './BlocklyView.vue';
@@ -193,7 +201,7 @@ const planWorkspaceOf = (json: string, pick: 'outer' | 'inner' = 'outer') => {
 		workspace,
 		declaration,
 		catalog: ROBOFRAME_SO101_CATALOG,
-		branchNodeId: branch.id,
+		planNodeId: branch.id,
 	});
 	if (rendered === null) throw new Error('这个节点不是分支节点');
 	return { workspace, declaration, branch, rendered };
@@ -358,7 +366,7 @@ describe('积木画布 · 计划块的结构（无头工作区）', () => {
 				workspace,
 				declaration,
 				catalog: ROBOFRAME_SO101_CATALOG,
-				branchNodeId: first.id,
+				planNodeId: first.id,
 			}),
 		).toBeNull();
 	});
@@ -374,7 +382,7 @@ describe('积木画布 · 计划块的结构（无头工作区）', () => {
 			workspace,
 			declaration: broken,
 			catalog: ROBOFRAME_SO101_CATALOG,
-			branchNodeId: branch.id,
+			planNodeId: branch.id,
 		});
 
 		// 「那么」那一边指丢了，于是它也是空的——两条诊断都说出来，图照画。
@@ -387,5 +395,88 @@ describe('积木画布 · 计划块的结构（无头工作区）', () => {
 		expect(top?.type).toBe(PLAN_BRANCH_NO_ELSE_BLOCK_TYPE);
 		expect(top?.getFieldValue(PLAN_CONDITION_FIELD)).toBe('上一步成功 == 假');
 		expect(top?.getInputTargetBlock(THEN_INPUT_NAME)).toBeFalsy();
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 等待步：计划层的另一块只读积木（`等待 2 秒 wait(2.0)`）
+// ---------------------------------------------------------------------------
+
+/** 一份带等待的计划 → 声明 + 那个等待节点（技能名照真实目录写）。 */
+const waitDeclarationOf = (json: string): { declaration: WorkflowDeclaration; waitId: string } => {
+	const result = importSkillPlan(JSON.parse(json), { catalog: ROBOFRAME_SO101_CATALOG });
+	if (!result.ok) throw new Error(`素材不是合法计划：${JSON.stringify(result.diagnostics)}`);
+	const wait = result.declaration.nodes.find((node) => node.type === TASK_WAIT_NODE_TYPE);
+	if (wait === undefined) throw new Error('素材里应当有等待节点');
+	return { declaration: result.declaration, waitId: wait.id };
+};
+
+describe('积木画布 · 等待步的计划块', () => {
+	it('选中等待节点：一块只读的「等待 2 秒 wait(2.0)」，没有可写字段、删不掉', () => {
+		const { declaration, waitId } = waitDeclarationOf(WAIT_PLAN_JSON);
+		const workspace = new Blockly.Workspace();
+		const rendered = renderPlanInto({
+			workspace,
+			declaration,
+			catalog: ROBOFRAME_SO101_CATALOG,
+			planNodeId: waitId,
+		});
+		expect(rendered).not.toBeNull();
+
+		const tops = workspace.getTopBlocks(true);
+		expect(tops).toHaveLength(1);
+		const block = tops[0];
+		if (block === null || block === undefined) throw new Error('没有画出等待块');
+		expect(block.type).toBe(PLAN_WAIT_BLOCK_TYPE);
+		expect(definitionOf(PLAN_WAIT_BLOCK_TYPE).args0?.map((arg) => arg.name)).toEqual([PLAN_WAIT_FIELD]);
+		// 块上那句话：人话（卡片上那句）在前，代码写法（代码面板那一行）在后
+		expect(block.getFieldValue(PLAN_WAIT_FIELD)).toBe('等待 2 秒 wait(2.0)');
+
+		const fields = block.inputList.flatMap((input) => input.fieldRow);
+		for (const field of fields) expect(field).toBeInstanceOf(Blockly.FieldLabel);
+		expect(block.isDeletable()).toBe(false);
+	});
+
+	it('等待在臂里：跟着技能块串成链，两块各自是各自的种类', () => {
+		const { declaration } = waitDeclarationOf(BRANCH_WAIT_PLAN_JSON);
+		const branches = declaration.nodes.filter((node) => node.type === TASK_BRANCH_NODE_TYPE);
+		const branch = branches[0];
+		if (branch === undefined) throw new Error('素材里应当有分支节点');
+		const workspace = new Blockly.Workspace();
+		renderPlanInto({ workspace, declaration, catalog: ROBOFRAME_SO101_CATALOG, planNodeId: branch.id });
+
+		const top = workspace.getTopBlocks(true)[0];
+		if (top === null || top === undefined) throw new Error('没有画出分支块');
+		const thenFirst = top.getInputTargetBlock(THEN_INPUT_NAME);
+		expect(thenFirst?.getFieldValue(PLAN_STEP_FIELD)).toBe('关闭夹爪 close_gripper_skill()');
+		const thenWait = thenFirst?.getNextBlock();
+		expect(thenWait?.type).toBe(PLAN_WAIT_BLOCK_TYPE);
+		expect(thenWait?.getFieldValue(PLAN_WAIT_FIELD)).toBe('等待 2 秒 wait(2.0)');
+		// 等待块后面没有东西：臂的链尾就是它（臂不接回主干）
+		expect(thenWait?.getNextBlock()).toBeFalsy();
+		expect(top.getInputTargetBlock(ELSE_INPUT_NAME)?.getFieldValue(PLAN_WAIT_FIELD)).toBe('等待 0.5 秒 wait(0.5)');
+	});
+
+	it('选中等待节点时顶部标题与页脚都说「计划」：它没有实现可看', async () => {
+		stubComputedStyle(themeVariables());
+		setSelectedDevice('so101_robot');
+		const store = useStudioDocument();
+		expect(store.loadTaskJson(WAIT_PLAN_JSON)).toBe(true);
+		const wait = store.nodes.value.find((node) => node.type === TASK_WAIT_NODE_TYPE);
+		if (wait === undefined) throw new Error('素材里应当有等待节点');
+		store.select(wait.id);
+		const wrapper = mount(BlocklyView, { attachTo: document.body });
+		await wrapper.vm.$nextTick();
+
+		expect(wrapper.find('[data-testid="blockly-module-title"]').text()).toBe('2. 等待 2 秒 · 计划');
+		store.selectStep(1);
+		await wrapper.vm.$nextTick();
+		const hint = wrapper.get('[data-testid="blockly-selected-step"]');
+		expect(hint.text()).toBe('选中计划第 2 步');
+		expect(hint.attributes('data-plan')).toBe('true');
+		// 收尾：别把选中留给下一个用例
+		store.selectStep(null);
+		store.select(null);
+		wrapper.unmount();
 	});
 });

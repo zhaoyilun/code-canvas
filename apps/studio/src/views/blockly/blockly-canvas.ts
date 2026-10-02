@@ -54,9 +54,13 @@ import { useStudioDocument } from '../../state/document';
 import {
 	branchPlanOf,
 	conditionViewOf,
-	isBranchNode,
+	isPlanLayerNode,
+	isWaitNode,
 	planCallTextOf,
+	planWaitCallTextOf,
+	waitLabelOf,
 	type PlanArm,
+	type PlanDiagnostic,
 	type PlanStep,
 } from '../shared/plan-structure';
 import {
@@ -134,36 +138,45 @@ function deviceCatalogs(): readonly CapabilityCatalog[] {
 // ---------------------------------------------------------------------------
 
 /**
- * 分支节点没有 `parameters.action`，按「能力实现」那条路走只会得到一句
- * `blockly.render.unknown_capability`——那是把「这是个判断」说成「查不到这个能力」，误导。
+ * 计划层节点（分支 / 等待）没有 `parameters.action`，按「能力实现」那条路走只会得到一句
+ * `blockly.render.unknown_capability`——那是把「这是个判断 / 只是等一会儿」说成「查不到这个能力」，误导。
  *
- * 所以分支节点走**计划视图**：画的是这一层的判断结构——`如果 <条件> 那么 … 否则 …`，
- * 两臂里各是臂内步骤的**计划块**（一步一块，写的就是那一步的技能调用）。
+ * 所以计划层节点走**计划视图**：分支画的是这一层的判断结构——`如果 <条件> 那么 … 否则 …`，
+ * 两臂里各是臂内步骤的**计划块**（一步一块，写的就是那一步的技能调用）；等待画的是它自己那一块
+ * （`等待 2 秒 wait(2.0)`）——等待步没有实现可看，它自己就是计划层的一步。
  * 它和代码面板说的是同一件事（同一个口径的调用写法），与「某个能力的实现」是两层。
  *
  * 结构只读、**没有可写字段**：分支本身没有参数（它的参数只有条件，条件不是可编辑的配置），
- * 计划块也只用只读标签写「这是哪一步」——画布在这一层没有可写的东西，就不该摆出可改的样子。
+ * 等待的秒数在声明里写着、也不是可编辑的配置；计划块也只用只读标签写「这是哪一步」——
+ * 画布在这一层没有可写的东西，就不该摆出可改的样子。
  * 想看那一步的实现：点它的块（选中那一步，画布换成它的实现）。
  */
 export const PLAN_BRANCH_BLOCK_TYPE = 'cc_plan_branch';
 export const PLAN_BRANCH_NO_ELSE_BLOCK_TYPE = 'cc_plan_branch_no_else';
 export const PLAN_STEP_BLOCK_TYPE = 'cc_plan_step';
+export const PLAN_WAIT_BLOCK_TYPE = 'cc_plan_wait';
 
 /**
- * 是不是**计划视图**的块（分支节点被选中时画的那几块）。
+ * 是不是**计划视图**的块（计划层节点被选中时画的那几块）。
  *
  * 它们只表示结构，不回写任何参数——写回通道要按这个把它们跳过，
- * 否则每选中一次分支就会弹三条「来路不明的积木」红字，而声明一个字节都没错。
+ * 否则每选中一次分支/等待就会弹几条「来路不明的积木」红字，而声明一个字节都没错。
  */
 export const isPlanBlockType = (type: string): boolean =>
-	type === PLAN_BRANCH_BLOCK_TYPE || type === PLAN_BRANCH_NO_ELSE_BLOCK_TYPE || type === PLAN_STEP_BLOCK_TYPE;
+	type === PLAN_BRANCH_BLOCK_TYPE ||
+	type === PLAN_BRANCH_NO_ELSE_BLOCK_TYPE ||
+	type === PLAN_STEP_BLOCK_TYPE ||
+	type === PLAN_WAIT_BLOCK_TYPE;
 /** 分支块上那格只读的条件文字。 */
 export const PLAN_CONDITION_FIELD = 'condition';
 /** 计划块上那格只读的「哪一步」。 */
 export const PLAN_STEP_FIELD = 'step';
+/** 等待块上那格只读的「等多久」。 */
+export const PLAN_WAIT_FIELD = 'wait';
 /** 计划块的节点标签：进 `block.data`，选中联动靠它区分「计划块」与「实现块」。 */
 export const PLAN_BRANCH_NODE_TAG = 'plan_branch';
 export const PLAN_STEP_NODE_TAG = 'plan_step';
+export const PLAN_WAIT_NODE_TAG = 'plan_wait';
 
 /** 计划块是只读的，所以块色不按能力分（它不是某个能力的实现），用主题里那两档现成的色。 */
 const PLAN_BRANCH_BLOCK_STYLE = 'logic_blocks';
@@ -214,6 +227,17 @@ export const PLAN_BLOCK_DEFINITIONS: readonly Record<string, unknown>[] = [
 		nextStatement: null,
 		style: PLAN_STEP_BLOCK_STYLE,
 		tooltip: '计划里的一步：调一个技能（点它进这一步的实现）',
+		helpUrl: '',
+	},
+	{
+		// 等待步没有实现可看（它不是能力调用），它自己就是计划层的一步：这块积木写的就是那一行。
+		type: PLAN_WAIT_BLOCK_TYPE,
+		message0: '%1',
+		args0: [{ type: 'field_label', name: PLAN_WAIT_FIELD, text: '' }],
+		previousStatement: null,
+		nextStatement: null,
+		style: PLAN_STEP_BLOCK_STYLE,
+		tooltip: '计划里的一步：在这儿停一下（计划层，只读；等待步没有实现可看）',
 		helpUrl: '',
 	},
 ];
@@ -279,6 +303,10 @@ const planStepText = (context: PlanBuildContext, node: WorkflowNode): string => 
 	return truncateLiteralText(text);
 };
 
+/** 等待块上写的字：`等待 2 秒 wait(2.0)`——人话在前、代码写法在后，与技能块同一个排法。 */
+const planWaitText = (node: WorkflowNode): string =>
+	truncateLiteralText(`${waitLabelOf(node.parameters['seconds'])} ${planWaitCallTextOf(node)}`);
+
 /** 一串计划步骤 → 用 `next` 串起来的链（与工具包的 `statementChain` 同一个形状；那个没导出）。 */
 const planChainState = (
 	context: PlanBuildContext,
@@ -337,6 +365,7 @@ const planBranchState = (
 
 const planStepState = (context: PlanBuildContext, step: PlanStep): Blockly.serialization.blocks.State => {
 	if (step.isBranch) return planBranchState(context, step.node, step.arms);
+	if (step.isWait) return planWaitState(context, step.node);
 
 	const identity = planIdentityOf(context, step.node, PLAN_STEP_NODE_TAG);
 	context.identities.push(identity);
@@ -355,12 +384,31 @@ const planStepState = (context: PlanBuildContext, step: PlanStep): Blockly.seria
 	};
 };
 
+/** 一个等待节点 → 一块只读的「等待 N 秒」。它没有臂，所以只有这一块。 */
+const planWaitState = (context: PlanBuildContext, node: WorkflowNode): Blockly.serialization.blocks.State => {
+	const identity = planIdentityOf(context, node, PLAN_WAIT_NODE_TAG);
+	context.identities.push(identity);
+	return {
+		id: identity.blockId,
+		type: PLAN_WAIT_BLOCK_TYPE,
+		data: serializeBlockData({
+			nodeId: node.id,
+			stepId: identity.stepId,
+			capabilityRef: identity.capabilityRef,
+			stepPath: identity.stepPath,
+			nodeTag: identity.nodeTag,
+			primitiveRef: null,
+		}),
+		fields: { [PLAN_WAIT_FIELD]: planWaitText(node) },
+	};
+};
+
 export interface PlanRenderOptions {
 	readonly workspace: Blockly.Workspace;
 	readonly declaration: WorkflowDeclaration;
 	readonly catalog: CapabilityCatalog | null;
-	/** 当前选中的分支节点。 */
-	readonly branchNodeId: string;
+	/** 当前选中的**计划层节点**（分支或等待）。 */
+	readonly planNodeId: string;
 	readonly blockIds?: ReadonlyMap<string, string>;
 }
 
@@ -371,14 +419,14 @@ export interface PlanRenderResult {
 }
 
 /**
- * 一个分支节点 → 工作区。调用方（`render`）已经确认它是分支节点。
+ * 一个计划层节点 → 工作区：分支画 `如果…那么…否则…`，等待画它自己那一块。
  *
- * 返回 `null` 表示「这个节点不是分支节点」，调用方据此走能力实现那条路——
- * 判据只有一处（`branchPlanOf` 认的是节点类型），不在这里重写一遍。
+ * 返回 `null` 表示「这个节点不是计划层节点」（技能步、一期动作），调用方据此走能力实现那条路——
+ * 判据只有一处（`isPlanLayerNode`：分支与等待都没有实现可看），不在这里重写一遍类型比较。
  */
 export const renderPlanInto = (options: PlanRenderOptions): PlanRenderResult | null => {
-	const plan = branchPlanOf(options.declaration, options.branchNodeId);
-	if (plan === null) return null;
+	const selected = options.declaration.nodes.find((node) => node.id === options.planNodeId);
+	if (selected === undefined || !isPlanLayerNode(selected)) return null;
 
 	registerPlanBlocks();
 	const context: PlanBuildContext = {
@@ -389,8 +437,20 @@ export const renderPlanInto = (options: PlanRenderOptions): PlanRenderResult | n
 		identities: [],
 	};
 
+	// 先把要画的东西算出来（含臂推不出来时的诊断），再动工作区：
+	// 半路返回时画布上留着一片空白，比留着上一次的内容更难看出发生了什么。
+	let head: Blockly.serialization.blocks.State;
+	let planDiagnostics: readonly PlanDiagnostic[] = [];
+	if (isWaitNode(selected)) {
+		head = planWaitState(context, selected);
+	} else {
+		const plan = branchPlanOf(options.declaration, options.planNodeId);
+		if (plan === null) return null;
+		head = planBranchState(context, plan.node, plan.arms);
+		planDiagnostics = plan.diagnostics;
+	}
+
 	options.workspace.clear();
-	const head = planBranchState(context, plan.node, plan.arms);
 	// 画布只显示这一个节点的计划，位置不来自流程画布——链自己会顺着 `next` 排。
 	head['x'] = 32;
 	head['y'] = 32;
@@ -400,7 +460,7 @@ export const renderPlanInto = (options: PlanRenderOptions): PlanRenderResult | n
 
 	return {
 		index: createBlockIndex(context.identities),
-		diagnostics: plan.diagnostics.map((diagnostic) => ({
+		diagnostics: planDiagnostics.map((diagnostic) => ({
 			code: diagnostic.code,
 			severity: 'warning' as const,
 			message: diagnostic.message,
@@ -470,7 +530,7 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 			case 'idle':
 				return '还没有声明——导入一份任务 JSON，积木就会画在这里';
 			case 'plan':
-				return '计划视图：这是这一层的判断结构（只读），臂里是每一步的计划块——点它进那一步的实现';
+				return '计划视图：这是计划层的结构（只读）——分支画两条臂、等待画那一步自己；点臂里的一步进它的实现';
 			case 'synced':
 				return '与声明一致';
 			case 'written':
@@ -486,20 +546,20 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 
 	const moduleTitle = computed<string>(() => {
 		if (store.declaration.value === null) return '还没有模块';
-		// 分支节点没有能力可查：它画的是**计划**（这一层的判断结构），标题就照实说「计划」。
+		// 计划层节点（分支 / 等待）没有能力可查：它们画的是**计划**，标题就照实说「计划」。
 		const node = activeNode.value;
-		if (node !== null && isBranchNode(node)) return `${node.name} · 计划`;
+		if (node !== null && isPlanLayerNode(node)) return `${node.name} · 计划`;
 		const capability = activeCapability.value;
 		return capability === null ? '未知模块 · 实现' : `${capability.label} · 实现`;
 	});
 
 	/**
-	 * 现在画的是不是计划视图（选中的那个节点是分支节点）。
+	 * 现在画的是不是计划视图（选中的那个节点是计划层节点：分支或等待）。
 	 * 判据只读声明（不看画布起没起来）：标题、页脚与验收在这一层就能核对。
 	 */
 	const planView = computed<boolean>(() => {
 		const node = activeNode.value;
-		return node !== null && isBranchNode(node);
+		return node !== null && isPlanLayerNode(node);
 	});
 
 	/** 当前该显示哪个模块：选中的那个，没选中就是第一个（与渲染器同一份口径）。 */
@@ -638,13 +698,13 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 		}
 		rendering = true;
 		try {
-			// 分支节点没有能力可查，走计划视图（见 `renderPlanInto` 的文件头）；
-			// 它不是分支节点时返回 null，接着走下面那条「能力实现」的路。
+			// 计划层节点（分支 / 等待）没有能力可查，走计划视图（见 `renderPlanInto` 的文件头）；
+			// 它不是计划层节点时返回 null，接着走下面那条「能力实现」的路。
 			const candidate = activeNodeId.value;
 			const plan =
 				candidate === null
 					? null
-					: renderPlanInto({ workspace: current, declaration, catalog, branchNodeId: candidate, blockIds });
+					: renderPlanInto({ workspace: current, declaration, catalog, planNodeId: candidate, blockIds });
 			if (plan !== null) {
 				blockIndex.value = plan.index;
 				renderDiagnostics.value = [...plan.diagnostics];

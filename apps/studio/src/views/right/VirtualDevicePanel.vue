@@ -13,8 +13,9 @@
  * 3. **校验**：`validateSkillPlan(plan, { catalog })`，判据是**当前设备的目录**；不合法就把诊断原样显示，一步不跑；
  * 4. **执行**：只有合法才 `device.run(plan)`，失败即停（重试与否由技能自己的 `recovery_policy` 决定）。
  *
- * 步骤行说的是**计划步**（技能步与分支步各一行），不是技能内部的**原语**：
- * 分支步没有原语事件，而「走了哪条臂」只有计划步事件说得清；顺带也修掉了老毛病——
+ * 步骤行说的是**计划步**（技能步、分支步与等待步各一行），不是技能内部的**原语**：
+ * 分支步没有原语事件，而「走了哪条臂」只有计划步事件说得清；等待步同样没有原语事件
+ * （它什么都没下发），「等了多久」也只有它自己那一行说得清；顺带也修掉了老毛病——
  * 一个技能里几条原语会把同一句「第 N 步」连写三遍。行里的缩进与 `path`（`2.then.0` 这种）
  * 说明它在计划的哪一格，`第 N 步` 说的仍是它所属的**顶层**步。
  *
@@ -29,6 +30,7 @@ import { findTaskFormat, type TaskFormatRef } from '@codecanvas/task-import';
 import IconBase from '../../shell/IconBase.vue';
 import type { StudioDevice } from '../../shell/devices';
 import { useStudioDocument } from '../../state/document';
+import { waitLabelOf } from '../shared/plan-structure';
 
 /** 目录出处按 `catalogRef` 认：认不着就不显示（编一个出处比不显示更坏） */
 const SO101_CATALOG_REF = ROBOFRAME_SO101_CATALOG.catalogRef;
@@ -76,12 +78,17 @@ function armDepth(path: string): number {
 	return path.split('.').filter((segment) => segment === 'then' || segment === 'else').length;
 }
 
-/** 一条计划步事件 → 一行。分支行说的是「走了哪条臂」，技能行就是那一步的技能名。 */
+/** 一条计划步事件 → 一行。分支行说的是「走了哪条臂」，等待行说的是等了多久，技能行就是那一步的技能名。 */
 function rowOf(event: PlanStepReport): StepRow {
 	return {
 		path: event.path,
 		index: event.index,
-		label: event.step.step === 'if' ? `分支 · ${armText(event.arm)}` : event.step.skill,
+		label:
+			event.step.step === 'if'
+				? `分支 · ${armText(event.arm)}`
+				: event.step.step === 'wait'
+					? waitLabelOf(event.step.seconds)
+					: event.step.skill,
 		depth: armDepth(event.path),
 		state: event.state,
 	};

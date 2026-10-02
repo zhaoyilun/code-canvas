@@ -89,6 +89,11 @@ function normalizeJoints(value: unknown): Record<string, number> | null {
 
 export class RoboFrameExecutor {
 	private cancelled = false;
+	/**
+	 * 取消的订阅者。计划层的 `wait` 要能被**真打断**（不是等完再检查），
+	 * 而执行器对外只有 `cancel()` 一个动作——所以把「取消了」这件事做成一次订阅。
+	 */
+	private readonly cancelListeners = new Set<() => void>();
 	/** 当前这次运行属于计划的第几步（`runPlan` 每一步前设一次）。0 = 不在跑计划。 */
 	private planIndex = 0;
 	private taskId: string | undefined;
@@ -100,7 +105,18 @@ export class RoboFrameExecutor {
 	) {}
 
 	cancel(): void {
+		// 先记标记再通知：订阅者（等在 `wait` 上的那一步）收到通知就当场收摊，
+		// 顺序反过来的话它可能先看一眼标记、看到的是「还没取消」。
 		this.cancelled = true;
+		for (const listener of this.cancelListeners) listener();
+	}
+
+	/** 订阅「这次执行被取消了」，返回退订函数（`runPlan` 跑完一趟就退订）。 */
+	onCancel(listener: () => void): () => void {
+		this.cancelListeners.add(listener);
+		return () => {
+			this.cancelListeners.delete(listener);
+		};
 	}
 
 	/**

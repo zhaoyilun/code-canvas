@@ -12,7 +12,7 @@ import { describe, expect, it } from 'vitest';
 import { PHASE1_ROBOT_CATALOG, ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import { createDeterministicIdFactory, type JsonObject, type WorkflowDeclaration } from '@codecanvas/contracts';
 import { declarationToSkillPlan, declarationToTask, findTaskFormat } from '../src/format';
-import { TASK_BRANCH_NODE_TYPE, importSkillPlan } from '../src/skill-plan';
+import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE, importSkillPlan } from '../src/skill-plan';
 import { importTaskJson } from '../src/convert';
 
 const ids = createDeterministicIdFactory();
@@ -107,7 +107,7 @@ describe('技能计划：声明 ↔ 技能计划 JSON', () => {
 	});
 
 	it('写死这一版不做的步种类：还原不出来就直说，不编一个技能', () => {
-		const broken = { schemaVersion: 1, robot: 'so101_single_arm', plan: [{ step: 'wait', seconds: 2 }] };
+		const broken = { schemaVersion: 1, robot: 'so101_single_arm', plan: [{ step: 'primitive', name: 'grab' }] };
 		const result = importSkillPlan(broken, context);
 		expect(result.ok).toBe(false);
 		expect(result.diagnostics[0]?.code).toBe('plan.step.kind_unsupported');
@@ -283,5 +283,60 @@ describe('技能计划：声明 ↔ 技能计划 JSON', () => {
 		expect(result.diagnostics.map((diagnostic) => `${diagnostic.code}@${diagnostic.path ?? ''}`)).toContain(
 			'plan.step.skill.unknown@plan[1].then[0].skill',
 		);
+	});
+
+	// ------------------------------------------------------------------
+	// 等待：计划 → 声明 → 计划
+	// ------------------------------------------------------------------
+
+	it('等待步来回一趟等价：节点是 task.wait、参数只有 seconds，出边就一格', () => {
+		const declaration = expectRoundTrip({
+			schemaVersion: 1,
+			robot: 'so101_single_arm',
+			description: '夹住，等它稳定两秒，再移动',
+			plan: [
+				{ step: 'skill', skill: 'open_gripper_skill' },
+				{ step: 'wait', seconds: 2 },
+				{ step: 'skill', skill: 'move_relative_ee', params: { motion_direction: 'forward', motion_distance: 0.05 } },
+			],
+		});
+
+		const waitIndex = declaration.nodes.findIndex((node) => node.type === TASK_WAIT_NODE_TYPE);
+		const waitNode = declaration.nodes[waitIndex];
+		if (waitNode === undefined) throw new Error('应当有一个等待节点');
+		// 秒数原样进参数：不翻译成别的键，也不塞进技能那套 `action` 里
+		expect(waitNode.parameters).toEqual({ seconds: 2 });
+		expect(waitNode.name).toBe('2. 等待 2 秒');
+		// **一格出边**：下一步。三格是分支专用的，等待段没有臂，给它三格等于让下游猜哪一格算数
+		const groups = declaration.connections[waitNode.id]?.main;
+		expect(groups).toHaveLength(1);
+		expect(parametersAt(declaration, groups?.[0]?.[0]?.node)).toEqual({
+			action: 'move_relative_ee',
+			motion_direction: 'forward',
+			motion_distance: 0.05,
+		});
+		// 它的父亲是前面那个技能步（不是别的东西），链是一条
+		expect(parametersAt(declaration, declaration.nodes[waitIndex - 1]?.id)).toEqual({ action: 'open_gripper_skill' });
+	});
+
+	it('等待与分支混排也等价：臂里有等待、臂外也有等待', () => {
+		expectRoundTrip({
+			schemaVersion: 1,
+			robot: 'so101_single_arm',
+			description: '等一拍，看一眼；没成就重看并再等，最后再等半秒',
+			plan: [
+				{ step: 'wait', seconds: 1 },
+				{
+					step: 'if',
+					condition: { field: 'last.success', op: '==', value: false },
+					then: [
+						{ step: 'skill', skill: 'inspect_scene' },
+						{ step: 'wait', seconds: 0.5 },
+					],
+					else: [{ step: 'wait', seconds: 2 }],
+				},
+				{ step: 'wait', seconds: 0.25 },
+			],
+		});
 	});
 });

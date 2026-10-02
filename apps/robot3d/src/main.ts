@@ -15,7 +15,7 @@
 import './style.css';
 import { ROBOFRAME_SO101_CATALOG as catalog, ROBOFRAME_SO101_PROVENANCE as provenance } from '@codecanvas/capabilities';
 import type { RunOutcome, StepEvent } from './roboframe/executor';
-import { intake, type PlanRunOutcome } from './roboframe/plan';
+import { intake, planStepLabel, type PlanRunOutcome } from './roboframe/plan';
 import { mountVirtualDevice } from './mount';
 import { createPanel } from './ui/panel';
 
@@ -128,8 +128,24 @@ async function runJson(text: string): Promise<void> {
 			state: event.state,
 		});
 	});
+	/*
+	 * 等待步要在这儿自己补一行：技能步的原语事件已经把行写出来了，而等待步**什么都不下发**——
+	 * 不补它，那两秒在日志里就是一段没有解释的空白（`running` 也收，面板把同一步翻面而不是添一行）。
+	 * 其余计划步不在这里补：它们各有原语事件，两处都写就会出现两份同一句话。
+	 */
+	const offWait = device.onPlanStep((event) => {
+		if (event.step.step !== 'wait') return;
+		panel.appendPlanStep({
+			index: event.index,
+			total: event.total,
+			skill: planStepLabel(event.step),
+			taskId: '',
+			state: event.state,
+		});
+	});
 	const result2 = await device.enqueuePlan(plan);
 	off();
+	offWait();
 	if (result2.plan === undefined) return;
 	lastPlan = { outcome: result2.plan, json: text };
 	panel.setStatus(

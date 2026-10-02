@@ -16,12 +16,12 @@ import {
 	type WorkflowNode,
 } from '@codecanvas/contracts';
 import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
-import { TASK_BRANCH_NODE_TYPE } from '@codecanvas/task-import';
+import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
 import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import FlowView from './FlowView.vue';
 import { planStructureOf } from '../shared/plan-structure';
-import { BRANCH_PLAN_JSON, NESTED_NO_ELSE_PLAN_JSON } from './__fixtures__/branch-plan';
+import { BRANCH_PLAN_JSON, BRANCH_WAIT_PLAN_JSON, NESTED_NO_ELSE_PLAN_JSON, WAIT_PLAN_JSON } from './__fixtures__/branch-plan';
 import { normalizeRenderedHtml, readBaseline } from './__fixtures__/normalize-html';
 
 const store = useStudioDocument();
@@ -731,5 +731,64 @@ describe('流程画布 · 没有分支的声明与改动前逐字相同', () => 
 		expect(wrapper.findAll('[data-testid="flow-arm"]')).toHaveLength(0);
 		// 参数照旧落在卡上（`motion_distance` 是技能自己声明的参数，不是协议字段）
 		expect(paramValues(cards(wrapper)[1]!)).toEqual({ motion_direction: 'forward', motion_distance: '0.03' });
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 等待（task.wait）：一张卡、一句话，不参与分支的两条臂
+// ---------------------------------------------------------------------------
+
+describe('流程画布 · 等待步', () => {
+	beforeEach(() => {
+		loadPlan(WAIT_PLAN_JSON);
+	});
+
+	it('等待卡显示「等待 2 秒」：卡头是一个人话，不是参数表', () => {
+		const wrapper = mount(FlowView);
+
+		expect(structureOf(wrapper).map((row) => row.action)).toEqual([
+			ROBOFRAME_SO101_CATALOG.capabilities.find((c) => c.capabilityRef === 'close_gripper_skill')?.label,
+			'等待 2 秒',
+			ROBOFRAME_SO101_CATALOG.capabilities.find((c) => c.capabilityRef === 'move_relative_ee')?.label,
+		]);
+		const waitCard = cards(wrapper)[1];
+		if (waitCard === undefined) throw new Error('没有等待卡');
+		// 协议名那一栏放的是**节点类型**（它没有动作，不编一个动作名顶上）
+		expect(waitCard.get('[data-testid="flow-node-action"]').attributes('data-action')).toBe(TASK_WAIT_NODE_TYPE);
+		// 秒数写在卡头那句话里，不再摆一行参数（同一个数说两次）；也不是「这个动作没有参数」
+		expect(waitCard.find('[data-testid="flow-node-params"]').exists()).toBe(false);
+		expect(waitCard.text()).toContain('等待步没有参数');
+		expect(waitCard.text()).not.toContain('这个动作没有参数');
+		// 它没有条件，所以不是分支卡
+		expect(waitCard.find('[data-testid="flow-node-condition"]').exists()).toBe(false);
+		expect(waitCard.classes()).not.toContain('branch');
+	});
+
+	it('等待步不展开两条臂：整条链还是三张卡、两条连线', () => {
+		const wrapper = mount(FlowView);
+
+		expect(cards(wrapper)).toHaveLength(3);
+		expect(connectorCount(wrapper)).toBe(2);
+		expect(wrapper.findAll('[data-testid="flow-arm"]')).toHaveLength(0);
+		// 声明里的名字也照那个数写：与卡头、代码行说的是同一个数
+		expect(structureOf(wrapper).map((row) => nameOf(currentDeclaration(), row.nodeId))).toEqual([
+			'1. 关闭夹爪',
+			'2. 等待 2 秒',
+			'3. 往前一点',
+		]);
+	});
+
+	it('臂里的等待步：卡在臂里、层级比分支深一级（结构从出边推，不从声明顺序猜）', () => {
+		loadPlan(BRANCH_WAIT_PLAN_JSON);
+		const wrapper = mount(FlowView);
+
+		// 分支卡 + then 臂两步 + else 臂一步 = 四张卡；两臂各一条连线
+		expect(cards(wrapper)).toHaveLength(4);
+		expect(structureOf(wrapper).map((row) => `${row.action}@${row.arm ?? '顶层'}/${row.depth ?? '-'}`)).toEqual([
+			'分支@顶层/-',
+			'关闭夹爪@then/0',
+			'等待 2 秒@then/0',
+			'等待 0.5 秒@else/0',
+		]);
 	});
 });

@@ -27,7 +27,7 @@ import {
 	type WorkflowNode,
 } from '@codecanvas/contracts';
 import { TASK_ACTION_NODE_TYPE, importTaskJson } from './convert';
-import { TASK_BRANCH_NODE_TYPE, importSkillPlanJson } from './skill-plan';
+import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE, importSkillPlanJson } from './skill-plan';
 
 /** 两条路都把「成/不成」说成同一个形状，上层不用分情况。 */
 export type DeclarationImportResult =
@@ -134,7 +134,7 @@ const NEXT_PORT = 0;
 
 /** 参与任务还原的节点类型。别的类型（将来会有）不是计划步。 */
 const isTaskNode = (node: WorkflowNode): boolean =>
-	node.type === TASK_ACTION_NODE_TYPE || node.type === TASK_BRANCH_NODE_TYPE;
+	node.type === TASK_ACTION_NODE_TYPE || node.type === TASK_BRANCH_NODE_TYPE || node.type === TASK_WAIT_NODE_TYPE;
 
 /**
  * 声明还原成技能计划。
@@ -146,9 +146,10 @@ const isTaskNode = (node: WorkflowNode): boolean =>
  * 而 `main[2]` 接在**分支节点自己**身上，不是从两条臂的链尾走回来的——
  * 所以「`if` 之后的步骤」还原出来与走了哪一臂无关，两条臂仍然各自收尾，这里没有汇合点。
  *
- * **没有分支的声明走旧路**（动作节点按声明顺序就是步骤顺序）。这不是偷懒：
+ * **没有分支的声明走旧路**（任务节点按声明顺序就是步骤顺序）。这不是偷懒：
  * 一份手拼的、压根没有 `connections` 的声明，形状就是平铺的一串，只有按声明顺序读才对得上；
  * 有分支才需要走图——那时出边是唯一的真相，声明顺序只用来挑链头。
+ * 等待步（`task.wait`）是**普通步骤**：两条路都按「单格出边」读它，与技能步同一套规矩。
  */
 export const declarationToSkillPlan = (declaration: WorkflowDeclaration): JsonObject => {
 	const nodesById = new Map(declaration.nodes.map((node) => [node.id, node]));
@@ -187,6 +188,12 @@ export const declarationToSkillPlan = (declaration: WorkflowDeclaration): JsonOb
 		return step;
 	};
 
+	/** 等待节点 → `wait` 步：秒数原样收回（它当初就是原样放进去的）。读不出来就给 null，让校验器去报。 */
+	const waitStep = (node: WorkflowNode): JsonObject => {
+		const seconds = node.parameters['seconds'];
+		return { step: 'wait', seconds: typeof seconds === 'number' ? seconds : null };
+	};
+
 	/** 从链头顺着出边走，还原出这一层的步骤。`visited` 挡被改坏的声明里的环（同一步不还原两次）。 */
 	const restoreList = (headId: string | undefined, visited: Set<string>): JsonObject[] => {
 		const steps: JsonObject[] = [];
@@ -201,6 +208,12 @@ export const declarationToSkillPlan = (declaration: WorkflowDeclaration): JsonOb
 				current = portHead(node.id, BRANCH_CONTINUATION_PORT);
 				continue;
 			}
+			if (node.type === TASK_WAIT_NODE_TYPE) {
+				// 等待步也是普通步骤：单格出边，一步一行。
+				steps.push(waitStep(node));
+				current = portHead(node.id, NEXT_PORT);
+				continue;
+			}
 			if (node.type !== TASK_ACTION_NODE_TYPE) break; // 别的节点类型不是计划步
 			steps.push(skillStep(node));
 			current = portHead(node.id, NEXT_PORT);
@@ -212,8 +225,11 @@ export const declarationToSkillPlan = (declaration: WorkflowDeclaration): JsonOb
 
 	let plan: JsonObject[];
 	if (!hasBranch) {
-		// 平铺的声明：动作节点按声明顺序就是步骤顺序——没有出边也读得对。
-		plan = declaration.nodes.filter((node) => node.type === TASK_ACTION_NODE_TYPE).map((node) => skillStep(node));
+		// 平铺的声明：任务节点按声明顺序就是步骤顺序——没有出边也读得对。
+		// 技能步与等待步都在这儿：两种都是单格出边的普通步骤，只是还原出来的字段不一样。
+		plan = declaration.nodes
+			.filter(isTaskNode)
+			.map((node) => (node.type === TASK_WAIT_NODE_TYPE ? waitStep(node) : skillStep(node)));
 	} else {
 		// 顶层链的头：没有入边的第一个任务节点。导入时它就是 `nodes[0]`；
 		// 声明被改坏时退回第一个任务节点，反正写回的第二道闸正要拿它量。

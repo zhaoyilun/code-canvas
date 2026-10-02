@@ -9,6 +9,7 @@
  *   `main[0]` = then 臂的头、`main[1]` = else 臂的头、`main[2]` = 这一层里 `if` 之后的后续步骤。
  *   两臂的链尾**不接任何东西**（这一版不做汇合点），所以「走一步」就是顺着 `main[0]` 往下取。
  * - 普通步骤只有一格出边：下一步。没有出边就是链尾。
+ *   等待步（`task.wait`）就是普通步骤——它没有臂，所以**不进分支那套两臂逻辑**（见 `isPlanLayerNode`）。
  *
  * 图推不出来时（悬空引用、环、多个链头、分支没有出边）**不抛异常、也不静默少画**：
  * 把问题如实记成诊断交给界面，能画的那部分照画——少画一步比画错一步更难发现。
@@ -23,7 +24,7 @@ import {
 	type WorkflowNode,
 } from '@codecanvas/contracts';
 import { formatNumberLiteral } from '@codecanvas/code-render';
-import { TASK_BRANCH_NODE_TYPE } from '@codecanvas/task-import';
+import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
 
 /** 计划层的一条问题。`nodeId` 有的问题指向具体一步，界面据此把话说到那一步上。 */
 export interface PlanDiagnostic {
@@ -47,7 +48,9 @@ export interface PlanStep {
 	/** 声明里的位置（0 基）：徽标上的「第几步」与另外两栏是同一个数。 */
 	readonly index: number;
 	readonly isBranch: boolean;
-	/** 只有分支步有；分支没有出边（图坏了）时是空表。 */
+	/** 是不是等待步（`task.wait`）。它没有臂，所以与 `isBranch` 互斥。 */
+	readonly isWait: boolean;
+	/** 只有分支步有；分支没有出边（图坏了）时是空表。等待步与技能步都是空表。 */
 	readonly arms: readonly PlanArm[];
 }
 
@@ -65,6 +68,18 @@ export interface BranchPlan {
 }
 
 export const isBranchNode = (node: WorkflowNode): boolean => node.type === TASK_BRANCH_NODE_TYPE;
+
+/** 是不是等待步的节点（`task.wait`）。 */
+export const isWaitNode = (node: WorkflowNode): boolean => node.type === TASK_WAIT_NODE_TYPE;
+
+/**
+ * 是不是**计划层**的节点：分支与等待。
+ *
+ * 为什么这两个归一类：它们都**没有实现可看**（技能步有，`action` 指向目录里的能力），
+ * 所以选中它们时，代码面板与积木画布显示的是计划本身，而不是「某个能力做了什么」。
+ * 判据只有这一处——三个视图都从这里问，不各写一遍 `type === ... || type === ...`。
+ */
+export const isPlanLayerNode = (node: WorkflowNode): boolean => isBranchNode(node) || isWaitNode(node);
 
 /** 一个节点那三格出边。没有这一项就是三格都没有——「没连过线」与「连了个空」是两件事。 */
 const mainPorts = (
@@ -189,13 +204,13 @@ const walkChain = (state: WalkState, head: string | null): PlanStep[] => {
 		const index = state.indexOf.get(node.id) ?? 0;
 
 		if (!isBranchNode(node)) {
-			steps.push({ node, index, isBranch: false, arms: [] });
+			steps.push({ node, index, isBranch: false, isWait: isWaitNode(node), arms: [] });
 			current = headOfPort(state, node, mainPorts(state.connections, node.id)[0] ?? [], '下一步');
 			continue;
 		}
 
 		const { arms, continuation } = armsOf(state, node);
-		steps.push({ node, index, isBranch: true, arms });
+		steps.push({ node, index, isBranch: true, isWait: false, arms });
 		current = continuation;
 	}
 
@@ -228,6 +243,7 @@ export const planStructureOf = (declaration: WorkflowDeclaration | null): PlanSt
 				node,
 				index: state.indexOf.get(node.id) ?? 0,
 				isBranch: isBranchNode(node),
+				isWait: isWaitNode(node),
 				arms: [],
 			})),
 			diagnostics: [],
@@ -378,4 +394,37 @@ export const planCallTextOf = (node: WorkflowNode): string => {
 		.filter(([key]) => key !== 'action' && key !== 'step_id' && key !== 'timeoutSec')
 		.map(([key, value]) => `${key}=${planLiteralOf(value)}`);
 	return `${name}(${args.join(', ')})`;
+};
+
+// ---------------------------------------------------------------------------
+// 等待步（`task.wait`）：一句人话 + 一行代码，都是同一个数
+// ---------------------------------------------------------------------------
+
+/**
+ * 等待步的秒数。声明里那个数**原样**读出来；读不出来（不是数字）就是 `null`。
+ *
+ * 判据（正数、上限十分钟）在校验器那边（`@codecanvas/contracts` 的 `validateSkillPlan`），
+ * 这里只是显示——坏声明也照画，该报的错由诊断说。
+ */
+export const waitSecondsOf = (value: JsonValue | undefined): number | null =>
+	typeof value === 'number' && Number.isFinite(value) ? value : null;
+
+/**
+ * 等待步的那句人话：`等待 2 秒`。
+ *
+ * **就一个数**：这里不摆「几秒怎么说」的表（1 秒说「1 秒」、60 秒说「一分钟」那种），
+ * 表格一多，卡片、积木、面板就会各说各的；声明里是 2 就写 2。
+ */
+export const waitLabelOf = (value: JsonValue | undefined): string => {
+	const seconds = waitSecondsOf(value);
+	return seconds === null ? '等待（秒数读不出来）' : `等待 ${String(seconds)} 秒`;
+};
+
+/**
+ * 等待步的**代码写法**：`wait(2.0)`——与技能调用的写法同一层（计划层），
+ * 秒数照代码面板那一套（整数也带一位小数），于是代码行、积木、卡片说的是同一个数。
+ */
+export const planWaitCallTextOf = (node: WorkflowNode): string => {
+	const seconds = waitSecondsOf(node.parameters['seconds']);
+	return `wait(${seconds === null ? '?' : formatNumberLiteral(seconds)})`;
 };

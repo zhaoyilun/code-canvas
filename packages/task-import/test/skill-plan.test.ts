@@ -19,7 +19,7 @@ import {
 	type WorkflowDeclaration,
 } from '@codecanvas/contracts';
 import { declarationToSkillPlan } from '../src/format';
-import { TASK_BRANCH_NODE_TYPE, importSkillPlan, importSkillPlanJson } from '../src/skill-plan';
+import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE, importSkillPlan, importSkillPlanJson } from '../src/skill-plan';
 
 const catalog: CapabilityCatalog = capabilityCatalogSchema.parse({
 	catalogRef: 'roboframe_so101_single_arm',
@@ -353,5 +353,112 @@ describe('技能计划的分支 → 声明', () => {
 		const second = importSkillPlan(restored, { catalog, idFactory: ids });
 		if (!second.ok) throw new Error('还原出来的计划应当能再导入');
 		expect(stripVolatile(second.declaration)).toEqual(stripVolatile(first.declaration));
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 等待（`wait` 步 → `task.wait` 节点）
+// ---------------------------------------------------------------------------
+
+/** 「夹住 → 等它稳定两秒 → 往前走」：等待步的前后各有一个技能步。 */
+const WAIT_PLAN = {
+	schemaVersion: 1,
+	robot: 'so101_single_arm',
+	description: '夹住，等两秒再走',
+	plan: [
+		{ step: 'skill', skill: 'inspect_scene' },
+		{ step: 'wait', seconds: 2 },
+		{ step: 'skill', skill: 'move_relative_ee', params: { motion_direction: 'forward', motion_distance: 0.05 } },
+	],
+};
+
+const waitIdOf = (declaration: WorkflowDeclaration): string | undefined =>
+	declaration.nodes.find((node) => node.type === TASK_WAIT_NODE_TYPE)?.id;
+
+describe('技能计划的等待 → 声明', () => {
+	it('一个 wait 步一个 `task.wait` 节点：参数就是 `{ seconds }`，显示名照那个数写', () => {
+		const result = importSkillPlan(WAIT_PLAN, { catalog, idFactory: ids });
+		if (!result.ok) throw new Error('应当通过');
+		const waitId = waitIdOf(result.declaration);
+		if (waitId === undefined) throw new Error('应当有一个等待节点');
+		expect(typeAt(result.declaration, waitId)).toBe(TASK_WAIT_NODE_TYPE);
+		expect(parametersAt(result.declaration, waitId)).toEqual({ seconds: 2 });
+		// 等待步不是技能：它没有 `action`，三个视图不会拿它去目录里找能力
+		expect(parametersAt(result.declaration, waitId)).not.toHaveProperty('action');
+		expect(result.declaration.nodes.map((node) => node.name)).toEqual([
+			'1. 观察桌面',
+			'2. 等待 2 秒',
+			'3. 相对移动',
+		]);
+	});
+
+	it('照常占**一格**出边（下一步），不是三格——三格是分支专用的', () => {
+		const result = importSkillPlan(WAIT_PLAN, { catalog, idFactory: ids });
+		if (!result.ok) throw new Error('应当通过');
+		const declaration = result.declaration;
+		const waitId = waitIdOf(declaration);
+		if (waitId === undefined) throw new Error('应当有一个等待节点');
+
+		expect(declaration.connections[waitId]?.main).toHaveLength(1);
+		// 那一格装的是它的下一步（距离 0.05 那一步），而不是臂或后续
+		expect(parametersAt(declaration, portHead(declaration, waitId, 0))).toEqual({
+			action: 'move_relative_ee',
+			motion_direction: 'forward',
+			motion_distance: 0.05,
+		});
+		// 它自己的父亲是前面那个技能步：整条计划还是一条链
+		expect(parentsOf(declaration, waitId)).toEqual([declaration.nodes[0]?.id]);
+	});
+
+	it('来回一趟字节等价：带等待的计划 → 声明 → 计划', () => {
+		const first = importSkillPlan(WAIT_PLAN, { catalog, idFactory: ids });
+		if (!first.ok) throw new Error('计划应当能导入');
+
+		const restored = declarationToSkillPlan(first.declaration);
+		expect(restored).toEqual(WAIT_PLAN);
+		expect(JSON.stringify(restored)).toBe(JSON.stringify(WAIT_PLAN));
+
+		const second = importSkillPlan(restored, { catalog, idFactory: ids });
+		if (!second.ok) throw new Error('还原出来的计划应当能再导入');
+		expect(stripVolatile(second.declaration)).toEqual(stripVolatile(first.declaration));
+	});
+
+	it('等待与分支混排也字节等价：臂里有等待、臂外也有等待', () => {
+		const mixed = {
+			schemaVersion: 1,
+			robot: 'so101_single_arm',
+			description: '等一拍，看一眼；没成就重看并再等，最后再等半秒',
+			plan: [
+				{ step: 'wait', seconds: 1 },
+				{
+					step: 'if',
+					condition: { field: 'last.success', op: '==', value: false },
+					then: [
+						{ step: 'skill', skill: 'inspect_scene' },
+						{ step: 'wait', seconds: 0.5 },
+					],
+					else: [{ step: 'wait', seconds: 2 }],
+				},
+				{ step: 'wait', seconds: 0.25 },
+			],
+		};
+		const first = importSkillPlan(mixed, { catalog, idFactory: ids });
+		if (!first.ok) throw new Error('计划应当能导入');
+
+		const restored = declarationToSkillPlan(first.declaration);
+		expect(restored).toEqual(mixed);
+		expect(JSON.stringify(restored)).toBe(JSON.stringify(mixed));
+
+		// 臂里的等待步也是单格出边，且它的下一步是臂里的下一步——不接到臂外去
+		const declaration = first.declaration;
+		const branchId = branchIdOf(declaration);
+		if (branchId === undefined) throw new Error('应当有一个分支节点');
+		const thenHead = portHead(declaration, branchId, 0);
+		if (thenHead === undefined) throw new Error('then 臂里应当有一步');
+		expect(parametersAt(declaration, thenHead)).toEqual({ action: 'inspect_scene' });
+		const thenWait = portHead(declaration, thenHead, 0);
+		if (thenWait === undefined) throw new Error('then 臂里应当还有一步等待');
+		expect(parametersAt(declaration, thenWait)).toEqual({ seconds: 0.5 });
+		expect(declaration.connections[thenWait]?.main).toBeUndefined(); // 臂尾：没有出边
 	});
 });

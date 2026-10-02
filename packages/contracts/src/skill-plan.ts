@@ -11,10 +11,11 @@
  *
  * - **参数名照抄上游**。设计稿示例写的是 `motionDirection`，RoboFrame 的目录里是
  *   `motion_direction`（YAML 里的原名）。用真名，免得中间多一层没人维护的映射。
- * - **`step` 认 `'skill'` 与 `'if'`**。设计稿的 `primitive` / `wait` / `skipIf` 步这一版不做——
+ * - **`step` 认 `'skill'` / `'if'` / `'wait'`**。设计稿的 `primitive` / `skipIf` 步这一版不做——
  *   它们要在流程画布上各自长成一种模块，而现在画布上的模块就是「调一个能力」；
  *   但**分支**要做：现实任务真的会分叉（上一步没成就换个法子再试），平铺的步骤列表
- *   表达不出来。遇到不认的 step 给明确诊断，不静默当技能处理。
+ *   表达不出来；**等待**也要做：技能自己带的时长管不了「两步之间停一下」
+ *   （抓起来、等它稳定两秒、再移动）。遇到不认的 step 给明确诊断，不静默当技能处理。
  * - **多一个 `description`**（可选）。设计稿的 plan 没有任务名（在 n8n 里节点自带名字），
  *   而这个界面上到处要显示「这是哪个任务」。不加就只能拿机器人名当任务名。
  *
@@ -47,6 +48,15 @@ export const BRANCH_CONDITION_OPS = ['==', '!='] as const;
  */
 export const SKILL_PLAN_MAX_BRANCH_DEPTH = 8;
 
+/**
+ * 一个 `wait` 步最多等多久（秒）：十分钟。
+ *
+ * 为什么要有这个上限：一条计划里塞个 86400 不是「等一天」，是把执行器挂在那儿——
+ * 计划是送给机器执行的东西，一个数字就能让它整夜不动，它不该有这种表达力。
+ * 真需要跨天，那是任务编排的事（分几次下发），不是这一步的事。
+ */
+export const SKILL_PLAN_MAX_WAIT_SECONDS = 600;
+
 /** 一个计划步：调一个技能。 */
 export interface SkillStep {
 	readonly step: 'skill';
@@ -76,10 +86,25 @@ export interface BranchStep {
 }
 
 /**
- * 计划步：`SkillStep`（调一个技能）或 `BranchStep`（按上一步的结果走一条臂）。
- * 两者可以互相嵌套——`BranchStep` 的两条臂装的还是这个联合。
+ * 一个计划步：在这儿停一下，什么都不做。
+ *
+ * 三条规矩，都是「它是空的」这件事推出来的：
+ * - **不改 `last.success`**：它没有「成」也没有「败」，所以它后面那个 `if` 看到的仍是
+ *   `wait` **之前**那个技能步的结果（执行侧 `apps/robot3d/src/roboframe/plan.ts` 里钉着）；
+ * - **秒数必须是正数**：0 秒的等待没有意义（那是在计划里塞一句废话），负数更不是等待；
+ * - **有上限**（`SKILL_PLAN_MAX_WAIT_SECONDS`）：见那个常量的说明。
  */
-export type SkillPlanStep = SkillStep | BranchStep;
+export interface WaitStep {
+	readonly step: 'wait';
+	/** 等多少秒。正数，上限 `SKILL_PLAN_MAX_WAIT_SECONDS`。 */
+	readonly seconds: number;
+}
+
+/**
+ * 计划步：`SkillStep`（调一个技能）、`BranchStep`（按上一步的结果走一条臂）或 `WaitStep`（停一下）。
+ * 三者可以互相嵌套——`BranchStep` 的两条臂装的还是这个联合。
+ */
+export type SkillPlanStep = SkillStep | BranchStep | WaitStep;
 
 export interface SkillPlan {
 	readonly schemaVersion: number;
@@ -106,6 +131,9 @@ const isPlainObject = (value: unknown): value is Record<string, unknown> =>
 
 /** 分支步没有 id，诊断的 `ref` 就用它自己的身份：`if`。 */
 const BRANCH_STEP_REF = 'if';
+
+/** `wait` 步同样没有 id，`ref` 就用它自己的身份：`wait`。 */
+const WAIT_STEP_REF = 'wait';
 
 /** 参数值是不是这个类型。`json` 收一切 JSON；`sensor` 是一串非空传感器路径。 */
 const matchesType = (spec: CapabilitySpec['parameters'][number], value: JsonValue): boolean => {
@@ -378,6 +406,45 @@ const validateSkillStep = (
 	};
 };
 
+/**
+ * 校验一个 `wait` 步：秒数必须是正数，且不超 `SKILL_PLAN_MAX_WAIT_SECONDS`。
+ *
+ * 两种毛病给**两个码**：「这个数不对」（0 / 负数 / 字符串 / 压根没给）与「这个数太大」，
+ * 界面上是两句不同的话，混成一个码就只能说一句含糊的。
+ * 它也**不参与深度计数**：深度上限数的是 `if` 的嵌套（见 `validateBranchStep`），
+ * 而等待不是一层结构——把它算进去，等于让「等一会儿」占掉分支的表达空间。
+ */
+const validateWaitStep = (
+	rawStep: Record<string, unknown>,
+	path: string,
+	collector: DiagnosticCollector,
+): WaitStep | undefined => {
+	const rawSeconds = rawStep['seconds'];
+	if (typeof rawSeconds !== 'number' || !Number.isFinite(rawSeconds) || !(rawSeconds > 0)) {
+		collector.error({
+			code: 'plan.step.wait.seconds_invalid',
+			message: '等待的秒数必须是正数',
+			path: `${path}.seconds`,
+			ref: WAIT_STEP_REF,
+			details: { value: jsonDetail(rawSeconds), expected: 'number > 0' },
+		});
+		return undefined;
+	}
+
+	if (rawSeconds > SKILL_PLAN_MAX_WAIT_SECONDS) {
+		collector.error({
+			code: 'plan.step.wait.seconds_out_of_range',
+			message: `等待最多 ${String(SKILL_PLAN_MAX_WAIT_SECONDS)} 秒（十分钟），收到 ${String(rawSeconds)} 秒`,
+			path: `${path}.seconds`,
+			ref: WAIT_STEP_REF,
+			details: { value: rawSeconds, limit: SKILL_PLAN_MAX_WAIT_SECONDS },
+		});
+		return undefined;
+	}
+
+	return { step: 'wait', seconds: rawSeconds };
+};
+
 /** 校验一个计划步（顶层与臂里都是这一条路）。通了返回规范化之后的那一步，不通给 `undefined`。 */
 const validateStep = (
 	rawStep: unknown,
@@ -394,6 +461,7 @@ const validateStep = (
 	const stepKind = rawStep['step'];
 	if (stepKind === 'skill') return validateSkillStep(rawStep, path, collector, catalog);
 	if (stepKind === 'if') return validateBranchStep(rawStep, path, depth, collector, catalog);
+	if (stepKind === 'wait') return validateWaitStep(rawStep, path, collector);
 
 	// 别的步这一版不做——明说，不静默当成技能。
 	collector.error({
@@ -401,9 +469,9 @@ const validateStep = (
 		message:
 			stepKind === undefined
 				? '计划步缺少 step 字段'
-				: `这一版只认 step: "skill" / "if"，收到 ${JSON.stringify(stepKind)}（primitive / wait / skipIf 还没做）`,
+				: `这一版只认 step: "skill" / "if" / "wait"，收到 ${JSON.stringify(stepKind)}（primitive / skipIf 还没做）`,
 		path: `${path}.step`,
-		details: { value: jsonDetail(stepKind), supported: ['skill', 'if'] },
+		details: { value: jsonDetail(stepKind), supported: ['skill', 'if', 'wait'] },
 	});
 	return undefined;
 };

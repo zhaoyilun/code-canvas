@@ -1,18 +1,20 @@
 /**
- * 计划层的代码形态：选中一个**分支节点**时代码面板显示什么。
+ * 计划层的代码形态：选中一个**计划层节点**（分支 / 等待）时代码面板显示什么。
  *
  * 这一层与「能力的实现」是两码事，判据也不一样：
  *
  * - 能力的实现来自目录（`capability.implementation`，见 `@codecanvas/code-render`）——
  *   一个模块 = 一个能力，代码是这个能力在机器上具体做了什么；
  * - 分支是**任务计划**里的一条结构化语句（`if / else`），它的臂里装的是**技能调用**
- *   （`close_gripper_skill()`），不是某个能力的原语实现。硬把臂里的技能展开成原语，
+ *   （`close_gripper_skill()`）与等待（`wait(2.0)`），不是某个能力的原语实现。硬把臂里的技能展开成原语，
  *   等于把「计划」和「实现」两层揉成一层，看不出这句话是在哪一层说的。
  *   要看那一步的实现：点那一行 —— 选中那一步，面板换成它的实现。
+ * - 等待步（`task.wait`）**没有实现可看**（它不是能力调用，目录里没有它），所以选中它时
+ *   面板显示的就是计划层的那一行 `wait(2.0)`——这正是「计划层的代码」最纯粹的样子。
  *
  * 行的形状与 `RenderedLine` 对齐（行号、缩进、`stepIndex`、`stepPath`），
  * 面板那一套渲染、徽标、高亮因此不用为它另写一遍。多出来的一件事是 `nodeId`：
- * 计划层每一行都对应**一个真实的节点**（分支自己，或臂里那一步），
+ * 计划层每一行都对应**一个真实的节点**（分支自己，或臂里那一步、或等待步自己），
  * 于是这一行能点、能连到流程卡片与积木上（跨栏连线只认 `data-node-id`）。
  */
 import { INDENT_UNIT, type RenderedLine } from '@codecanvas/code-render';
@@ -20,14 +22,16 @@ import type { Diagnostic, WorkflowDeclaration, WorkflowNode } from '@codecanvas/
 import {
 	branchPlanOf,
 	conditionCodeOf,
+	isWaitNode,
 	planCallTextOf,
+	planWaitCallTextOf,
 	type PlanDiagnostic,
 	type PlanStep,
 } from '../shared/plan-structure';
 
-/** 面板上那句「这是哪一层的代码」。分支节点选中时显示，普通模块不显示（那两件事不许混）。 */
+/** 面板上那句「这是哪一层的代码」。计划层节点选中时显示，普通模块不显示（那两件事不许混）。 */
 export const PLAN_LAYER_NOTE =
-	'这是计划层的代码：臂里每一步是一次技能调用（技能名就是那一步的技能），不是那个能力的实现。点某一行进那一步，才看得到它的实现。';
+	'这是计划层的代码：臂里每一步是一次技能调用（技能名就是那一步的技能），等待就是 wait(秒数)，不是那个能力的实现。点某一行进那一步，才看得到它的实现。';
 
 /** 计划层的一行。`nodeId` 是这一行说的那一步；注释行没有节点。 */
 export interface PlanLine extends RenderedLine {
@@ -81,15 +85,16 @@ const push = (
 	});
 };
 
-/** 一条臂里的步骤：普通步骤一行调用，嵌套的分支递归成一段 `if / else`。 */
+/** 一条臂里的步骤：普通步骤一行调用（技能步就是调用，等待步就是 `wait(秒数)`），嵌套的分支递归成一段 `if / else`。 */
 const writeSteps = (writer: LineWriter, steps: readonly PlanStep[], indent: number, basePath: string): void => {
 	steps.forEach((step, index) => {
 		const path = `${basePath}.${String(index)}`;
-		if (!step.isBranch) {
-			push(writer, planCallTextOf(step.node), 'call', indent, path, step.node.id);
+		if (step.isBranch) {
+			writeBranch(writer, step.node, step.arms, indent, path);
 			return;
 		}
-		writeBranch(writer, step.node, step.arms, indent, path);
+		// 等待步与技能步都是「一行计划」，只是写法不一样：`wait(2.0)` / `close_gripper_skill()`。
+		push(writer, step.isWait ? planWaitCallTextOf(step.node) : planCallTextOf(step.node), 'call', indent, path, step.node.id);
 	});
 };
 
@@ -141,10 +146,24 @@ const asDiagnostics = (diagnostics: readonly PlanDiagnostic[]): readonly Diagnos
 	}));
 
 /**
- * 选中的节点是分支节点 → 它的计划层代码；不是分支节点（或声明还没来）→ null，
+ * 选中的节点是**计划层节点** → 它的计划层代码；别的节点（或声明还没来）→ null，
  * 由调用方退回「能力实现」那条路。
+ *
+ * 两种计划层节点各显示什么：
+ * - 分支 → 这一层的 `if / else`（臂里是技能调用与等待）；
+ * - 等待 → 它自己那一行 `wait(2.0)`。等待步没有能力可查、没有实现可看，
+ *   硬走「能力实现」那条路只会得到一句「查不到能力」——那是把「这一步只是等一会儿」说错了。
  */
 export const planProgramOf = (declaration: WorkflowDeclaration | null, nodeId: string): PlanProgram | null => {
+	if (declaration === null) return null;
+	const selected = declaration.nodes.find((node) => node.id === nodeId);
+
+	if (selected !== undefined && isWaitNode(selected)) {
+		const writer: LineWriter = { lines: [] };
+		push(writer, planWaitCallTextOf(selected), 'call', 0, String(STATEMENT_INDEX), selected.id);
+		return { nodeId: selected.id, title: `${selected.name} · 计划`, lines: writer.lines, diagnostics: [] };
+	}
+
 	const plan = branchPlanOf(declaration, nodeId);
 	if (plan === null) return null;
 

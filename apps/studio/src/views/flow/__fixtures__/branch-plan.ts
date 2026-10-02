@@ -100,3 +100,39 @@ const ARM_PARAMS_PLAN: SkillPlan = {
 };
 
 export const ARM_PARAMS_PLAN_JSON = JSON.stringify(ARM_PARAMS_PLAN, null, 2);
+
+/**
+ * 带等待的素材：**没有分支**——「夹住 → 等它稳定两秒 → 再移动」。
+ *
+ * 这是等待步最典型的用法（技能自己带的时长管不了两步之间的间隔），
+ * 也是「选中等待卡时看什么」的素材：流程卡上是「等待 2 秒」，计划层代码里是 `wait(2.0)`。
+ */
+const WAIT_PLAN: SkillPlan = {
+	schemaVersion: 1,
+	robot: 'so101_single_arm',
+	description: '夹住，等两秒再走',
+	plan: [
+		skill('close_gripper_skill'),
+		{ step: 'wait', seconds: 2 },
+		skill('move_relative_ee', { motion_direction: 'forward', motion_distance: 0.05 }),
+	],
+};
+
+export const WAIT_PLAN_JSON = JSON.stringify(WAIT_PLAN, null, 2);
+
+/** 分支的两臂里各放一步等待：看「臂里的等待」在计划层代码/积木里怎么写（跟着臂缩进）。 */
+const BRANCH_WAIT_PLAN: SkillPlan = {
+	schemaVersion: 1,
+	robot: 'so101_single_arm',
+	description: '两臂里各等一拍',
+	plan: [
+		{
+			step: 'if',
+			condition: { field: 'last.success', op: '==', value: false },
+			then: [skill('close_gripper_skill'), { step: 'wait', seconds: 2 }],
+			else: [{ step: 'wait', seconds: 0.5 }],
+		},
+	],
+};
+
+export const BRANCH_WAIT_PLAN_JSON = JSON.stringify(BRANCH_WAIT_PLAN, null, 2);

@@ -17,11 +17,17 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeWorkflowDigest, type WorkflowDeclaration, type WorkflowNode } from '@codecanvas/contracts';
-import { TASK_BRANCH_NODE_TYPE } from '@codecanvas/task-import';
+import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
 import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import FlowView from '../flow/FlowView.vue';
-import { ARM_PARAMS_PLAN_JSON, BRANCH_PLAN_JSON, NESTED_NO_ELSE_PLAN_JSON } from '../flow/__fixtures__/branch-plan';
+import {
+	ARM_PARAMS_PLAN_JSON,
+	BRANCH_PLAN_JSON,
+	BRANCH_WAIT_PLAN_JSON,
+	NESTED_NO_ELSE_PLAN_JSON,
+	WAIT_PLAN_JSON,
+} from '../flow/__fixtures__/branch-plan';
 import { normalizeRenderedHtml, readBaseline } from '../flow/__fixtures__/normalize-html';
 import RightPanel from '../right/RightPanel.vue';
 import CodePanel from './CodePanel.vue';
@@ -582,5 +588,52 @@ describe('CodePanel · 没有分支时 渲染与从前逐字相同', () => {
 		expect(normalizeRenderedHtml(panel.html())).toBe(
 			readBaseline('src/views/code-panel/__fixtures__/code-panel-baseline.html'),
 		);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 等待步：计划层的另一行代码（`wait(2.0)`）
+// ---------------------------------------------------------------------------
+
+/** 载入一份带等待的技能计划，并选中那个等待节点。 */
+const selectWait = (json: string): WorkflowNode => {
+	setSelectedDevice('so101_robot');
+	expect(doc.loadTaskJson(json)).toBe(true);
+	const node = declaration().nodes.find((candidate) => candidate.type === TASK_WAIT_NODE_TYPE);
+	if (node === undefined) throw new Error('这份素材里应当有等待节点');
+	doc.select(node.id);
+	return node;
+};
+
+describe('CodePanel · 等待步显示的是计划层那一行 wait(2.0)', () => {
+	it('选中等待节点：就一行 wait(2.0)，带计划层注记，没有「查不到能力」', async () => {
+		selectWait(WAIT_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		expect(panel.get('[data-testid="code-title"]').text()).toBe('2. 等待 2 秒 · 计划');
+		expect(lineTexts(panel)).toEqual(['wait(2.0)']);
+		expect(indents(panel)).toEqual(['0']);
+		// 这一段代码属于哪一层：与分支那一侧同一句注记（等待步同样没有实现可看）
+		expect(panel.get('[data-testid="code-plan-note"]').text()).toContain('计划层');
+		expect(panel.text()).not.toContain('查不到能力');
+		expect(panel.find('[data-testid="code-warnings"]').exists()).toBe(false);
+	});
+
+	it('臂里的等待步：跟着臂缩进，与技能调用同一个口径', async () => {
+		selectBranch(BRANCH_WAIT_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		expect(lineTexts(panel)).toEqual([
+			'if last.success == False:',
+			'    close_gripper_skill()',
+			'    wait(2.0)',
+			'else:',
+			'    wait(0.5)',
+		]);
+		expect(indents(panel)).toEqual(['0', '1', '1', '0', '1']);
+		// 每一行都指着**真实的节点**：跨栏连线与选中联动靠它
+		expect(stepPaths(panel)).toEqual(['0', '0.then.0', '0.then.1', '0.else', '0.else.0']);
 	});
 });
