@@ -1,0 +1,110 @@
+/*
+ * CodeCanvas Studio — 自有主题变量。
+ * 唯一色彩来源：组件只引用 var(--cc-*)，不写字面色值。
+ * 观感目标：机器人工作台（深色底 + 青色描边 + 圆角卡片），不是后台管理系统。
+ */
+:root {
+	/* 底层 */
+	--cc-bg: #070d14;
+	--cc-surface: #0d1724;
+	--cc-surface-raised: #14212f;
+	--cc-surface-sunken: #050a10;
+	--cc-stage: #0a121d;
+
+	/* 描边 */
+	--cc-line: #1c2c3d;
+	--cc-line-strong: #27405a;
+
+	/* 文字 */
+	--cc-text: #e2eef8;
+	--cc-text-dim: #8ba3ba;
+	--cc-text-faint: #5b7488;
+	/* 反白：压在实心危险色上的文字 */
+	--cc-text-inverse: #ffffff;
+
+	/* 强调色 */
+	--cc-accent: #2ee6d6;
+	--cc-accent-strong: #6ff5e8;
+	--cc-accent-dim: #14867e;
+	--cc-accent-veil: rgba(46, 230, 214, 0.12);
+	--cc-accent-glow: rgba(46, 230, 214, 0.28);
+
+	--cc-danger: #ef4d4d;
+	--cc-danger-strong: #ff6b6b;
+	--cc-danger-veil: rgba(239, 77, 77, 0.12);
+
+	/* 灰置（不可达状态专用，别拿它当普通灰） */
+	--cc-disabled: #38505f;
+	--cc-disabled-text: #46606f;
+	--cc-disabled-surface: #0a1119;
+
+	/* 圆角 */
+	--cc-radius-sm: 6px;
+	--cc-radius: 10px;
+	--cc-radius-lg: 14px;
+
+	/* 间距 */
+	--cc-space-1: 4px;
+	--cc-space-2: 8px;
+	--cc-space-3: 12px;
+	--cc-space-4: 16px;
+	--cc-space-5: 24px;
+
+	/* 字号 */
+	--cc-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
+		'Microsoft YaHei', sans-serif;
+	--cc-font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
+	--cc-fs-xs: 10px;
+	--cc-fs-sm: 11px;
+	--cc-fs-md: 13px;
+	--cc-fs-lg: 15px;
+
+	/* 尺寸 */
+	--cc-rail-w: 64px;
+	--cc-right-w: 360px;
+	--cc-topbar-h: 48px;
+	--cc-statusbar-h: 44px;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+	height: 100%;
+}
+
+body {
+	margin: 0;
+	background: var(--cc-bg);
+	color: var(--cc-text);
+	font-family: var(--cc-font);
+	font-size: var(--cc-fs-md);
+	-webkit-font-smoothing: antialiased;
+}
+
+button {
+	font: inherit;
+}
+
+/* 细滚动条，免得默认白色粗条破坏深色观感 */
+* {
+	scrollbar-width: thin;
+	scrollbar-color: var(--cc-line-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+	width: 8px;
+	height: 8px;
+}
+
+*::-webkit-scrollbar-thumb {
+	background: var(--cc-line-strong);
+	border-radius: 4px;
+}
+
+*::-webkit-scrollbar-track {
+	background: transparent;
+}

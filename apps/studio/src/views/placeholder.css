@@ -1,0 +1,63 @@
+/*
+ * 视图占位共用样式。M2 用真实画布替换各视图内容时，这几条随之作废。
+ * 只引用主题变量，不写字面色值。
+ */
+.placeholder {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cc-space-3);
+	height: 100%;
+	min-height: 0;
+	padding: var(--cc-space-4);
+}
+
+.placeholder-header {
+	display: flex;
+	align-items: baseline;
+	gap: var(--cc-space-2);
+	flex-wrap: wrap;
+	padding-bottom: var(--cc-space-3);
+	border-bottom: 1px solid var(--cc-line);
+}
+
+.placeholder-title {
+	font-size: var(--cc-fs-lg);
+	font-weight: 600;
+	color: var(--cc-text);
+}
+
+.placeholder-tag {
+	padding: 2px var(--cc-space-2);
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-xs);
+	letter-spacing: 0.06em;
+	color: var(--cc-accent);
+	background: var(--cc-accent-veil);
+	border: 1px solid var(--cc-accent-dim);
+	border-radius: var(--cc-radius-sm);
+}
+
+.placeholder-body {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	flex: 1 1 auto;
+	min-height: 0;
+	padding: var(--cc-space-5);
+	text-align: center;
+	background: var(--cc-surface-sunken);
+	border: 1px dashed var(--cc-line-strong);
+	border-radius: var(--cc-radius);
+}
+
+.placeholder-text {
+	max-width: 34ch;
+	color: var(--cc-text-dim);
+	line-height: 1.7;
+}
+
+.placeholder-note {
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-sm);
+	color: var(--cc-text-faint);
+}
