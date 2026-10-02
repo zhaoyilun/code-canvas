@@ -11,12 +11,20 @@
     "typecheck": "vue-tsc --noEmit"
   },
   "dependencies": {
+    "@codecanvas/blockly-toolkit": "workspace:*",
+    "@codecanvas/code-render": "workspace:*",
+    "@codecanvas/contracts": "workspace:*",
+    "@codecanvas/task-import": "workspace:*",
+    "blockly": "^12.5.1",
     "vue": "^3.5.43"
   },
   "devDependencies": {
     "@vitejs/plugin-vue": "^6.0.9",
+    "@vue/test-utils": "^2.5.1",
+    "happy-dom": "^20.14.5",
     "typescript": "5.9.3",
     "vite": "^8.3.2",
+    "vitest": "^5.0.3",
     "vue-tsc": "^3.3.11"
   }
 }

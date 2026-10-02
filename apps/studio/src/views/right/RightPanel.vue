@@ -2,8 +2,12 @@
 // 右侧检查器：随当前 tab 切换内容。本阶段每个 tab 只给说明，M2 再填真东西。
 import { computed } from 'vue';
 import { labelOf, type TabId } from '../../shell/tabs';
+import { CodePanel } from '../code-panel';
 
 const props = defineProps<{ tab: TabId }>();
+
+// 代码面板接管 blockly / workflow 两个 tab：改积木参数时，这里那个数字跟着变。
+const showsCode = computed(() => props.tab === 'blockly' || props.tab === 'workflow');
 
 interface PanelCopy {
 	tag: string;
@@ -43,7 +47,8 @@ const copy = computed<PanelCopy>(() => CONTENT[props.tab]);
 </script>
 
 <template>
-	<section class="right-panel" data-testid="right-panel">
+	<CodePanel v-if="showsCode" class="right-panel" data-testid="right-panel" />
+	<section v-else class="right-panel" data-testid="right-panel">
 		<header class="panel-header">
 			<span class="panel-title">{{ labelOf(tab) }}</span>
 			<span class="panel-tag">{{ copy.tag }}</span>
