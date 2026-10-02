@@ -49,6 +49,14 @@ export interface CompileOptions {
 	readonly validateDeclaration?: (
 		declaration: WorkflowDeclaration,
 	) => { readonly ok: boolean; readonly diagnostics: readonly Diagnostic[] };
+	/**
+	 * 只读块：画布上有些块只是**显示**，不属于任何能力的实现，也就没有可回写的参数
+	 * （例如分支节点的计划视图：它画的是这一层的结构，不是某份实现）。
+	 *
+	 * 不把它们挑出来，写回就会把它们当成「来路不明的积木」逐块报错，界面上弹出几条
+	 * 看不出所以然的红字——而那份声明其实一个字节都没错。
+	 */
+	readonly isReadOnlyBlock?: (block: Blockly.Block) => boolean;
 }
 
 export interface CompileResult {
@@ -168,10 +176,13 @@ const collectPatches = (
 	base: WorkflowDeclaration,
 	catalog: CapabilityCatalog,
 	collector: DiagnosticCollector,
+	isReadOnlyBlock?: (block: Blockly.Block) => boolean,
 ): Map<string, Patch> => {
 	const patches = new Map<string, Patch>();
 
 	for (const block of collectImplementationBlocks(workspace)) {
+		// 只读块直接跳过：它们没有可回写的参数，也不是「来路不明」。
+		if (isReadOnlyBlock?.(block) === true) continue;
 		const identity = identityOfBlock(block);
 		if (identity === null) {
 			collector.error({
@@ -236,7 +247,7 @@ export const compileWorkspace = (options: CompileOptions): CompileResult => {
 	const { workspace, base, catalog } = options;
 	const collector = new DiagnosticCollector();
 
-	const patches = collectPatches(workspace, base, catalog, collector);
+	const patches = collectPatches(workspace, base, catalog, collector, options.isReadOnlyBlock);
 
 	// 只改 parameters：`id` / `name` / `type` / `typeVersion` / `position` / `disabled` 原样带过来，
 	// 节点顺序、连线、`meta` 也是——实现结构不归画布管。

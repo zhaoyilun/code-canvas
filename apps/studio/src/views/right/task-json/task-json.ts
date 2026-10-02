@@ -32,6 +32,7 @@ import {
 	type WorkflowNode,
 } from '@codecanvas/contracts';
 import { TASK_ACTION_NODE_TYPE, findTaskFormat, type TaskFormatRef } from '@codecanvas/task-import';
+import { planStructureOf } from '../../shared/plan-structure';
 
 /** 这一行在整份任务 JSON 里属于哪一段。 */
 export type TaskJsonSection = 'meta' | 'step' | 'limits';
@@ -272,8 +273,11 @@ const stepFields = (
 /**
  * 哪一项是「步骤数组」。
  *
- * 键名各格式不同（一期叫 `steps`，技能计划叫 `plan`），所以不写死：找那个**条目数与声明里的
- * 动作节点一一对应**的顶层数组。对不上就不认——宁可不点亮任何一段，也不把别的东西错认成步骤。
+ * 键名各格式不同（一期叫 `steps`，技能计划叫 `plan`），所以不写死：找那个**条目数与声明的
+ * 顶层步骤一一对应**的顶层数组。对不上就不认——宁可不点亮任何一段，也不把别的东西错认成步骤。
+ *
+ * 「顶层步骤数」不是「动作节点数」：有分支时 `plan` 的一格是一个 `if`，两臂里的步骤嵌在
+ * 那一格里面。早先这里数的是动作节点，于是带分支的计划一个都对不上、步数显示成 0 步。
  */
 const stepArrayKey = (task: JsonObject, count: number): string | null => {
 	for (const [key, value] of Object.entries(task)) {
@@ -293,7 +297,9 @@ export const renderTaskJson = (
 	formatRef: TaskFormatRef,
 ): TaskJsonView => {
 	const task = buildTaskJson(declaration, formatRef);
-	const nodes = actionNodes(declaration);
+	// 顶层步骤的顺序与归属都由**声明图**推（`planStructureOf`），不是把 `nodes` 从头数一遍——
+	// 有分支时后者会把臂里的步骤错认成顶层那几格。
+	const nodes = planStructureOf(declaration).steps.map((step) => step.node);
 	const stepsKey = stepArrayKey(task, nodes.length);
 
 	const items: readonly RenderItem[] = Object.entries(task).map(([key, value]) => {

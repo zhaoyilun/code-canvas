@@ -19,7 +19,7 @@ import { TASK_BRANCH_NODE_TYPE } from '@codecanvas/task-import';
 import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import FlowView from './FlowView.vue';
-import { planStructureOf } from './plan-structure';
+import { planStructureOf } from '../shared/plan-structure';
 import { BRANCH_PLAN_JSON, NESTED_NO_ELSE_PLAN_JSON } from './__fixtures__/branch-plan';
 import { normalizeRenderedHtml, readBaseline } from './__fixtures__/normalize-html';
 

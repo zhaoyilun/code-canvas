@@ -23,7 +23,7 @@ import {
 	planCallTextOf,
 	type PlanDiagnostic,
 	type PlanStep,
-} from '../flow/plan-structure';
+} from '../shared/plan-structure';
 
 /** 面板上那句「这是哪一层的代码」。分支节点选中时显示，普通模块不显示（那两件事不许混）。 */
 export const PLAN_LAYER_NOTE =

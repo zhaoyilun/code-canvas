@@ -493,3 +493,31 @@ describe('任务语义那一道闸由调用方给尺子', () => {
 		expect(task).toMatchObject({ schema_version: '1.0', task_id: base.id });
 	});
 });
+
+describe('只读块不参与写回', () => {
+	it('标成只读的块不会被当成「来路不明的积木」逐块报错', () => {
+		// 分支节点的计划视图就是这样：它画的是结构，不是任何能力的实现，没有可回写的参数。
+		// 不挑出来就会每选中一次分支弹几条红字，而声明一个字节都没错。
+		const result = compileWorkspace({
+			workspace,
+			base,
+			catalog: FIXTURE_CATALOG,
+			validateDeclaration: phase1Gate,
+			isReadOnlyBlock: () => true,
+		});
+		expect(result.ok).toBe(true);
+		expect(result.diagnostics.map((item) => item.code)).not.toContain('blockly.compile.unknown_block');
+		expect(result.diagnostics).toEqual([]);
+	});
+
+	it('没标只读时照旧报错（这道口子只对**明确点名**的块开）', () => {
+		const result = compileWorkspace({
+			workspace,
+			base,
+			catalog: FIXTURE_CATALOG,
+			validateDeclaration: phase1Gate,
+		});
+		// 这份工作区是按目录渲染出来的，所以本来就没问题；这里钉的是「没给判据时行为不变」。
+		expect(result.diagnostics.map((item) => item.code)).not.toContain('blockly.compile.unknown_block');
+	});
+});

@@ -58,7 +58,7 @@ import {
 	planCallTextOf,
 	type PlanArm,
 	type PlanStep,
-} from '../flow/plan-structure';
+} from '../shared/plan-structure';
 import {
 	NODE_ID_ATTRIBUTE,
 	badgeOfBlockElement,
@@ -148,6 +148,15 @@ function deviceCatalogs(): readonly CapabilityCatalog[] {
 export const PLAN_BRANCH_BLOCK_TYPE = 'cc_plan_branch';
 export const PLAN_BRANCH_NO_ELSE_BLOCK_TYPE = 'cc_plan_branch_no_else';
 export const PLAN_STEP_BLOCK_TYPE = 'cc_plan_step';
+
+/**
+ * 是不是**计划视图**的块（分支节点被选中时画的那几块）。
+ *
+ * 它们只表示结构，不回写任何参数——写回通道要按这个把它们跳过，
+ * 否则每选中一次分支就会弹三条「来路不明的积木」红字，而声明一个字节都没错。
+ */
+export const isPlanBlockType = (type: string): boolean =>
+	type === PLAN_BRANCH_BLOCK_TYPE || type === PLAN_BRANCH_NO_ELSE_BLOCK_TYPE || type === PLAN_STEP_BLOCK_TYPE;
 /** 分支块上那格只读的条件文字。 */
 export const PLAN_CONDITION_FIELD = 'condition';
 /** 计划块上那格只读的「哪一步」。 */
@@ -707,6 +716,8 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 			base,
 			catalog,
 			validateDeclaration: (declaration) => format.validateDeclaration(declaration, { catalog }),
+			// 分支节点的计划块只是显示：它们不属于任何实现，没有可回写的参数。
+			isReadOnlyBlock: (block) => isPlanBlockType(block.type),
 		});
 		blockIndex.value = result.index;
 		compileDiagnostics.value = [...result.diagnostics];

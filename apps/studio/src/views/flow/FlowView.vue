@@ -19,7 +19,7 @@ import { LIMIT_LABELS, type NumericLimitName } from '@codecanvas/contracts';
 import { useStudioDocument } from '../../state/document';
 import FlowSequence from './FlowSequence.vue';
 import { declarationLimits, type NodeLimits } from './summary';
-import { planStructureOf } from './plan-structure';
+import { planStructureOf } from '../shared/plan-structure';
 import { buildFlowRows } from './rows';
 
 const store = useStudioDocument();

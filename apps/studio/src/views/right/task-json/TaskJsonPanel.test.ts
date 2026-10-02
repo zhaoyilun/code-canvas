@@ -453,3 +453,60 @@ describe('任务 JSON · 按出生时的格式还原', () => {
 		);
 	});
 });
+
+describe('带分支的计划：步数按**顶层步骤**数，不是按动作节点数', () => {
+	/** 一份真技能、带一个 if 和一条同层后续的计划——两臂里的步骤嵌在 if 那一格里。 */
+	const BRANCH_PLAN = {
+		schemaVersion: SKILL_PLAN_SCHEMA_VERSION,
+		robot: 'so101_single_arm',
+		description: '看一眼；不行就回安全位，行就闭爪；然后往前挪一点',
+		plan: [
+			{ step: 'skill', skill: 'inspect_scene' },
+			{
+				step: 'if',
+				condition: { field: 'last.success', op: '==', value: false },
+				then: [{ step: 'skill', skill: 'recover_safe_pose' }],
+				else: [{ step: 'skill', skill: 'close_gripper_skill' }],
+			},
+			{ step: 'skill', skill: 'move_relative_ee', params: { motion_direction: 'forward', motion_distance: 0.03 } },
+		],
+	};
+
+	/**
+	 * 解析器：这个视图只关心「参数 → 实现里第几步」，所以一律拿 SO-101 那份真目录去查。
+	 * 注意别把 `task-json.ts` 自己的 `capabilityOf` 当解析器传进来——它要两个参数（节点 + 解析器）。
+	 */
+	const resolveCatalog = () => ROBOFRAME_SO101_CATALOG;
+
+	const declarationOf = (): WorkflowDeclaration => {
+		setSelectedDevice('so101_robot');
+		expect(doc.loadTaskJson(JSON.stringify(BRANCH_PLAN))).toBe(true);
+		const declaration = doc.declaration.value;
+		if (declaration === null) throw new Error('应当有声明');
+		return declaration;
+	};
+
+	it('顶层三格就是三步（早先这里数的是动作节点，带分支时会显示成 0 步）', () => {
+		const view = renderTaskJson(declarationOf(), resolveCatalog, 'skill_plan');
+		expect(view.stepCount).toBe(3);
+	});
+
+	it('第 2 格（那个 if）指向的是**分支节点**，不是两臂里的任何一个技能', () => {
+		const declaration = declarationOf();
+		const view = renderTaskJson(declaration, resolveCatalog, 'skill_plan');
+		const branchNode = declaration.nodes.find((candidate) => candidate.type !== TASK_ACTION_NODE_TYPE);
+		expect(branchNode).toBeDefined();
+		const stepLines = view.lines.filter((line) => line.section === 'step' && line.stepOrdinal === 2);
+		expect(stepLines.map((line) => line.nodeId)).toContain(branchNode?.id ?? null);
+		expect(stepLines.map((line) => line.nodeId)).not.toContain(null);
+	});
+
+	it('第 3 格是同层后续那一步（if 之后的步骤不许丢）', () => {
+		const declaration = declarationOf();
+		const view = renderTaskJson(declaration, resolveCatalog, 'skill_plan');
+		const third = view.lines.filter((line) => line.section === 'step' && line.stepOrdinal === 3);
+		const ids = new Set(third.map((line) => line.nodeId));
+		const move = declaration.nodes.find((candidate) => candidate.parameters['action'] === 'move_relative_ee');
+		expect(ids.has(move?.id ?? null)).toBe(true);
+	});
+});

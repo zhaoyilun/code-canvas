@@ -21,7 +21,7 @@ import {
 	type NodeLimits,
 	type ParameterSummary,
 } from './summary';
-import { conditionViewOf, type ConditionView, type PlanStep } from './plan-structure';
+import { conditionViewOf, type ConditionView, type PlanStep } from '../shared/plan-structure';
 
 export interface FlowCardModel {
 	readonly node: WorkflowNode;
