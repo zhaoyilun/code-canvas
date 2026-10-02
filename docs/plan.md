@@ -1,202 +1,160 @@
 # 实施规划（按目标图倒推）
 
 本文把目标界面拆成可施工的模块，排出里程碑与依赖，并划清子代理的文件边界。
+当前阶段的范围见 §3：**只做「任务 JSON → 三个视图」这条链**，执行、仿真、设备、AI 生成全部后置。
+
 契约细节见 [`spec.md`](spec.md)，继承判定见 [`inherited.md`](inherited.md)。
 
 ## 1. 图面拆解
 
-| 图面区域 | 模块 | 归属 |
+| 图面区域 | 模块 | 本阶段 |
 | --- | --- | --- |
-| 左图标栏 + 顶部五 tab | `studio/shell` | 本仓 |
-| 顶部自然语言条 + GENERATE PLAN + 转译链指示 | `studio/views/ai-plan` + `packages/ai-plan` | 本仓 |
-| 左栏 Blockly 画布 | `studio/views/blockly` + `packages/blockly-toolkit` | 本仓 |
-| 中栏 Workflow 画布 | `studio/views/flow` | 本仓 |
-| 两栏之间的虚线 | `packages/blockly-toolkit`（生成期产出映射表）+ `studio/views/mapping`（只渲染） | 本仓 |
-| 右栏 CODE 面板 | `studio/views/code-panel` | 本仓 |
-| 右栏 EXECUTION TRACE + 步骤列表 | `studio/views/trace-panel` + `packages/simulation` | 本仓 |
-| 右栏 3D 机器人 | `studio/views/simulation` | **暂缓**（见 §5） |
-| 底部六段流水线 | `studio/shell` + `packages/core`（状态机） | 本仓 |
-| 右下 RUN / STOP | `studio/shell` → `packages/core` | 本仓 |
-| 设计期差异审核 | `studio/views/design-diff` | 本仓（图上没有，见 §5） |
-| 执行回放 | `studio/views/runtime-replay` | 本仓（图上没有，见 §5） |
-| 设备选择 | `studio/views/device-panel` | 本仓（图上没有，见 §5） |
-| 设备协议实现 | `plugins/openharmony` | 插件 |
+| 左图标栏 + 顶部五 tab | `studio/shell` | 做（后三个 tab 先空着） |
+| 顶部自然语言条 + GENERATE PLAN + 转译链 | —— | **不做**（上游那一步不归我们） |
+| 左栏 Blockly 画布 | `studio/views/blockly` + `packages/blockly-toolkit` | **做**（唯一可写） |
+| 中栏 Workflow 画布 | `studio/views/flow` | **做** |
+| 两栏之间的虚线 | 生成期映射表 + `studio/views/mapping` | **做** |
+| 右栏 CODE 面板 | `studio/views/code-panel` | **做**（编译产物） |
+| 右栏 EXECUTION TRACE + 步骤列表 | `studio/views/trace-panel` | 后置 |
+| 右栏 3D 机器人 | `studio/views/simulation` | 后置 |
+| 底部六段流水线 | `studio/shell` | 只做前三段（导入 / 校验 / 编译），其余灰置 |
+| 右下 RUN / STOP | `studio/shell` | 后置（先占位，打日志） |
+| 设计期差异审核 | `studio/views/design-diff` | 后置 |
+| 执行回放 | `studio/views/runtime-replay` | 后置 |
+| 设备选择 | `studio/views/device-panel` | 后置 |
 
 ## 2. 目录结构
 
 ```text
 codecanvas/
   apps/studio/src/
-    shell/                    # 五 tab、三栏、底部流水线、RUN/STOP、主题变量
+    shell/                    # 五 tab、三栏、底部流水线、主题变量
     views/
-      ai-plan/  blockly/  flow/  code-panel/  trace-panel/
-      mapping/  design-diff/  runtime-replay/  simulation/  device-panel/
+      blockly/  flow/  code-panel/  mapping/
   packages/
-    contracts/                # 所有版本化契约 + zod schema + 稳定 ID 生成器
-    core/                     # workflow 解析、节点注册表、调度器、生命周期状态机、执行记录
-    code-runner/              # CodeRunner（子进程沙箱）
-    blockly-toolkit/          # 积木语法、编译器、主题、IR→工作区生成器、映射表生成器
-    device/                   # DeviceSession、CapabilityCatalog、normalizeCatalog
-    validation/               # 分层校验器（结构 / 语义 / 领域 / 运行预检）
-    ai-plan/                  # 自然语言 → 语义草稿（不产图）
-    simulation/               # 状态仿真
-  plugins/openharmony/        # 设备协议实现
-  server/                     # 单进程服务：静态托管 + REST/WS + 执行器宿主
-  test/{fixtures,e2e}/        # 夹具（版本化）与端到端
+    contracts/                # 任务协议 schema + workflow 声明 + 稳定 ID + 诊断
+    task-import/              # 任务 JSON → workflow 声明
+    blockly-toolkit/          # 积木定义（由校验器推导）、编译回声明、主题、映射表
+    code-render/              # 声明 → 代码面板文本（规则由校验器推导）
+  test/{fixtures,e2e}/
   docs/
 ```
 
-两条布局纪律：
+三条布局纪律：
 
-- **`mapping` 的生成器在 `blockly-toolkit`（生成期），`views/mapping` 只负责画线。**
-  映射表是生成产物，视图算不出来。
-- **契约全部落在 `packages/contracts`**，不允许散落在文档或各处 `types.ts` 里。
-  稳定 ID 生成器也在这里——「id 谁来生成、怎么生成」必须有唯一答案。
+- **校验器是唯一规格来源。** 积木的字段、代码面板的渲染，全部从它推导，不许另写平行定义。
+- **映射表的生成在 `blockly-toolkit`（生成期），`views/mapping` 只负责画线。** 视图算不出映射。
+- **契约全部落在 `packages/contracts`**，稳定 ID 生成器也在这里——「id 谁生成、怎么生成」必须有唯一答案。
+
+后置的包（`core` 执行器、`code-runner`、`device`、`simulation`、`ai-plan`、`server`）暂不建。
 
 ## 3. 里程碑
 
+### 当前阶段
+
 ```mermaid
 flowchart LR
-  M0["M0 骨架"] --> M3["M3 跨栏映射"]
-  M1["M1 契约与内核"] --> M2["M2 双视图"]
-  M2 --> M3
-  M1 --> M4["M4 AI Plan"]
-  M1 --> M5["M5 设备层"]
-  M5 --> M6["M6 仿真与 trace"]
-  M3 --> M6
+  M0["M0 骨架"] --> M2["M2 三视图"]
+  M1["M1 协议与转换"] --> M2
+  M2 --> M3["M3 映射与联动"]
 ```
 
-### M0 — 骨架
+#### M0 — 骨架
 
-**产出**：能跑起来的空壳。五个 tab 可切换，三栏布局成形，自有主题变量（不引用任何 n8n token），
-底部流水线按状态高亮，RUN/STOP 存在但只打日志。**同时把生命周期状态机定死在 `packages/core` 里**：
-六格各自对应哪个状态、哪些迁移合法、失败/取消/未确认落在哪里。
-
-**验收**：
-- `pnpm dev` 起来，浏览器见到三栏 + 五 tab + 六格流水线；切 tab 时右栏内容切换。
-- 状态机有单元测试：每个合法迁移一条，非法迁移被拒一条，`unknown` 可达且**不可被当作成功**一条。
-- 空壳里不出现任何 `@n8n/*` 依赖（`pnpm why` 或 lockfile 断言）。
-
-**依赖**：无。**但六格终态必须先在 spec §6 拍板**——这是 M0 唯一的拦路石。
-
-### M1 — 契约与内核
-
-**产出**：`packages/contracts`（契约 + zod + 稳定 ID）、`packages/core`（解析、调度、节点注册表、
-执行记录）、`packages/code-runner`（子进程沙箱）。附带三个内置节点：手动触发、设置字段、`logic.blockly`。
+**产出**：能跑起来的空壳。五个 tab 可切换（后三个是占位），三栏布局成形，自有主题变量
+（不引用任何 n8n token），底部流水线的前三段可用、其余灰置，RUN/STOP 占位。
 
 **验收**：
-- 给一份手写 workflow JSON，跑出确定结果。
-- **同一份输入连续跑两次，规范化产物字节级相同**（继承前作的确定性验收门）。
-- 错误传播、空输入、取消、超时各有一条测试。
-- `logic.blockly` 能在子进程沙箱里跑编译产物，宿主进程不执行用户代码。
-- 契约的 zod 在**投入解析前先做有界预检**（深度 >64、节点 ≥10000、有环 → 直接拒）。
+- `pnpm dev` 起来，浏览器见到三栏 + 五 tab + 流水线；切 tab 时右栏内容切换。
+- 空壳里不出现任何 `@n8n/*` 依赖（lockfile 断言）。
+- 流水线不显示任何未实现状态——灰置就是灰置，不假装。
 
-**依赖**：无。与 M0 并行，接口按 spec 定死。
+**依赖**：无。
 
-### M2 — 双视图
+#### M1 — 协议与转换
 
-**产出**：两个独立视图渲染同一份声明。`views/blockly`（zelos + 自有主题）与 `views/flow`
-（自定义节点卡片 + 连线）。
+**产出**：`packages/contracts`（任务协议 schema + 声明 schema + 稳定 ID + 诊断）、
+`packages/task-import`（任务 JSON → workflow 声明）。校验规则逐条照 `task_protocol.py` 搬，
+包括七种动作的字段约束、传感器白名单、限值只能收紧不能放宽、总时长上限。
 
 **验收**：
-- 同一份 JSON，两个视图都正确渲染；改动任一视图后数据一致。
-- Blockly 观感接近 Scratch，但**仓库内不出现 Scratch 的名字、Logo、角色形象**。
-- 积木形状与设备能力报告的对应关系有测试（能力变了，积木跟着变）。
+- 给一份任务 JSON，产出确定的声明；**同一输入连续两次，规范化产物字节级相同**。
+- 非法任务逐条有诊断，且带定位：未知 action、重复 step id、超限的 linear、越界的 joint_id、
+  `distance` 落在 (0, 2] 之外、限值被放宽、总时长超 `max_duration`。
+- **限值放宽必须被拒**（`max_linear > 0.3` 这类）。
+- 校验器与 `task_protocol.py` 的行为一致性有测试（同一批输入，两边结论相同）。
+
+**依赖**：无。与 M0 并行。
+
+#### M2 — 三视图
+
+**产出**：`views/flow`（节点链 + 失败态占位）、`views/blockly`（zelos + 自有主题，
+七种动作各一块）、`views/code-panel`（编译产物）、`packages/blockly-toolkit`（积木定义与编译回声明）、
+`packages/code-render`。
+
+**验收**：
+- 同一份声明，三个视图同时正确渲染；**积木的形状由校验器推导**，不是手写的七块。
+- **改积木上的参数 → 代码面板那个数字跟着变**（这条联动是核心）。
+- 改出非法值（`distance = 0`、`joint_id = 9`）时给诊断并拒绝写回，不静默修正。
+- 积木观感接近 Scratch，但仓库内不出现 Scratch 的名字、Logo、角色形象。
+- 代码面板的渲染规则可追溯到校验器（有测试对照）。
 
 **依赖**：M0、M1。
 
-### M3 — 跨栏映射
+#### M3 — 映射与联动
 
-**产出**：生成期的映射表（`blockly-toolkit`）+ 渲染层（`views/mapping`）。
+**产出**：生成期映射表（`blockly-toolkit`）+ 渲染层（`views/mapping`）。
 
-**验收**（前作写过可测行为，直接抄）：
-- **映射覆盖率 100%**：每条可执行步骤都有对应的块与节点映射；覆盖率不足时 RUN 按钮锁定。
-- 点积木 → 对应流程节点高亮并滚动到可见；反向亦然。
-- 点 AI 决策条目 → 同时高亮相关节点与积木。
-- 无映射的块不画线；删除节点或积木时映射记录同步删除。
+**验收**：
+- **映射覆盖率 100%**：每个 step 都有对应的块与节点映射。
+- 点积木 → 对应流程节点高亮；点节点 → 对应积木高亮。
+- 无映射的块不画线。
+- 映射条目指向的是**稳定 id**，不是数组下标——重排步骤后映射仍能对上。
 
 **依赖**：M2。
 
-### M4 — AI Plan
+### 后置（不在本阶段）
 
-**产出**：自然语言 → **语义草稿**（不产出任何一张图的 JSON），再由确定性生成器产出两张画布。
-输出契约照前作 slice-2 的形态：`{ schemaVersion, designId, revisionId, name, logicNodes[], devicePlan{} }`。
-生成过程按阶段反馈（对应图上的转译链）。
-
-**验收**：
-- **30 条样例指令全部产出结构有效、能通过校验、能执行的 workflow**（数量照前作的验收门）。
-- 相同输入 + 相同生成器版本 → 相同规范化产物。
-- 生成失败时显示摘要并允许重试，不做恢复框架。
-- **至少一条宿主自带的期望值参与校验**——不能只跑模型自己声明的测试向量（前作吃过「自洽而非正确」的亏）。
-
-**依赖**：M1。
-
-### M5 — 设备层
-
-**产出**：`packages/device`（会话、能力目录、`normalizeCatalog`）+ `views/device-panel` +
-`plugins/openharmony` 骨架。
-
-**验收**：
-- 面板里能发现或手动填一台设备并连上；能力列表出现在积木工具箱。
-- 调用一个能力能拿到返回；`invoke` 带目录摘要与追溯上下文。
-- **目录摘要陈旧时停执行**，给重新生成入口（不是静默继续）。
-- 取消后未获确认 → 终态 `unknown`，**界面不得表述为「已停止」**。
-
-**依赖**：M1。
-
-### M6 — 仿真与 trace
-
-**产出**：状态仿真模式（不碰真设备）+ `views/trace-panel` + `views/runtime-replay`。
-
-**验收**（照前作的清单）：
-- **七问全过**：能生成两张可加载的图？慢任务在运行期间可查询？超时触发取消？失败结果仍有完整步骤？
-  保存重载 / 导入导出后映射稳定？浏览器能逐块高亮？目录变化得到清晰处理？
-- **三个场景原样移植**：保存重载、导出导入、AI 修订只影响目标块。
-- **四种终态（completed / failed / cancelled / unknown）都有界面表现和证据**。
-- **证据带等级标签**：`UNIT / CONTRACT / BUILD_LOAD / JSDOM / LOCAL_HTTP / DEVICE`，
-  **禁止把前三种标成 `DEVICE`**；「执行」要拆成数据链路与设备链路两个标签，别混。
-
-**依赖**：M1、M3。
+| 里程碑 | 内容 | 前置 |
+| --- | --- | --- |
+| 执行器 | 调度、节点接口、`CodeRunner` 沙箱 | 需要一个可执行的真相（现在只有声明） |
+| 设备层 | `DeviceSession`、能力目录、OpenHarmony 插件 | 设备协议定稿 |
+| 仿真与 trace | 状态仿真、步骤列表、逐块回放 | 执行器 |
+| AI Plan | 自然语言 → 任务 JSON | 不归我们（第一步的生成器负责） |
+| 审批 | 设计期 diff 审核 + 运行期确认 | 执行器 |
 
 ## 4. 子代理分工
-
-峰值并行三个。文件边界按目录切死，跨边界的接口改动先改 `spec.md`。
 
 **第一批（可立即并行）**
 
 1. `shell` — 只写 `apps/studio/src/shell/**` 与全局样式。产出 M0。
-2. `core` — 只写 `packages/contracts/**`、`packages/core/**`、`packages/code-runner/**`。产出 M1。
-3. `device` — 只写 `packages/device/**`、`plugins/openharmony/**`。产出 M5 的接口部分。
+2. `protocol` — 只写 `packages/contracts/**` 与 `packages/task-import/**`。产出 M1。
 
 **第二批（M0、M1 落地后）**
 
-4. `blockly-view` — 只写 `packages/blockly-toolkit/**` 与 `apps/studio/src/views/blockly/**`。
-5. `flow-view` — 只写 `apps/studio/src/views/flow/**`。
+3. `blockly-view` — 只写 `packages/blockly-toolkit/**` 与 `apps/studio/src/views/blockly/**`
+4. `flow-view` — 只写 `apps/studio/src/views/flow/**`
+5. `code-panel` — 只写 `packages/code-render/**` 与 `apps/studio/src/views/code-panel/**`
 
 **第三批**
 
-6. `mapping` — 只写 `apps/studio/src/views/mapping/**`（映射表的生成在 4 里）
-7. `ai-plan` — 只写 `packages/ai-plan/**` 与 `apps/studio/src/views/ai-plan/**`
-8. `simulation` — 只写 `packages/simulation/**`、`views/trace-panel`、`views/runtime-replay`、`views/simulation`
+6. `mapping` — 只写 `apps/studio/src/views/mapping/**`（映射表生成在 3 里）
 
-规矩：不许某个代理自己发明 workflow 格式；契约只有 `packages/contracts` 一个来源。
+规矩：不许某个代理自己发明任务协议或声明格式；校验器只有 `packages/contracts` 一个来源。
+3、4、5 三个都要用校验器推导自己的定义，谁都不许手抄一份。
 
 ## 5. 需要提前定的东西
 
-**六段流水线的终态**（spec §6）。只有 `Succeeded` 一个出口是有问题的——失败、取消、未确认也是正式结果。
-这一条不定，M0 的状态机写不出来。
+**积木的可写程度。** 现在定的是「唯一可写」，那就意味着要处理非法中间态、要能编译回声明、
+要有撤销重做。如果只想先看效果，可以先把积木做成只读，等联动做通了再开写——
+但**别做成能拖却拖不动的形状**，那比不能拖更让人困惑。
 
-**3D 机器人。** 图里右栏那台是整张图最贵也最容易变成假动画的部分。真做需要模型资源加运动学，
-那是另一个项目的量级；假做就是循环播放的动画，而这个项目整套基调是可验证，假动画会毒掉它。
-**建议先做状态仿真**（逻辑跑通、步骤亮起、设备状态变化），3D 单独立项。前作给过同样的答案。
+**底部流水线当前显示什么。** 本阶段不执行，所以后三段不可达。建议只亮前三段
+（导入 / 校验 / 编译），其余灰置。要么这样，要么整条先不画。
 
-**图上有、但规划里补出来的三块**：设计期差异审核（AI 改动以 diff 呈现，确认后才写入）、
-执行回放、设备选择面板。前两块来自前作的设计稿，第三块是你新加的。
+**代码面板的渲染风格。** 图里那份是 Python 味的伪代码，但一期协议的参数名是 `linear`/`angular`，
+不是 `angle`；`stop_if_obstacle` 是原子动作，不是 if。**渲染规则从校验器推导，不要照图手写。**
+具体长什么样（`move(linear=0.2, angular=0.0, duration=5.0)` 还是别的）需要一个样例定下来。
 
-**OpenHarmony 协议细节。** 前作从头到尾没定（版本、发行形态、发现协议、握手都在待确认输入里）。
-这些不定，M5 只能做接口和 mock——**而 mock 必须与真机共享同一套契约**，否则仿真跑通不代表设备能跑。
-
-**自然语言生成的质量。** 建议 M4 开工前先用手工构造的十条样例跑一轮探底，再决定投入。
-
-**「执行」这个词要拆细。** 前作有一处标签不自洽：文件名写着 real-execution 的截图，内容其实是
-数据链路跑通，设备动作侧未提。新项目从第一天就把「数据链路执行」和「设备链路执行」分开标注。
+**`description` 字段的用途。** 任务里有它，但协议校验器不检查它。它是不是要显示在工作流画布上、
+作为任务标题？定了才好排版。
