@@ -161,6 +161,19 @@ describe('第二道闸的尺子来自声明出生时那台设备', () => {
 		expect(doc.declarationFormatRef.value).toBe('skill_plan');
 	});
 
+	it('技能计划下**不换设备**直接改一个技能参数也写得回（就是积木字段那一步）', () => {
+		setSelectedDevice('so101_robot');
+		expect(doc.loadTaskJson(SAMPLE_SKILL_PLAN_JSON)).toBe(true);
+		const index = indexOfSkill('move_relative_ee');
+
+		const next = withNodeParameter(index, { motion_distance: 0.07 });
+		expect(doc.applyDeclaration(next)).toBe(true);
+		expect(paramsAt(index)['motion_distance']).toBe(0.07);
+		// 尤其不许再出现「meta 里没有 task_id / schema_version / limits」那三条：
+		// 那是拿一期的尺子量技能计划的声明才会报的，两份格式的 meta 本来就不一样。
+		expect(doc.diagnostics.value).toEqual([]);
+	});
+
 	it('反证：同一份声明拿一期那把尺子量是过不去的——所以尺子只能取出生时那把', () => {
 		setSelectedDevice('so101_robot');
 		expect(doc.loadTaskJson(SAMPLE_SKILL_PLAN_JSON)).toBe(true);

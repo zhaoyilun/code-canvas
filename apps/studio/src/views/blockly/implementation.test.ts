@@ -28,10 +28,18 @@ import {
 	resolveSelection,
 	type RenderResult,
 } from '@codecanvas/blockly-toolkit';
+import { declarationToTask, findTaskFormat } from '@codecanvas/task-import';
 import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import { summarizeNodeParameters, nodeAction } from '../flow/summary';
 import { FIXTURE_CATALOG } from '../__fixtures__/catalog';
+
+/**
+ * 第二道闸的尺子，与 studio 里那条路一致：声明出生时的格式（这里是一期）+ 当前目录。
+ * 工具包自己不再假定是哪一种格式，所以每个 `compileWorkspace` 调用都要把尺子递进去。
+ */
+const phase1Gate = (declaration: Parameters<typeof declarationToTask>[0]) =>
+	findTaskFormat('phase1_task').validateDeclaration(declaration, { catalog: FIXTURE_CATALOG });
 
 const store = useStudioDocument();
 
@@ -166,7 +174,12 @@ describe('改积木上的数值', () => {
 		expect(cardReading('s1', 'duration')).toBe('5');
 
 		blockAt(1)?.setFieldValue(9, 'seconds');
-		const compiled = compileWorkspace({ workspace, base: declaration(), catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({
+			workspace,
+			base: declaration(),
+			catalog: FIXTURE_CATALOG,
+			validateDeclaration: phase1Gate,
+		});
 		expect(compiled.diagnostics).toEqual([]);
 		const next = compiled.declaration;
 		if (next === null) throw new Error('9 是合法时长，应当编译出声明');
@@ -202,7 +215,12 @@ describe('改积木上的数值', () => {
 
 		// 用户改的是**嵌在条件里**的那块：写回必须走完整棵树。
 		blockAtPath('1.condition.right').setFieldValue(0.7, 'value');
-		const compiled = compileWorkspace({ workspace, base: declaration(), catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({
+			workspace,
+			base: declaration(),
+			catalog: FIXTURE_CATALOG,
+			validateDeclaration: phase1Gate,
+		});
 		expect(compiled.diagnostics).toEqual([]);
 		const next = compiled.declaration;
 		if (next === null) throw new Error('0.7 是合法阈值，应当编译出声明');
@@ -246,7 +264,12 @@ describe('改积木上的数值', () => {
 		renderSelected(store.selectedNodeId.value);
 		blockAtPath('1.condition.right').setFieldValue(0, 'value');
 
-		const compiled = compileWorkspace({ workspace, base: declaration(), catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({
+			workspace,
+			base: declaration(),
+			catalog: FIXTURE_CATALOG,
+			validateDeclaration: phase1Gate,
+		});
 		expect(compiled.ok).toBe(false);
 		expect(compiled.declaration).toBeNull();
 		expect(compiled.diagnostics.map((diagnostic) => diagnostic.code)).toContain(

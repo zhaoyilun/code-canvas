@@ -10,7 +10,16 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as Blockly from 'blockly';
 import type { WorkflowDeclaration } from '@codecanvas/contracts';
-import { compileWorkspace, taskPayloadFromDeclaration } from '../src/compile';
+import { declarationToTask, findTaskFormat } from '@codecanvas/task-import';
+import { compileWorkspace } from '../src/compile';
+
+/**
+ * 第二道闸的尺子：测试里一律用一期协议那把（夹具目录就是按它写的）。
+ *
+ * 生产里这把尺子由 studio 按「声明出生时的设备格式」给——工具包自己不知道是哪一种格式。
+ */
+const phase1Gate = (declaration: Parameters<typeof declarationToTask>[0]) =>
+	findTaskFormat('phase1_task').validateDeclaration(declaration, { catalog: FIXTURE_CATALOG });
 import { activeNodeOf, collectChainBlocks, collectImplementationBlocks, renderDeclaration, type RenderResult } from '../src/render';
 import { identityOfBlock } from '../src/identity';
 import { implementationBlockType, registerImplementationBlocks } from '../src/blocks';
@@ -187,7 +196,7 @@ describe('选中模块 → 工作区', () => {
 
 describe('工作区 → 声明（只改参数）', () => {
 	it('没动字段时往返一致：身份字段、位置、连线、摘要全都一字不动', () => {
-		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG, validateDeclaration: phase1Gate });
 		expect(compiled.diagnostics).toEqual([]);
 		expect(compiled.ok).toBe(true);
 		const declaration = compiled.declaration;
@@ -204,7 +213,7 @@ describe('工作区 → 声明（只改参数）', () => {
 	it('改「等待」的时长 → 节点的 parameters.duration 跟着变，实现结构与别的节点不动', () => {
 		const before = base.nodes[0];
 		blockAt(1).setFieldValue(9, 'seconds');
-		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG, validateDeclaration: phase1Gate });
 		expect(compiled.diagnostics).toEqual([]);
 		const declaration = compiled.declaration;
 		if (declaration === null) throw new Error('改出合法值时应当编译出声明');
@@ -234,7 +243,7 @@ describe('工作区 → 声明（只改参数）', () => {
 		// 用户改的是**嵌在树里**的那块——写回必须走完整棵树，不能只看顶层那串。
 		threshold.setFieldValue(0.7, 'value');
 
-		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG, validateDeclaration: phase1Gate });
 		expect(compiled.diagnostics).toEqual([]);
 		const declaration = compiled.declaration;
 		if (declaration === null) throw new Error('0.7 是合法阈值，应当编译出声明');
@@ -263,7 +272,7 @@ describe('工作区 → 声明（只改参数）', () => {
 		rendered = renderSelected(nodeOfStep(base, 's3').id);
 		const turn = base.nodes[2];
 		blockAt(0).setFieldValue(0.9, 'angular');
-		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG, validateDeclaration: phase1Gate });
 		const declaration = compiled.declaration;
 		if (declaration === null) throw new Error('应当编译出声明');
 
@@ -276,7 +285,7 @@ describe('工作区 → 声明（只改参数）', () => {
 	it('画布上把块从链里摘掉也不改结构：声明里的节点数还是那么多', () => {
 		// 结构只读，删块只是画布上的事——步骤由目录与声明决定，不由画布决定。
 		blockAt(2).dispose(false);
-		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG, validateDeclaration: phase1Gate });
 		expect(compiled.ok).toBe(true);
 		const declaration = compiled.declaration;
 		if (declaration === null) throw new Error('应当编译出声明');
@@ -287,7 +296,7 @@ describe('工作区 → 声明（只改参数）', () => {
 	it('distance = 0 → 拒绝写出声明，只给诊断', () => {
 		rendered = renderSelected(nodeOfStep(base, 's2').id);
 		blockAtPath(workspace, '1.condition.right')?.setFieldValue(0, 'value');
-		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG, validateDeclaration: phase1Gate });
 		expect(compiled.ok).toBe(false);
 		expect(compiled.declaration).toBeNull();
 		const diagnostic = compiled.diagnostics.find((item) => item.code === 'step.stop_if_obstacle.distance.range');
@@ -299,7 +308,7 @@ describe('工作区 → 声明（只改参数）', () => {
 	it('joint_id = 9 → 拒绝写出声明，只给诊断', () => {
 		rendered = renderSelected(nodeOfStep(base, 's6').id);
 		blockAt(0).setFieldValue(9, 'joint_id');
-		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG, validateDeclaration: phase1Gate });
 		expect(compiled.ok).toBe(false);
 		expect(compiled.declaration).toBeNull();
 		expect(compiled.diagnostics.map((item) => item.code)).toContain('step.arm_joint.joint_id.range');
@@ -307,7 +316,7 @@ describe('工作区 → 声明（只改参数）', () => {
 
 	it('超出任务限值（linear > max_linear）也拒', () => {
 		blockAt(0).setFieldValue(0.9, 'linear');
-		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG, validateDeclaration: phase1Gate });
 		expect(compiled.ok).toBe(false);
 		expect(compiled.diagnostics.map((item) => item.code)).toContain('step.move.linear.range');
 	});
@@ -315,7 +324,7 @@ describe('工作区 → 声明（只改参数）', () => {
 	it('勾掉全部传感器 → sensors 为空数组，校验器拒', () => {
 		rendered = renderSelected(nodeOfStep(base, 's2').id);
 		blockAtPath(workspace, '0.value')?.setFieldValue(false, 'sensor_scan0');
-		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG, validateDeclaration: phase1Gate });
 		expect(compiled.ok).toBe(false);
 		expect(compiled.diagnostics.map((item) => item.code)).toContain('step.stop_if_obstacle.sensors.invalid');
 	});
@@ -325,7 +334,7 @@ describe('工作区 → 声明（只改参数）', () => {
 			{ id: 'bl_unknown', type: typeOf('move', 'call_stmt', '1'), x: 0, y: 400 },
 			workspace,
 		);
-		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG, validateDeclaration: phase1Gate });
 		expect(compiled.ok).toBe(false);
 		expect(compiled.declaration).toBeNull();
 		expect(compiled.diagnostics.map((item) => item.code)).toContain('blockly.compile.unknown_block');
@@ -349,7 +358,7 @@ describe('工作区 → 声明（只改参数）', () => {
 			workspace,
 		);
 		expect(stray).toBeDefined();
-		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG });
+		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG, validateDeclaration: phase1Gate });
 		expect(compiled.ok).toBe(false);
 		expect(compiled.diagnostics.map((item) => item.code)).toContain('blockly.compile.unknown_step');
 	});
@@ -447,24 +456,40 @@ describe('目录查不到时（画布如实说，不猜）', () => {
 	});
 });
 
-describe('任务载荷', () => {
-	it('从声明还原出的任务 JSON 能再次过校验器（与导入时同一套规则）', () => {
-		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG });
+describe('任务语义那一道闸由调用方给尺子', () => {
+	it('给了尺子：声明还原出的任务 JSON 能再次过校验器（与导入时同一套规则）', () => {
+		const compiled = compileWorkspace({ workspace, base, catalog: FIXTURE_CATALOG, validateDeclaration: phase1Gate });
 		if (compiled.declaration === null) throw new Error('应当编译出声明');
-		const payload = taskPayloadFromDeclaration(compiled.declaration);
-		expect(payload.ok).toBe(true);
-		if (!payload.ok) return;
-		expect(payload.task).toMatchObject({ task_id: 'task-blockly-001', schema_version: '1.0' });
+		const task = declarationToTask(compiled.declaration);
+		expect(task).toMatchObject({ task_id: 'task-blockly-001', schema_version: '1.0' });
+		expect(phase1Gate(compiled.declaration).ok).toBe(true);
 	});
 
-	it('meta 缺任务元数据时不硬编，直接报缺失', () => {
-		const payload = taskPayloadFromDeclaration({ ...base, meta: {} });
-		expect(payload.ok).toBe(false);
-		if (payload.ok) return;
-		expect(payload.diagnostics.map((item) => item.code)).toEqual([
-			'blockly.compile.missing_task_metadata',
-			'blockly.compile.missing_task_metadata',
-			'blockly.compile.missing_task_metadata',
-		]);
+	it('一期那把尺子认得出**别的格式**的声明（不硬编、也不含糊）', () => {
+		// 技能计划的声明：动作名是 RoboFrame 的技能，meta 里也没有一期的 task_id / limits。
+		const skillPlanDeclaration = {
+			...base,
+			meta: { schemaVersion: 1, robot: 'so101_single_arm' },
+			nodes: base.nodes.map((node) => ({
+				...node,
+				parameters: { ...node.parameters, action: 'wave_hello' },
+			})),
+		};
+		const result = phase1Gate(skillPlanDeclaration);
+		expect(result.ok).toBe(false);
+		expect(result.diagnostics.map((item) => item.code)).toContain('step.action.unknown');
+	});
+
+	it('技能计划那把尺子也认不出一期的声明（两个方向都关上）', () => {
+		const result = findTaskFormat('skill_plan').validateDeclaration(base, { catalog: FIXTURE_CATALOG });
+		expect(result.ok).toBe(false);
+		expect(result.diagnostics.map((item) => item.code)).toContain('plan.robot.missing');
+	});
+
+	it('还原出的任务 JSON 里，meta 缺的键由**还原层**兜底，不是这里编的', () => {
+		// `declarationToTask` 对缺 meta 的声明会填协议默认值（schema_version / task_id / limits）——
+		// 那是还原层的既定行为，工具包不再自己另立一套「缺了就是缺了」的更严口径。
+		const task = declarationToTask({ ...base, meta: {} });
+		expect(task).toMatchObject({ schema_version: '1.0', task_id: base.id });
 	});
 });

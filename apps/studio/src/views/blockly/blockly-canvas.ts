@@ -42,6 +42,7 @@ import {
 	type ThemePalette,
 } from '@codecanvas/blockly-toolkit';
 import { DEVICES } from '../../shell/devices';
+import { findTaskFormat } from '@codecanvas/task-import';
 import { useStudioDocument } from '../../state/document';
 import {
 	NODE_ID_ATTRIBUTE,
@@ -375,8 +376,17 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 		if (current === null || base === null || writeSuspended.value) return;
 
 		const catalog = store.declarationCatalog.value;
-		if (catalog === null) return;
-		const result = compileWorkspace({ workspace: current, base, catalog });
+		// 第二道闸的尺子：**声明出生时那种格式**（设备属性，工具包不知道是哪一种）。
+		// 缺了它，工具包只能做结构校验——那样改坏的参数会被静默写回。
+		const formatRef = store.declarationFormatRef.value;
+		if (catalog === null || formatRef === null) return;
+		const format = findTaskFormat(formatRef);
+		const result = compileWorkspace({
+			workspace: current,
+			base,
+			catalog,
+			validateDeclaration: (declaration) => format.validateDeclaration(declaration, { catalog }),
+		});
 		blockIndex.value = result.index;
 		compileDiagnostics.value = [...result.diagnostics];
 

@@ -12,14 +12,13 @@
  * 再按形状取字段——路径对不上就报 `blockly.compile.unknown_step`，不猜。
  *
  * 合法性判定一律交给校验器：先跑 `validateWorkflowDeclaration`（声明形状 + 摘要），
- * 再用声明还原出一份任务 JSON 跑 `validateTask`（参数约束）。任一不过 → 不给声明，只给诊断。
+ * 再把声明交给调用方给的**任务语义尺子**（`validateDeclaration`）跑一遍参数约束。任一不过 → 不给声明，只给诊断。
  */
 import type * as Blockly from 'blockly';
 import {
 	computeWorkflowDigest,
 	DiagnosticCollector,
 	findCapability,
-	validateTask,
 	validateWorkflowDeclaration,
 	type CapabilityCatalog,
 	type Diagnostic,
@@ -37,6 +36,19 @@ export interface CompileOptions {
 	/** 作为身份来源的原声明：补丁打在它身上，其它部分一字不动。 */
 	readonly base: WorkflowDeclaration;
 	readonly catalog: CapabilityCatalog;
+	/**
+	 * **第二道闸**（任务语义）由调用方给：任务格式是设备属性，工具包不该假定是哪一种。
+	 *
+	 * 一期协议的七种动作、技能计划的技能名，各有各的判据与各自的诊断码——
+	 * 写死在这里，换一台设备就会拿错尺子：一份完全合法的技能计划会因为
+	 * 「meta 里没有 task_id」被拒（那份 meta 里本来就不该有它）。
+	 * 所以这里只负责问一句「这份声明你收不收」，答话的是知道格式的那一层。
+	 *
+	 * 不给就跑不了这一道闸——那时会**如实报一条警告**，不假装校验过了。
+	 */
+	readonly validateDeclaration?: (
+		declaration: WorkflowDeclaration,
+	) => { readonly ok: boolean; readonly diagnostics: readonly Diagnostic[] };
 }
 
 export interface CompileResult {
@@ -135,66 +147,6 @@ const parametersFromShape = (
 	}
 
 	return parameters;
-};
-
-/**
- * 声明还原成任务 JSON：参数校验跑的是导入时那一套校验器，不是另写一份。
- *
- * 注意这一步是导入的**逆映射**：声明里步骤的语义身份叫 `parameters.step_id`（spec §1.2），
- * 任务 JSON 里同一个东西叫 `steps[].id`——名字不同，指同一件事。
- */
-export type TaskPayloadResult =
-	| { readonly ok: true; readonly task: unknown }
-	| { readonly ok: false; readonly diagnostics: readonly Diagnostic[] };
-
-export const stepPayload = (parameters: JsonObject): JsonObject => {
-	const step: JsonObject = { ...parameters };
-	const stepId = step['step_id'];
-	delete step['step_id'];
-	return typeof stepId === 'string' ? { id: stepId, ...step } : step;
-};
-
-export const taskPayloadFromDeclaration = (declaration: WorkflowDeclaration): TaskPayloadResult => {
-	const collector = new DiagnosticCollector();
-	const meta = declaration.meta;
-	const taskId = meta['task_id'];
-	const schemaVersion = meta['schema_version'];
-	const limits = meta['limits'];
-
-	if (typeof taskId !== 'string' || taskId.length === 0) {
-		collector.error({
-			code: 'blockly.compile.missing_task_metadata',
-			message: '声明 meta 里没有 task_id，参数没法按任务协议校验',
-			path: 'meta.task_id',
-		});
-	}
-	if (typeof schemaVersion !== 'string') {
-		collector.error({
-			code: 'blockly.compile.missing_task_metadata',
-			message: '声明 meta 里没有 schema_version',
-			path: 'meta.schema_version',
-		});
-	}
-	if (typeof limits !== 'object' || limits === null || Array.isArray(limits)) {
-		collector.error({
-			code: 'blockly.compile.missing_task_metadata',
-			message: '声明 meta 里没有 limits，限值判定就没有尺子',
-			path: 'meta.limits',
-		});
-	}
-	if (collector.hasErrors) return { ok: false, diagnostics: collector.diagnostics };
-
-	const description = meta['description'];
-	return {
-		ok: true,
-		task: {
-			schema_version: schemaVersion,
-			task_id: taskId,
-			...(typeof description === 'string' ? { description } : {}),
-			steps: declaration.nodes.map((node) => stepPayload(node.parameters)),
-			limits,
-		},
-	};
 };
 
 /** 一个节点的参数补丁 + 它从哪块积木来（诊断里要点名）。 */
@@ -308,11 +260,15 @@ export const compileWorkspace = (options: CompileOptions): CompileResult => {
 	absorb(collector, workflowValidation.diagnostics);
 
 	if (workflowValidation.ok) {
-		const payload = taskPayloadFromDeclaration(declaration);
-		if (!payload.ok) {
-			absorb(collector, payload.diagnostics);
+		if (options.validateDeclaration === undefined) {
+			collector.warning({
+				code: 'blockly.compile.no_semantic_gate',
+				message: '没有给任务语义的尺子，这份声明只过了结构校验',
+				path: 'meta',
+			});
 		} else {
-			absorb(collector, validateTask(payload.task).diagnostics);
+			const semantic = options.validateDeclaration(declaration);
+			absorb(collector, semantic.diagnostics);
 		}
 	}
 

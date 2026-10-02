@@ -47,6 +47,20 @@ const formatRef = computed<TaskFormatRef | null>(() => selectedDevice.value?.for
 const formatLabel = computed(() => (formatRef.value === null ? '' : findTaskFormat(formatRef.value).label));
 
 /**
+ * 粘贴框里的例子**跟着当前设备的格式走**。
+ *
+ * 写死一期那份形状是有害的：占位符是用户照着抄的东西，抄进去当场被拒，
+ * 而错在他抄的是我们给的例子——那比空着还坏。
+ */
+const PASTE_EXAMPLE: Readonly<Record<TaskFormatRef, string>> = {
+	phase1_task: '{ "schema_version": "1.0", "task_id": "task-1", "steps": [ ... ] }',
+	skill_plan: '{ "schemaVersion": 1, "robot": "so101_single_arm", "plan": [ { "step": "skill", "skill": "…" } ] }',
+};
+const pastePlaceholder = computed(() =>
+	formatRef.value === null ? '' : PASTE_EXAMPLE[formatRef.value],
+);
+
+/**
  * 真机还是仿真：设备名里也有括号说明，但那是一串长文字里的一部分，容易被略过。
  * 这一行是**单独说的**——发给仿真还是发给真机，是这条链上最要紧的一个区别。
  */
@@ -514,7 +528,7 @@ const location = (diagnostic: Diagnostic): string => {
 						data-testid="task-json-input"
 						aria-label="任务 JSON"
 						spellcheck="false"
-						placeholder='{ "schema_version": "1.0", "task_id": "task-1", "steps": [ ... ] }'
+						:placeholder="pastePlaceholder"
 					></textarea>
 					<div class="paste-actions">
 						<button
