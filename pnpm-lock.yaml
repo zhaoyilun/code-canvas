@@ -23,6 +23,9 @@ importers:
       '@codecanvas/blockly-toolkit':
         specifier: workspace:*
         version: link:../../packages/blockly-toolkit
+      '@codecanvas/capabilities':
+        specifier: workspace:*
+        version: link:../../packages/capabilities
       '@codecanvas/code-render':
         specifier: workspace:*
         version: link:../../packages/code-render
@@ -73,6 +76,19 @@ importers:
         specifier: ^12.5.1
         version: 12.5.1
     devDependencies:
+      '@codecanvas/capabilities':
+        specifier: workspace:*
+        version: link:../capabilities
+      vitest:
+        specifier: ^5.0.3
+        version: 5.0.3(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@29.1.1)(vite@8.3.2(@types/node@26.6.4))
+
+  packages/capabilities:
+    dependencies:
+      '@codecanvas/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+    devDependencies:
       vitest:
         specifier: ^5.0.3
         version: 5.0.3(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@29.1.1)(vite@8.3.2(@types/node@26.6.4))
@@ -83,6 +99,9 @@ importers:
         specifier: workspace:*
         version: link:../contracts
     devDependencies:
+      '@codecanvas/capabilities':
+        specifier: workspace:*
+        version: link:../capabilities
       '@codecanvas/task-import':
         specifier: workspace:*
         version: link:../task-import

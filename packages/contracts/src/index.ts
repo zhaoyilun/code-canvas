@@ -11,3 +11,4 @@ export * from './diagnostic';
 export * from './stable-ids';
 export * from './task-protocol';
 export * from './workflow';
+export * from './capability';

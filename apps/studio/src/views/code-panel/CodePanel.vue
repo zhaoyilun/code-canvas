@@ -2,131 +2,117 @@
 /**
  * 右栏代码面板（spec §4.1）：**编译产物，只读**。
  *
- * - 文本由 `@codecanvas/code-render` 从声明渲染而来，规则追到校验器；这里不拼一个字符的调用。
- * - `selectedNodeId` 变化时高亮它渲染出的那几行，并把它滚进视野。
- * - **点一行就是选那一步**（M3 的三向联动）：行 → `store.select(nodeId)`，积木与流程卡片同时亮。
- *   行 ↔ nodeId 的映射来自 `renderDeclaration()` 的 `lines[].nodeId`，不在这里重算一遍。
- * - 每行调用前面挂序号徽标（`SequenceBadge`，与流程卡片同一个组件、与积木同一组 `--cc-seq-*` 变量）；
- *   首行是任务名注释，不属于任何步骤，所以没有徽标——这也是「徽标只落在调用行上」的判据。
- * - 安全限值常驻底部——限值躺在 JSON 里没人知道，等于没有。
- * - 声明换了（改积木写回 → `applyDeclaration`）这里跟着重算，这就是「改参数 → 数字跟着变」。
+ * 粒度是「工作流上的一个模块 = 一个函数」：面板显示**当前选中模块的实现**——
+ * 那个能力在目录里的 `implementation`，也就是机器为了执行它具体做了什么。
+ * 文本一个字都不在这里拼：`renderImplementation()` 从 `PHASE1_ROBOT_CATALOG` 的原语定义推导，
+ * 连「第几行是第几步」也是它给的（`steps[]` / `steps[].stepIndex`），这里只渲染，不重算。
+ *
+ * - 选中项从 `useStudioDocument()` 读（流程卡片、积木、都一样）；还没选时退到第一个模块，
+ *   于是面板一打开就有东西可看——**退档只影响显示，不去改写共享的选中状态**。
+ * - 选中变化 → 重新渲染，这就是「点流程卡片 → 代码跟着换」那条链。
+ * - 行首的序号徽标是这次渲染里的**第几步实现**（`SequenceBadge`，与流程卡片、积木同一个组件、
+ *   同一组 `--cc-seq-*` 变量）；行号与步骤号分开摆，因为一行实现不等于一步工作流。
+ * - 安全限值常驻底部——它属于**整个任务**（`meta.limits`），不随选中哪个模块变。
  */
 import { computed, nextTick, ref, watch } from 'vue';
-import { renderDeclaration, spanOfNode } from '@codecanvas/code-render';
+import { PHASE1_ROBOT_CATALOG } from '@codecanvas/capabilities';
+import { renderImplementation } from '@codecanvas/code-render';
 import { useStudioDocument } from '../../state/document';
 import { stepNumbersOf } from '../shared/sequence-badge';
 import SequenceBadge from '../shared/SequenceBadge.vue';
 
 const doc = useStudioDocument();
 
-const program = computed(() => renderDeclaration(doc.declaration.value));
-const hasDeclaration = computed(() => doc.declaration.value !== null);
-const activeNodeId = computed(() => doc.selectedNodeId.value);
-const selectedSpan = computed(() => {
-	const id = activeNodeId.value;
-	return id === null ? null : spanOfNode(program.value, id);
+/** 当前显示的模块：选中的那个；没选中时退到第一个（不改共享状态）。 */
+const activeNode = computed(() => doc.selectedNode.value ?? doc.nodes.value[0] ?? null);
+
+/** 退档显示：面板显示的不是「选中的」模块，页脚要如实说出来。 */
+const isFallback = computed(() => doc.selectedNodeId.value === null && activeNode.value !== null);
+
+const program = computed(() =>
+	renderImplementation({
+		node: activeNode.value,
+		catalog: PHASE1_ROBOT_CATALOG,
+		declaration: doc.declaration.value,
+	}),
+);
+
+/** 这个模块是工作流里的第几步（与流程卡片、积木徽标同一个口径）。 */
+const nodeOrdinal = computed(() => {
+	const node = activeNode.value;
+	if (node === null) return null;
+	return stepNumbersOf(doc.nodes.value).get(node.id) ?? null;
 });
 
-/** 步骤序数：按声明顺序（第 n 个节点是第 n 步），与积木徽标、流程卡片同一个口径。 */
-const stepNumbers = computed(() => stepNumbersOf(doc.declaration.value?.nodes ?? []));
+/** 它属于哪份任务：面板是任务级视图（限值也是任务级的），顶上说清这一点。 */
+const taskName = computed(() => doc.declaration.value?.name ?? '');
 
-const isHighlighted = (nodeId: string | null): boolean => nodeId !== null && nodeId === activeNodeId.value;
-
-/** 这一行的步骤序数；注释行（nodeId 为 null）返回 null —— 徽标只落在调用行上。 */
-const stepIndexOf = (nodeId: string | null): number | null =>
-	nodeId === null ? null : (stepNumbers.value.get(nodeId) ?? null);
-
-/** 点一行 = 选那一步。只推 nodeId，blockId 由积木那侧按映射表解析（与流程卡片同一条路）。 */
-function selectLine(nodeId: string | null): void {
-	if (nodeId === null) return;
-	doc.select(nodeId);
-}
-
-/** 键盘可达：行是 button 语义，Enter/Space 与点击同义。 */
-function onLineKeydown(event: KeyboardEvent, nodeId: string | null): void {
-	if (event.key !== 'Enter' && event.key !== ' ') return;
-	event.preventDefault();
-	selectLine(nodeId);
-}
+const limits = computed(() => program.value.limits);
+const warnings = computed(() => program.value.diagnostics);
 
 const scroller = ref<HTMLElement | null>(null);
 
-// 选中项可能在另一栏被点到，视线得跟过去；`block: 'nearest'` 保证不把面板整体滚飞。
-// scrollIntoView 在测试用的 DOM 实现里可能没有，所以先探一下再调。
+// 换模块时视线回到实现的第一行。scrollIntoView 在测试用的 DOM 实现里可能没有，所以先探一下再调。
 watch(
-	() => selectedSpan.value?.startLine,
-	async (line) => {
-		if (line === undefined) return;
+	() => program.value.nodeId,
+	async () => {
 		await nextTick();
-		const target = scroller.value?.querySelector(`[data-line="${line}"]`);
+		const target = scroller.value?.querySelector('[data-line="1"]');
 		if (target !== null && target !== undefined && typeof target.scrollIntoView === 'function') {
 			target.scrollIntoView({ block: 'nearest' });
 		}
 	},
 );
-
-const limits = computed(() => program.value.limits);
-const warnings = computed(() => program.value.diagnostics);
 </script>
 
 <template>
 	<section class="code-panel" data-testid="code-panel">
 		<header class="cp-header">
-			<span class="cp-title">代码</span>
-			<span class="cp-tag">编译产物</span>
-			<span class="cp-tag cp-tag-readonly">只读</span>
-			<span class="cp-count">{{ program.callCount }} 个调用</span>
+			<div class="cp-head-row">
+				<SequenceBadge v-if="nodeOrdinal !== null" :index="nodeOrdinal" testid="code-node-index" />
+				<span class="cp-title" data-testid="code-title">{{ program.title ?? '代码' }}</span>
+				<span class="cp-tag">编译产物</span>
+				<span class="cp-tag cp-tag-readonly">只读</span>
+				<span v-if="program.nodeId !== null" class="cp-count">{{ program.callCount }} 个原语</span>
+			</div>
+			<span v-if="taskName !== ''" class="cp-task" data-testid="code-task-name">{{ taskName }}</span>
 		</header>
 
-		<div v-if="!hasDeclaration" class="cp-empty">
-			<p>还没有声明——导入一份任务 JSON 后这里会显示它编译出来的调用。</p>
+		<div v-if="!doc.hasDeclaration.value" class="cp-empty" data-testid="code-empty-task">
+			<p>还没有声明——导入一份任务 JSON 后，这里会显示选中模块的实现。</p>
 		</div>
 
 		<template v-else>
-			<div ref="scroller" class="cp-code" data-testid="code-scroll">
+			<div v-if="program.lines.length === 0" class="cp-empty" data-testid="code-empty-module">
+				<p>还没有选中模块——在流程画布或积木里点一个，这里显示它的实现。</p>
+			</div>
+
+			<div v-else ref="scroller" class="cp-code" data-testid="code-scroll">
 				<ol class="cp-lines">
+					<!--
+						一行 = 实现里的一步原语（或一句注记）。行号、步骤号分开摆：
+						`data-step` 是 `implementation` 的下标（0 基），界面的高亮与联动一律读它。
+					-->
 					<li
 						v-for="line in program.lines"
 						:key="line.line"
 						class="cp-line"
-						:class="{
-							'is-call': line.kind === 'call',
-							'is-unsupported': line.kind === 'unsupported',
-							'is-active': isHighlighted(line.nodeId),
-							'is-clickable': line.nodeId !== null,
-						}"
+						:class="{ 'is-call': line.kind === 'call', 'is-unsupported': line.kind === 'unsupported' }"
 						:data-line="line.line"
-						:data-node-id="line.nodeId ?? undefined"
 						:data-kind="line.kind"
+						:data-step="line.stepIndex ?? undefined"
+						:data-primitive="line.primitiveRef ?? undefined"
+						:data-node-id="activeNode?.id ?? undefined"
 					>
-						<!--
-							整行是一个按钮（不是给 li 挂 click）：行的命中区就是整行，键盘能 Tab 到、Enter 选中，
-							ol/li 的列表语义也不受影响。注释行没有 nodeId，不是按钮，也就点不动。
-						-->
-						<button
-							v-if="line.nodeId !== null"
-							type="button"
-							class="cp-hit"
-							:data-testid="line.kind === 'call' ? 'code-call-line' : undefined"
-							:data-step="stepIndexOf(line.nodeId) ?? undefined"
-							:aria-current="isHighlighted(line.nodeId) ? 'true' : undefined"
-							@click="selectLine(line.nodeId)"
-							@keydown="onLineKeydown($event, line.nodeId)"
-						>
+						<span class="cp-hit">
 							<SequenceBadge
-								v-if="stepIndexOf(line.nodeId) !== null"
-								:index="stepIndexOf(line.nodeId) as number"
-								:active="isHighlighted(line.nodeId)"
-								testid="code-line-index"
+								v-if="line.stepIndex !== null"
+								:index="line.stepIndex + 1"
+								testid="code-step-index"
 							/>
 							<span class="cp-ln" aria-hidden="true">{{ line.line }}</span>
 							<code class="cp-src">{{ line.text === '' ? ' ' : line.text }}</code>
-						</button>
-
-						<div v-else class="cp-hit is-static">
-							<span class="cp-ln" aria-hidden="true">{{ line.line }}</span>
-							<code class="cp-src">{{ line.text === '' ? ' ' : line.text }}</code>
-						</div>
+						</span>
 					</li>
 				</ol>
 			</div>
@@ -141,26 +127,40 @@ const warnings = computed(() => program.value.diagnostics);
 			<section class="cp-limits" data-testid="code-limits">
 				<header class="cp-limits-head">
 					<span class="cp-limits-title">安全限值</span>
+					<span class="cp-limits-note">整个任务的上限</span>
 					<span v-if="!limits.present" class="cp-limits-note">声明里没有，显示协议安全上限</span>
 				</header>
+				<!--
+					限值排成一行可折的芯片，不排成表：它属于整个任务、不随选中模块变，
+					但也不能把上面那块实现挤到只剩一行。四条信息一条不漏，只是更紧。
+					「已收紧」只在真的比安全上限紧时才占位置——常态下每个都挂着「上限」是噪音。
+				-->
 				<ul class="cp-limit-list">
-					<li v-for="limit in limits.numeric" :key="limit.name" class="cp-limit">
+					<li
+						v-for="limit in limits.numeric"
+						:key="limit.name"
+						class="cp-limit"
+						:title="limit.tightened ? '比协议安全上限更紧' : '协议安全上限'"
+					>
 						<span class="cp-limit-name">{{ limit.name }}</span>
 						<span class="cp-limit-value">{{ limit.text }}</span>
-						<span v-if="limit.tightened" class="cp-limit-flag" title="比协议安全上限更紧">已收紧</span>
-						<span v-else class="cp-limit-flag cp-limit-flag-max" title="协议安全上限">上限</span>
+						<span v-if="limit.tightened" class="cp-limit-flag">已收紧</span>
+					</li>
+					<li class="cp-limit cp-limit-confirm">
+						运行前需确认：<strong>{{ limits.requireConfirmation ? '是' : '否' }}</strong>
 					</li>
 				</ul>
-				<p class="cp-limit-confirm">
-					运行前需确认：<strong>{{ limits.requireConfirmation ? '是' : '否' }}</strong>
-				</p>
 			</section>
 
 			<footer class="cp-footer">
-				<span v-if="selectedSpan !== null" class="cp-footer-selected">
-					选中 {{ selectedSpan.nodeName }} · 第 {{ selectedSpan.startLine }} 行
+				<span v-if="isFallback" class="cp-footer-hint" data-testid="code-footer-fallback">
+					还没选中模块，先显示第 {{ nodeOrdinal }} 个：{{ program.nodeName }}
 				</span>
-				<span v-else class="cp-footer-hint">在积木那侧改一个参数，这里跟着变</span>
+				<span v-else-if="program.nodeId !== null" class="cp-footer-selected" data-testid="code-footer-selected">
+					选中 {{ program.nodeName }} · 实现 {{ program.lines.length }} 行
+				</span>
+				<span v-else class="cp-footer-hint">在流程画布或积木里点一个模块，这里显示它的实现</span>
+				<span class="cp-footer-source">实现来自目录：{{ PHASE1_ROBOT_CATALOG.displayName }}</span>
 			</footer>
 		</template>
 	</section>
@@ -177,10 +177,24 @@ const warnings = computed(() => program.value.diagnostics);
 
 .cp-header {
 	display: flex;
-	align-items: baseline;
-	gap: var(--cc-space-2);
+	flex-direction: column;
+	gap: var(--cc-space-1);
 	padding: var(--cc-space-3) var(--cc-space-4);
 	border-bottom: 1px solid var(--cc-line);
+}
+
+.cp-head-row {
+	display: flex;
+	align-items: baseline;
+	gap: var(--cc-space-2);
+	flex-wrap: wrap;
+}
+
+/* 任务名：退到第二行，字号最小——它是上下文（这个模块属于哪份任务），不是标题。 */
+.cp-task {
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-faint);
 }
 
 .cp-title {
@@ -225,7 +239,8 @@ const warnings = computed(() => program.value.diagnostics);
 
 .cp-code {
 	flex: 1 1 auto;
-	min-height: 0;
+	/* 再挤也要留住三行实现的可见高度：这块是面板的主体，限值与页脚不许把它顶没。 */
+	min-height: 7em;
 	overflow: auto;
 	padding: var(--cc-space-3) 0;
 	background: var(--cc-surface-sunken);
@@ -237,7 +252,8 @@ const warnings = computed(() => program.value.diagnostics);
 	list-style: none;
 	font-family: var(--cc-font-mono);
 	font-size: var(--cc-fs-md);
-	line-height: 1.9;
+	/* 行距紧一档：右栏那块地方要容得下「模块的实现」整段，而不是让人先滚一下才看得到末尾。 */
+	line-height: 1.7;
 }
 
 .cp-line {
@@ -246,46 +262,16 @@ const warnings = computed(() => program.value.diagnostics);
 }
 
 /*
- * 行内命中区（一个 reset 干净的按钮）：整行可点，键盘也能 Tab 到。注释行用同一个类但带 `.is-static`，
- * 于是两种行的排版、行号对齐、折行行为完全一致——差别只在「能不能点」，不在长得不一样。
+ * 行内容：序号徽标 + 行号 + 源码。三种行（调用 / 说明 / 注记）共用同一套排版，
+ * 差别只在颜色与「有没有徽标」——不为了好看把行号码齐到不同的列上。
  */
 .cp-hit {
 	display: flex;
 	align-items: flex-start;
-	gap: var(--cc-space-2);
+	gap: var(--cc-space-1);
 	flex: 1 1 auto;
 	min-width: 0;
-	margin: 0;
-	padding: 0 var(--cc-space-3);
-	font: inherit;
-	color: inherit;
-	text-align: left;
-	background: none;
-	border: none;
-	border-left: var(--cc-highlight-border-width) solid transparent;
-}
-
-.cp-hit:not(.is-static) {
-	cursor: pointer;
-}
-
-.cp-hit:focus-visible {
-	outline: var(--cc-highlight-border-width) solid var(--cc-highlight);
-	outline-offset: calc(-1 * var(--cc-highlight-border-width));
-}
-
-/*
- * 高亮：**与另外两栏同一套**——同一条强调色、同一个描边粗细（都是 `--cc-highlight*`），
- * 连徽标的选中态都是同一个（`SequenceBadge` 的 active）。`.is-active` 必须排在 `.is-call` 之后，
- * 否则同权重下调用行的常态色会盖掉高亮色。
- */
-.cp-line.is-active {
-	background: var(--cc-accent-veil);
-}
-
-.cp-line.is-active .cp-hit {
-	border-left-color: var(--cc-highlight);
-	box-shadow: var(--cc-highlight-glow);
+	padding: 0 var(--cc-space-2);
 }
 
 .cp-ln {
@@ -296,7 +282,7 @@ const warnings = computed(() => program.value.diagnostics);
 	user-select: none;
 }
 
-/* 右栏只有 360px：长调用折行显示，不横向滚动（折行不改行号，行 ↔ nodeId 仍然一一对应）。 */
+/* 右栏只有 360px：长调用折行显示，不横向滚动（折行不改行号，行 ↔ 步骤仍然一一对应）。 */
 .cp-src {
 	flex: 1 1 auto;
 	min-width: 0;
@@ -311,11 +297,6 @@ const warnings = computed(() => program.value.diagnostics);
 
 .cp-line.is-unsupported .cp-src {
 	color: var(--cc-danger-strong);
-}
-
-.cp-line.is-active .cp-ln,
-.cp-line.is-active .cp-src {
-	color: var(--cc-accent-strong);
 }
 
 .cp-warnings {
@@ -345,6 +326,7 @@ const warnings = computed(() => program.value.diagnostics);
 	display: flex;
 	align-items: baseline;
 	gap: var(--cc-space-2);
+	flex-wrap: wrap;
 	margin-bottom: var(--cc-space-2);
 }
 
@@ -363,14 +345,15 @@ const warnings = computed(() => program.value.diagnostics);
 	margin: 0;
 	padding: 0;
 	list-style: none;
-	display: grid;
-	gap: var(--cc-space-1);
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--cc-space-1) var(--cc-space-2);
 }
 
 .cp-limit {
-	display: flex;
+	display: inline-flex;
 	align-items: baseline;
-	gap: var(--cc-space-2);
+	gap: var(--cc-space-1);
 	font-family: var(--cc-font-mono);
 	font-size: var(--cc-fs-sm);
 }
@@ -384,7 +367,6 @@ const warnings = computed(() => program.value.diagnostics);
 }
 
 .cp-limit-flag {
-	margin-left: auto;
 	padding: 0 var(--cc-space-1);
 	font-size: var(--cc-fs-xs);
 	color: var(--cc-accent-dim);
@@ -392,14 +374,7 @@ const warnings = computed(() => program.value.diagnostics);
 	border-radius: var(--cc-radius-sm);
 }
 
-.cp-limit-flag-max {
-	color: var(--cc-text-faint);
-	border-color: var(--cc-line-strong);
-}
-
 .cp-limit-confirm {
-	margin: var(--cc-space-2) 0 0;
-	font-size: var(--cc-fs-sm);
 	color: var(--cc-text-dim);
 }
 
@@ -408,10 +383,20 @@ const warnings = computed(() => program.value.diagnostics);
 }
 
 .cp-footer {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: var(--cc-space-1) var(--cc-space-2);
 	padding: var(--cc-space-2) var(--cc-space-4);
 	font-family: var(--cc-font-mono);
 	font-size: var(--cc-fs-sm);
 	color: var(--cc-text-faint);
 	border-top: 1px solid var(--cc-line);
+}
+
+.cp-footer-source {
+	margin-left: auto;
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-faint);
 }
 </style>

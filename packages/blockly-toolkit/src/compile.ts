@@ -1,8 +1,10 @@
 /**
  * 工作区 → 声明（spec §4.1 的「写」方向，全系统唯一的写路径）。
  *
- * 规则：**只改 parameters**。`id` / `name` / `type` / `typeVersion` / `position` 从原声明里
- * 按身份取回，`formatVersion` / `id` / `name` / `meta` 原样带过去。链的顺序就是节点的顺序。
+ * 新模型下画布只显示**一个模块的实现**，所以写回也不再是「按画布顺序重建整条链」，
+ * 而是**只给这一个节点的 parameters 打补丁**：
+ *   - 结构（节点顺序、连线、位置、名字、身份）一律原样带过来，画布碰不到；
+ *   - 只有那些绑着 `$name` 的字段能写——写的就是节点 `parameters[name]`，实现结构改不了。
  *
  * 合法性判定一律交给校验器：先跑 `validateWorkflowDeclaration`（声明形状 + 摘要），
  * 再用声明还原出一份任务 JSON 跑 `validateTask`（参数约束）。任一不过 → 不给声明，只给诊断。
@@ -10,31 +12,26 @@
 import type * as Blockly from 'blockly';
 import {
 	computeWorkflowDigest,
-	createUlidIdFactory,
 	DiagnosticCollector,
+	findCapability,
 	validateTask,
 	validateWorkflowDeclaration,
+	type CapabilityCatalog,
 	type Diagnostic,
 	type JsonObject,
 	type JsonValue,
-	type StableIdFactory,
-	type TaskAction,
-	type ConnectionTarget,
-	type WorkflowConnections,
 	type WorkflowDeclaration,
 	type WorkflowDeclarationDraft,
-	type WorkflowNode,
 } from '@codecanvas/contracts';
-import { TASK_ACTION_NODE_TYPE, TASK_ACTION_NODE_TYPE_VERSION } from '@codecanvas/task-import';
-import { ACTION_BLOCK_SHAPE_BY_ACTION, actionOfBlockType, type ActionBlockShape } from './blocks';
-import { createBlockIndex, identityOfBlock, type BlockIdentity, type BlockIndex } from './identity';
+import { describeImplementationStep, type ImplementationWidget } from './blocks';
+import { createBlockIndex, identityOfBlock, type BlockIndex } from './identity';
 import { collectChainBlocks } from './render';
 
 export interface CompileOptions {
 	readonly workspace: Blockly.Workspace;
-	/** 作为身份来源的原声明。 */
+	/** 作为身份来源的原声明：补丁打在它身上，其它部分一字不动。 */
 	readonly base: WorkflowDeclaration;
-	readonly idFactory?: StableIdFactory;
+	readonly catalog: CapabilityCatalog;
 }
 
 export interface CompileResult {
@@ -42,7 +39,7 @@ export interface CompileResult {
 	/** 校验不过就是 null——真相不动。 */
 	readonly declaration: WorkflowDeclaration | null;
 	readonly diagnostics: readonly Diagnostic[];
-	/** blockId ↔ nodeId ↔ stepId，给选中联动与映射表用。 */
+	/** blockId ↔ nodeId ↔ 实现位置，给选中联动与映射表用。 */
 	readonly index: BlockIndex;
 }
 
@@ -64,41 +61,65 @@ const absorb = (collector: DiagnosticCollector, diagnostics: readonly Diagnostic
 	}
 };
 
-/** 积木字段 → 协议参数。缺值就报错，不替它编一个数。 */
+/** 一组同参数控件（传感器勾选框）→ 数组值。 */
+const sensorsFromGroup = (widgets: readonly ImplementationWidget[], block: Blockly.Block): JsonValue[] => {
+	const sensors: JsonValue[] = [];
+	for (const widget of widgets) {
+		const parameter = widget.binding.kind === 'parameter' ? widget.binding.parameter : null;
+		if (widget.kind !== 'sensor' || parameter === null) continue;
+		if (isChecked(block.getFieldValue(widget.fieldName))) sensors.push(widget.sensor);
+	}
+	return sensors;
+};
+
+/**
+ * 一块积木 → 它对节点参数的贡献。
+ *
+ * 只读字段（字面量、没有可编辑控件的类型）一律跳过：它们显示的是目录里的东西，不是可写的值。
+ * 缺值的必填字段报错（`blockly.compile.missing_field`），不替它编一个数。
+ */
 const parametersFromBlock = (
-	shape: ActionBlockShape,
+	widgets: readonly ImplementationWidget[],
 	block: Blockly.Block,
-	stepId: string,
+	shape: { readonly capabilityRef: string; readonly primitiveRef: string; readonly stepIndex: number },
 	collector: DiagnosticCollector,
 ): JsonObject => {
-	const parameters: JsonObject = { step_id: stepId, action: shape.action };
+	const parameters: JsonObject = {};
+	const written = new Set<string>();
 
-	for (const parameter of shape.parameters) {
-		const widgets = shape.widgets.filter((widget) => widget.parameter === parameter);
-		const first = widgets[0];
-		if (first === undefined) continue;
+	for (const widget of widgets) {
+		if (widget.binding.kind !== 'parameter') continue;
+		const parameter = widget.binding.parameter;
 
-		if (first.kind === 'number') {
-			const raw: unknown = block.getFieldValue(first.fieldName);
+		if (widget.kind === 'number') {
+			if (written.has(parameter)) continue;
+			const raw: unknown = block.getFieldValue(widget.fieldName);
 			if (typeof raw === 'number' && Number.isFinite(raw)) {
 				parameters[parameter] = raw;
 			} else {
 				collector.error({
 					code: 'blockly.compile.missing_field',
-					message: `积木 ${block.type} 的字段 ${first.fieldName} 没有数值，这一步参数不完整`,
+					message: `积木 ${block.type} 的字段 ${widget.fieldName} 没有数值，这一步参数不完整`,
 					ref: block.id,
-					details: { action: shape.action, field: first.fieldName },
+					details: { capability: shape.capabilityRef, step: shape.primitiveRef, field: widget.fieldName },
 				});
 			}
+			written.add(parameter);
 			continue;
 		}
 
-		const sensors: JsonValue[] = [];
-		for (const widget of widgets) {
-			if (widget.kind !== 'sensor') continue;
-			if (isChecked(block.getFieldValue(widget.fieldName))) sensors.push(widget.sensor);
+		if (widget.kind === 'sensor') {
+			if (written.has(parameter)) continue;
+			parameters[parameter] = sensorsFromGroup(widgets, block);
+			written.add(parameter);
+			continue;
 		}
-		parameters[parameter] = sensors;
+
+		if (widget.kind === 'boolean') {
+			if (written.has(parameter)) continue;
+			parameters[parameter] = isChecked(block.getFieldValue(widget.fieldName));
+			written.add(parameter);
+		}
 	}
 
 	return parameters;
@@ -164,78 +185,102 @@ export const taskPayloadFromDeclaration = (declaration: WorkflowDeclaration): Ta
 	};
 };
 
-const uniqueNodeName = (index: number, action: TaskAction, used: ReadonlySet<string>): string => {
-	const candidate = `${index + 1}. ${action}`;
-	let name = candidate;
-	let suffix = 2;
-	while (used.has(name)) {
-		name = `${candidate} #${suffix}`;
-		suffix += 1;
-	}
-	return name;
-};
+/** 一个节点的参数补丁 + 它从哪块积木来（诊断里要点名）。 */
+interface Patch {
+	readonly parameters: JsonObject;
+	readonly sources: Map<string, string>;
+}
 
-const sequentialConnections = (nodes: readonly WorkflowNode[]): WorkflowConnections => {
-	const connections: WorkflowConnections = {};
-	for (let index = 0; index < nodes.length - 1; index += 1) {
-		const source = nodes[index];
-		const target = nodes[index + 1];
-		if (source === undefined || target === undefined) continue;
-		const branch: ConnectionTarget[] = [{ node: target.id, input: 0 }];
-		connections[source.id] = { main: [branch] };
+/**
+ * 画布上的每一块积木 → 它那个节点要改的参数。
+ *
+ * 认不出来的块（没有 `data`、`data` 不是这一版载荷）一律报错：
+ * 写回通道宁可停下，也不把来路不明的东西并进真相。
+ * 同一个参数被两块积木同时写（目录里两条实现步骤读同一个 `$name`）时**先到先得**并给警告——
+ * 结果确定，也不静默丢掉后面那块上的改动。
+ */
+const collectPatches = (
+	workspace: Blockly.Workspace,
+	base: WorkflowDeclaration,
+	catalog: CapabilityCatalog,
+	collector: DiagnosticCollector,
+): Map<string, Patch> => {
+	const patches = new Map<string, Patch>();
+
+	for (const block of collectChainBlocks(workspace)) {
+		const identity = identityOfBlock(block);
+		if (identity === null) {
+			collector.error({
+				code: 'blockly.compile.unknown_block',
+				message: `画布上有一块不是这次渲染画出来的积木（${block.type}），它进不了声明`,
+				ref: block.id,
+			});
+			continue;
+		}
+		const node = base.nodes.find((candidate) => candidate.id === identity.nodeId);
+		if (node === undefined) {
+			collector.error({
+				code: 'blockly.compile.unknown_node',
+				message: `积木 ${block.id} 指向的节点 ${identity.nodeId} 不在声明里`,
+				ref: block.id,
+				details: { nodeId: identity.nodeId },
+			});
+			continue;
+		}
+		const capability = findCapability(catalog, identity.capabilityRef);
+		const step = capability?.implementation[identity.stepIndex];
+		const shape = capability === undefined || step === undefined
+			? null
+			: describeImplementationStep(catalog, capability, step, identity.stepIndex);
+		if (shape === null) {
+			collector.error({
+				code: 'blockly.compile.unknown_step',
+				message: `积木 ${block.id} 对应的实现步骤（${identity.capabilityRef} 第 ${String(identity.stepIndex + 1)} 步）在目录 ${catalog.catalogRef} 里查不到`,
+				ref: block.id,
+				details: {
+					capability: identity.capabilityRef,
+					stepIndex: identity.stepIndex,
+					primitive: identity.primitiveRef,
+				},
+			});
+			continue;
+		}
+
+		const parameters = parametersFromBlock(shape.widgets, block, shape, collector);
+		const patch = patches.get(node.id) ?? { parameters: {}, sources: new Map<string, string>() };
+
+		for (const [parameter, value] of Object.entries(parameters)) {
+			const previous = patch.parameters[parameter];
+			if (previous !== undefined && JSON.stringify(previous) !== JSON.stringify(value)) {
+				collector.warning({
+					code: 'blockly.compile.conflicting_value',
+					message: `参数 ${parameter} 被两块积木同时写（已取 ${patch.sources.get(parameter) ?? '先到的那块'}，忽略 ${block.id} 上的值）`,
+					ref: block.id,
+					details: { parameter, kept: previous, ignored: value },
+				});
+				continue;
+			}
+			patch.parameters[parameter] = value;
+			if (!patch.sources.has(parameter)) patch.sources.set(parameter, block.id);
+		}
+		patches.set(node.id, patch);
 	}
-	return connections;
+
+	return patches;
 };
 
 export const compileWorkspace = (options: CompileOptions): CompileResult => {
-	const { workspace, base } = options;
-	const idFactory = options.idFactory ?? createUlidIdFactory();
+	const { workspace, base, catalog } = options;
 	const collector = new DiagnosticCollector();
-	const baseById = new Map(base.nodes.map((node) => [node.id, node]));
-	const blocks = collectChainBlocks(workspace);
 
-	// 名字在工作流内唯一：先占住「还在画布上的原有节点」的名字，新块再往后排。
-	const survivingNames = new Set<string>();
-	for (const block of blocks) {
-		const identity = identityOfBlock(block);
-		const baseNode = identity === null ? undefined : baseById.get(identity.nodeId);
-		if (baseNode !== undefined) survivingNames.add(baseNode.name);
-	}
+	const patches = collectPatches(workspace, base, catalog, collector);
 
-	const nodes: WorkflowNode[] = [];
-	const identities: BlockIdentity[] = [];
-
-	blocks.forEach((block, index) => {
-		const action = actionOfBlockType(block.type);
-		if (action === null) {
-			collector.error({
-				code: 'blockly.compile.unknown_block',
-				message: `画布上有一块不是任务动作的积木（${block.type}），它进不了声明`,
-				ref: block.id,
-			});
-			return;
-		}
-
-		const known = identityOfBlock(block);
-		const baseNode = known === null ? undefined : baseById.get(known.nodeId);
-		const nodeId = baseNode?.id ?? idFactory.nodeId();
-		const stepId = known?.stepId ?? nodeId;
-		const shape = ACTION_BLOCK_SHAPE_BY_ACTION[action];
-		const position = baseNode?.position ?? {
-			x: block.getRelativeToSurfaceXY().x,
-			y: block.getRelativeToSurfaceXY().y,
-		};
-
-		nodes.push({
-			id: nodeId,
-			name: baseNode?.name ?? uniqueNodeName(index, action, survivingNames),
-			type: baseNode?.type ?? TASK_ACTION_NODE_TYPE,
-			typeVersion: baseNode?.typeVersion ?? TASK_ACTION_NODE_TYPE_VERSION,
-			parameters: parametersFromBlock(shape, block, stepId, collector),
-			position,
-			disabled: baseNode?.disabled ?? false,
-		});
-		identities.push({ blockId: block.id, nodeId, stepId });
+	// 只改 parameters：`id` / `name` / `type` / `typeVersion` / `position` / `disabled` 原样带过来，
+	// 节点顺序、连线、`meta` 也是——实现结构不归画布管。
+	const nodes = base.nodes.map((node) => {
+		const patch = patches.get(node.id);
+		if (patch === undefined) return node;
+		return { ...node, parameters: { ...node.parameters, ...patch.parameters } };
 	});
 
 	const draft: WorkflowDeclarationDraft = {
@@ -243,7 +288,7 @@ export const compileWorkspace = (options: CompileOptions): CompileResult => {
 		id: base.id,
 		name: base.name,
 		nodes,
-		connections: sequentialConnections(nodes),
+		connections: base.connections,
 		meta: base.meta,
 	};
 	const declaration: WorkflowDeclaration = { ...draft, digest: computeWorkflowDigest(draft) };
@@ -260,7 +305,12 @@ export const compileWorkspace = (options: CompileOptions): CompileResult => {
 		}
 	}
 
-	const index = createBlockIndex(identities);
+	const index = createBlockIndex(
+		collectChainBlocks(workspace).flatMap((block) => {
+			const identity = identityOfBlock(block);
+			return identity === null ? [] : [identity];
+		}),
+	);
 	if (collector.hasErrors) return { ok: false, declaration: null, diagnostics: collector.diagnostics, index };
 	return { ok: true, declaration, diagnostics: collector.diagnostics, index };
 };

@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@codecanvas/blockly-toolkit": "workspace:*",
+    "@codecanvas/capabilities": "workspace:*",
     "@codecanvas/code-render": "workspace:*",
     "@codecanvas/contracts": "workspace:*",
     "@codecanvas/task-import": "workspace:*",

@@ -2,8 +2,9 @@
 /**
  * 左栏：积木画布（spec §4.1）。三个视图里**只有这块能改**。
  *
- * 改字段 → 编译回同一份 workflow 声明 → `store.applyDeclaration`；校验不过就只留诊断。
- * 接线全在 `useBlocklyCanvas()` 里，这里只摆放 DOM 与显示状态。
+ * 画的是**当前选中模块的实现**：一个模块 = 一个能力，一块积木 = 实现里的一步。
+ * 改字段 → 编译回同一份 workflow 声明（只改这个节点的 parameters）→ `store.applyDeclaration`；
+ * 校验不过就只留诊断。接线全在 `useBlocklyCanvas()` 里，这里只摆放 DOM 与显示状态。
  */
 import { computed } from 'vue';
 import { useStudioDocument } from '../../state/document';
@@ -11,8 +12,18 @@ import { useBlocklyCanvas } from './blockly-canvas';
 import DiagnosticsPanel from './DiagnosticsPanel.vue';
 
 const store = useStudioDocument();
-const { hostRef, diagnostics, status, statusText, failure, blockCount, writeSuspended, selectedBlockId, decoratedBlocks } =
-	useBlocklyCanvas();
+const {
+	hostRef,
+	diagnostics,
+	status,
+	statusText,
+	failure,
+	blockCount,
+	writeSuspended,
+	selectedBlockId,
+	decoratedBlocks,
+	moduleTitle,
+} = useBlocklyCanvas();
 
 const taskName = computed(() => store.declaration.value?.name ?? '');
 
@@ -28,6 +39,8 @@ const anchoredCount = computed(() => decoratedBlocks.value.length);
 			<span class="view-tag">唯一可写</span>
 			<span class="view-count" data-testid="blockly-block-count">{{ blockCount }} 块</span>
 		</header>
+
+		<p class="view-module" data-testid="blockly-module-title">{{ moduleTitle }}</p>
 
 		<p v-if="taskName !== ''" class="view-task" data-testid="blockly-task">{{ taskName }}</p>
 
@@ -107,6 +120,17 @@ const anchoredCount = computed(() => decoratedBlocks.value.length);
 }
 
 /*
+ * 模块标题：「<能力的 label> · 实现」。它是这一栏唯一的「我在看什么」的说明——
+ * 积木画布现在只显示一个模块的内部，标题不写清楚，用户就不知道这堆积木属于谁。
+ */
+.view-module {
+	margin: 0;
+	font-size: var(--cc-fs-md);
+	font-weight: 600;
+	color: var(--cc-text);
+}
+
+/*
  * Blockly 自己往这个容器里塞 SVG 与工具箱，所以容器必须是个有尺寸的定位盒子。
  * 底色由主题给（componentStyles.workspaceBackgroundColour = --cc-surface-sunken）。
  */
@@ -137,9 +161,10 @@ const anchoredCount = computed(() => decoratedBlocks.value.length);
 }
 
 /*
- * 序号徽标（M3）：它是画在积木 `<g>` 里的 SVG（见 `sequence-badge.ts`），所以色值走属性、
+ * 序号徽标：它是画在积木 `<g>` 里的 SVG（见 `sequence-badge.ts`），所以色值走属性、
  * 交互走 pointer-events——这里只钉一件事：徽标不参与命中，点它等于点积木。
- * 两个状态的色值是同一个函数按 `--cc-seq-*` 设上去的，与流程卡片、代码行同一套。
+ * 新模型下它数的是「**实现里的第几步**」（这个模块内部 1、2、3），与流程卡片上
+ * 「任务里的第几步」不是同一个数——后者属于整条链，前者属于这个模块的内部。
  */
 .canvas-host :deep(.cc-seq-badge) {
 	pointer-events: none;

@@ -20,12 +20,13 @@ import {
 	CODE_CANVAS_RENDERER,
 	CODE_CANVAS_THEME_NAME,
 	buildInjectOptions,
+	capabilityColourVariable,
 	createCodeCanvasTheme,
 	gridColour,
 } from '../src/theme';
-import { actionBlockType, blockStyleName } from '../src/blocks';
+import { blockStyleName, describeCatalogImplementations } from '../src/blocks';
 import { MIN_READABLE_SCALE } from '../src/viewport';
-import { fixturePalette, fixtureSource, themeCssText, toolboxBlockTypes } from './fixtures';
+import { FIXTURE_CATALOG, fixturePalette, fixtureSource, themeCssText } from './fixtures';
 
 const SOURCE_DIR = new URL('../src/', import.meta.url);
 
@@ -63,16 +64,23 @@ describe('调色板', () => {
 });
 
 describe('主题', () => {
-	it('每个动作一个 blockStyle，主色就是对应变量的值', () => {
+	it('目录里每个能力一个 blockStyle，主色就是对应变量的值', () => {
 		const palette = fixturePalette();
-		const theme = createCodeCanvasTheme(palette);
+		const theme = createCodeCanvasTheme(palette, FIXTURE_CATALOG);
 		expect(theme.name).toBe(CODE_CANVAS_THEME_NAME);
-		for (const action of ALLOWED_ACTIONS) {
-			const style = theme.blockStyles[blockStyleName(action)];
-			expect(style?.colourPrimary, action).toBe(palette[ACTION_COLOUR_VARIABLE[action]]);
+		for (const capability of FIXTURE_CATALOG.capabilities) {
+			const ref = capability.capabilityRef;
+			const style = theme.blockStyles[blockStyleName(ref)];
+			expect(style?.colourPrimary, ref).toBe(palette[capabilityColourVariable(ref)]);
 			// 三色齐备，Blockly 画 zelos 路径时不会拿到 undefined。
-			expect(style?.colourSecondary, action).toBeTypeOf('string');
-			expect(style?.colourTertiary, action).toBeTypeOf('string');
+			expect(style?.colourSecondary, ref).toBeTypeOf('string');
+			expect(style?.colourTertiary, ref).toBeTypeOf('string');
+		}
+		// 一期目录里的能力名就是协议里的七个动作，所以这张表仍是那七个名字。
+		for (const action of ALLOWED_ACTIONS) {
+			expect(theme.blockStyles[blockStyleName(action)]?.colourPrimary, action).toBe(
+				palette[ACTION_COLOUR_VARIABLE[action]],
+			);
 		}
 		// 主题叠在 zelos 之上：我们的七个名字都在（zelos 自带的名字也还在）。
 		expect(Object.keys(theme.blockStyles)).toEqual(expect.arrayContaining(ALLOWED_ACTIONS.map(blockStyleName)));
@@ -80,33 +88,34 @@ describe('主题', () => {
 
 	it('副色/第三色是从变量值混出来的，不是另写的色值', () => {
 		const palette = fixturePalette();
-		const style = createCodeCanvasTheme(palette).blockStyles[blockStyleName('move')];
+		const style = createCodeCanvasTheme(palette, FIXTURE_CATALOG).blockStyles[blockStyleName('move')];
 		expect(style?.colourSecondary).not.toBe(palette['--cc-accent']);
 		expect(style?.colourTertiary).not.toBe(style?.colourSecondary);
 		// 混色用的是调色板里的底色：把底色换成别的，副色必须跟着变。
-		const shifted = createCodeCanvasTheme({ ...palette, '--cc-surface-sunken': '#101010' });
+		const shifted = createCodeCanvasTheme({ ...palette, '--cc-surface-sunken': '#101010' }, FIXTURE_CATALOG);
 		expect(shifted.blockStyles[blockStyleName('move')]?.colourSecondary).not.toBe(style?.colourSecondary);
 	});
 
 	it('工作区与工具箱的底色取自调色板', () => {
 		const palette = fixturePalette();
-		const theme = createCodeCanvasTheme(palette);
+		const theme = createCodeCanvasTheme(palette, FIXTURE_CATALOG);
 		expect(theme.getComponentStyle('workspaceBackgroundColour')).toBe(palette['--cc-surface-sunken']);
 		expect(theme.getComponentStyle('toolboxBackgroundColour')).toBe(palette['--cc-surface']);
 		expect(theme.getComponentStyle('flyoutBackgroundColour')).toBe(palette['--cc-surface-raised']);
 		expect(theme.getComponentStyle('selectedGlowColour')).toBe(palette['--cc-accent']);
 	});
 
-	it('注入选项用 zelos 渲染器，工具箱摆着七块积木', () => {
-		const options = buildInjectOptions(fixturePalette());
+	it('注入选项用 zelos 渲染器，且**不带工具箱**：实现来自目录，结构只读', () => {
+		const options = buildInjectOptions(fixturePalette(), FIXTURE_CATALOG);
 		expect(options.renderer).toBe(CODE_CANVAS_RENDERER);
 		expect(options.renderer).toBe('zelos');
 		expect(options.theme).toBeInstanceOf(Object);
-		const toolbox = options.toolbox;
-		if (typeof toolbox !== 'object' || toolbox === null || !('contents' in toolbox)) {
-			throw new Error('工具箱应当是个对象');
-		}
-		expect(toolboxBlockTypes(toolbox)).toEqual(ALLOWED_ACTIONS.map(actionBlockType));
+		// 没有工具箱可拖：往里拖一块新积木等于改实现，而实现不归画布管（spec §4.1 只给了参数这条写路径）。
+		expect(options.toolbox).toBeUndefined();
+		// 同理不给垃圾桶：块删不掉（结构只读由渲染侧再钉一道，见 roundtrip.test.ts）。
+		expect(options.trashcan).toBe(false);
+		// 目录里每个「能力 × 原语」都注册成了积木类型——这才是画布能画出实现的前提。
+		expect(describeCatalogImplementations(FIXTURE_CATALOG).length).toBeGreaterThan(0);
 	});
 });
 
@@ -153,11 +162,11 @@ describe('配色对比与网格', () => {
 
 	it('注入选项里的网格色就是混出来的那个，不另写色值', () => {
 		const palette = fixturePalette();
-		expect(buildInjectOptions(palette).grid?.colour).toBe(gridColour(palette));
+		expect(buildInjectOptions(palette, FIXTURE_CATALOG).grid?.colour).toBe(gridColour(palette));
 	});
 
 	it('初始缩放的下限留在可读范围，不靠 startScale 硬撑', () => {
-		const options = buildInjectOptions(fixturePalette());
+		const options = buildInjectOptions(fixturePalette(), FIXTURE_CATALOG);
 		expect(options.zoom?.startScale).toBeGreaterThanOrEqual(MIN_READABLE_SCALE);
 		expect(options.zoom?.minScale ?? 0).toBeLessThanOrEqual(MIN_READABLE_SCALE);
 	});

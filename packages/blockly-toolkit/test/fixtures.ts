@@ -1,16 +1,20 @@
 /**
- * 测试夹具：一份覆盖七种动作的任务 JSON、一份确定性的声明、一份从真实 `theme.css` 读出的调色板。
+ * 测试夹具：一份覆盖七个能力的任务 JSON、一份确定性的声明、真实的一期设备目录，
+ * 外加一份**故意有缺陷**的目录（悬空引用 / 未知原语 / 漏给实参），以及从真实 `theme.css` 读出的调色板。
  *
  * 调色板刻意**不在这里写色值**——它从 `apps/studio/src/shell/theme.css` 里解析出来，
  * 这样「主题色来自哪」在测试里也是可核对的。
+ *
+ * 能力目录直接用 `packages/capabilities` 的那一份（应用用的就是它）：
+ * 「积木从目录推导」这条如果只对一个自造的迷你目录成立，就不算数。
  */
 import { readFileSync } from 'node:fs';
-import type * as Blockly from 'blockly';
-import { createDeterministicIdFactory, type WorkflowDeclaration } from '@codecanvas/contracts';
+import { createDeterministicIdFactory, type CapabilityCatalog, type WorkflowDeclaration, type WorkflowNode } from '@codecanvas/contracts';
+import { PHASE1_ROBOT_CATALOG } from '@codecanvas/capabilities';
 import { importTask } from '@codecanvas/task-import';
 import { paletteFromCssVariables, type ThemePalette } from '../src/palette';
 
-/** 七个动作一样一个，顺序按协议；总时长 7s < max_duration 30s。 */
+/** 七个能力一样一个，顺序按协议；总时长 7s < max_duration 30s。 */
 export const FIXTURE_TASK = {
 	schema_version: '1.0',
 	task_id: 'task-blockly-001',
@@ -37,12 +41,53 @@ export const FIXTURE_TASK = {
 	limits: { max_linear: 0.3, max_angular: 1.2, max_duration: 30.0, require_confirmation: true },
 };
 
+/** 应用里用的那份目录（`packages/capabilities`）。 */
+export const FIXTURE_CATALOG: CapabilityCatalog = PHASE1_ROBOT_CATALOG;
+
+/**
+ * 故意有缺陷的目录：一条实现里塞了三种目录毛病。
+ * 每一条都必须在画布上留下可核对的痕迹，而不是被悄悄吞掉。
+ */
+export const BROKEN_CATALOG: CapabilityCatalog = {
+	catalogRef: 'broken_fixture',
+	displayName: '缺陷夹具',
+	revisionRef: 'broken-fixture-v1',
+	primitives: [
+		{ primitiveRef: 'wait', label: '等待', parameters: [{ name: 'seconds', label: '时长', type: 'number' }] },
+		{ primitiveRef: 'read_scan', label: '读取激光', parameters: [{ name: 'sensor', label: '传感器', type: 'sensor' }] },
+	],
+	capabilities: [
+		{
+			capabilityRef: 'move',
+			label: '前进',
+			kind: 'skill',
+			parameters: [{ name: 'duration', label: '时长', type: 'number' }],
+			implementation: [
+				{ step: 'wait', arguments: { seconds: '$duration' } },
+				// 悬空引用：能力参数表里没有 missing。
+				{ step: 'wait', arguments: { seconds: '$missing' } },
+				// 漏给实参：原语要 seconds，实现里没写。
+				{ step: 'wait', arguments: {} },
+				// 目录里根本没有这个原语。
+				{ step: 'fly', arguments: {} },
+			],
+		},
+	],
+};
+
 export const FIXTURE_ID_FACTORY = createDeterministicIdFactory({ seed: 'blockly-toolkit' });
 
 export const fixtureDeclaration = (): WorkflowDeclaration => {
 	const result = importTask(FIXTURE_TASK, { idFactory: FIXTURE_ID_FACTORY });
 	if (!result.ok) throw new Error(`夹具任务应当合法：${result.diagnostics.map((d) => d.message).join('; ')}`);
 	return result.declaration;
+};
+
+/** 声明里 `step_id === stepId` 的那个节点。 */
+export const nodeOfStep = (declaration: WorkflowDeclaration, stepId: string): WorkflowNode => {
+	const node = declaration.nodes.find((candidate) => candidate.parameters['step_id'] === stepId);
+	if (node === undefined) throw new Error(`声明里没有步骤 ${stepId}`);
+	return node;
 };
 
 const THEME_CSS_URL = new URL('../../../apps/studio/src/shell/theme.css', import.meta.url);
@@ -71,20 +116,4 @@ export const fixturePalette = (): ThemePalette => {
 export const fixtureSource = (): { getPropertyValue: (name: string) => string } => {
 	const variables = cssVariablesFromTheme();
 	return { getPropertyValue: (name) => variables.get(name) ?? '' };
-};
-
-/** 工具箱里第一个静态分类（测试用；Blockly 的联合类型要收窄一次）。 */
-export const firstToolboxCategory = (
-	toolbox: Blockly.utils.toolbox.ToolboxInfo,
-): Blockly.utils.toolbox.StaticCategoryInfo | null => {
-	const first = toolbox.contents[0];
-	if (first === undefined || first.kind !== 'category' || !('contents' in first)) return null;
-	return first;
-};
-
-/** 分类里的积木类型，顺序即摆放顺序。 */
-export const toolboxBlockTypes = (toolbox: Blockly.utils.toolbox.ToolboxInfo): readonly (string | undefined)[] => {
-	const category = firstToolboxCategory(toolbox);
-	if (category === null) return [];
-	return category.contents.map((item) => (item.kind === 'block' && 'type' in item ? item.type : undefined));
 };

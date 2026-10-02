@@ -1,25 +1,28 @@
 /**
  * 自有主题（spec §7）：Blockly 12 + `zelos` 渲染器，颜色一律来自 `--cc-*` 变量。
  *
- * 这个文件里没有一个色值——只有「哪个部件读哪个变量」和「哪个动作读哪个变量」。
+ * 这个文件里没有一个色值——只有「哪个部件读哪个变量」和「哪个能力读哪个变量」。
  * 需要深浅两档时用 Blockly 自己的 `colour.blend` 从变量值算，不另造颜色。
+ *
+ * 积木的色按**能力**分（一块积木属于哪个模块，就是那个模块的色）：
+ * 一个模块的实现全是一个色系，跟流程画布上那张卡是同一个色——跨栏看过去，「这一坨是它内部的」。
  */
 import * as Blockly from 'blockly';
-import type { TaskAction } from '@codecanvas/contracts';
-import { ACTION_BLOCK_SHAPES, buildActionToolbox, registerActionBlocks } from './blocks';
+import { ALLOWED_ACTIONS, type CapabilityCatalog, type TaskAction } from '@codecanvas/contracts';
+import { blockStyleName, registerImplementationBlocks } from './blocks';
 import { fontSizeFromVariable, requireCompletePalette, type ThemePalette, type ThemeVariable } from './palette';
 
 export const CODE_CANVAS_THEME_NAME = 'codecanvas';
 /** 圆角拼图那一路观感，就是这个渲染器给的（观感要像，名字与人形形象都不沾）。 */
 export const CODE_CANVAS_RENDERER = 'zelos';
-export const ACTION_TOOLBOX_CATEGORY_STYLE = 'cc_task_actions';
 
 /**
- * 动作 → 主题变量。只有名字，没有色值。
+ * 能力 → 主题变量。只有名字，没有色值。
  *
- * 七个动作走七个可分辨的色相（cyan / blue / red / amber / steel / green / violet）：
- * 一眼能认出「这是转向、那是急停」，而不是一片青。深色底上的对比度由测试钉住（≥ 4.5）。
- * `get_status` 是只读查询，故意用中性的钢蓝：它在链上不表示任何动作意图。
+ * 一期目录里的能力名恰好就是任务协议的动作名，于是每个能力走一个可分辨的色相
+ * （cyan / blue / red / amber / steel / green / violet）：一眼能认出「这是转向、那是急停」。
+ * 深色底上的对比度由测试钉住（≥ 4.5）。目录里将来出现别的能力时落到强调色上，
+ * 不在这里凭空编第八种颜色。
  */
 export const ACTION_COLOUR_VARIABLE: Readonly<Record<TaskAction, ThemeVariable>> = {
 	move: '--cc-accent',
@@ -30,6 +33,12 @@ export const ACTION_COLOUR_VARIABLE: Readonly<Record<TaskAction, ThemeVariable>>
 	arm_joint: '--cc-block-arm',
 	arm6_joints: '--cc-block-arm6',
 };
+
+const isTaskAction = (value: string): value is TaskAction => (ALLOWED_ACTIONS as readonly string[]).includes(value);
+
+/** 能力引用 → 主题变量：认得的是协议里的七个动作，其余落到强调色。 */
+export const capabilityColourVariable = (capabilityRef: string): ThemeVariable =>
+	isTaskAction(capabilityRef) ? ACTION_COLOUR_VARIABLE[capabilityRef] : '--cc-accent';
 
 /** 副色/第三色从主色与底色混出来，不引入新色值。 */
 const shadeOf = (
@@ -51,17 +60,21 @@ const mix = (from: string, to: string, factor: number, fallback: string): string
 export const gridColour = (palette: ThemePalette): string =>
 	mix(palette['--cc-line'], palette['--cc-surface-sunken'], 0.5, palette['--cc-surface-sunken']);
 
-export const buildBlockStyles = (palette: ThemePalette): Record<string, Partial<Blockly.Theme.BlockStyle>> => {
+/** 目录里每个能力一个 blockStyle（能力实现里的每一步都长这个色）。 */
+export const buildBlockStyles = (
+	palette: ThemePalette,
+	catalog: CapabilityCatalog,
+): Record<string, Partial<Blockly.Theme.BlockStyle>> => {
 	const shade = palette['--cc-surface-sunken'];
 	const styles: Record<string, Partial<Blockly.Theme.BlockStyle>> = {};
-	for (const shape of ACTION_BLOCK_SHAPES) {
-		const primary = palette[ACTION_COLOUR_VARIABLE[shape.action]];
-		styles[shape.style] = { colourPrimary: primary, ...shadeOf(primary, shade) };
+	for (const capability of catalog.capabilities) {
+		const primary = palette[capabilityColourVariable(capability.capabilityRef)];
+		styles[blockStyleName(capability.capabilityRef)] = { colourPrimary: primary, ...shadeOf(primary, shade) };
 	}
 	return styles;
 };
 
-export const createCodeCanvasTheme = (palette: ThemePalette): Blockly.Theme => {
+export const createCodeCanvasTheme = (palette: ThemePalette, catalog: CapabilityCatalog): Blockly.Theme => {
 	const complete = requireCompletePalette(palette);
 	const size = fontSizeFromVariable(complete);
 
@@ -69,8 +82,7 @@ export const createCodeCanvasTheme = (palette: ThemePalette): Blockly.Theme => {
 		name: CODE_CANVAS_THEME_NAME,
 		base: Blockly.Themes.Zelos,
 		startHats: true,
-		blockStyles: buildBlockStyles(complete),
-		categoryStyles: { [ACTION_TOOLBOX_CATEGORY_STYLE]: { colour: complete['--cc-accent'] } },
+		blockStyles: buildBlockStyles(complete, catalog),
 		componentStyles: {
 			workspaceBackgroundColour: complete['--cc-surface-sunken'],
 			toolboxBackgroundColour: complete['--cc-surface'],
@@ -93,27 +105,41 @@ export const createCodeCanvasTheme = (palette: ThemePalette): Blockly.Theme => {
 	});
 };
 
-/** 注入选项：渲染器、主题、工具箱、网格与缩放。DOM 宿主由调用方给。 */
-export const buildInjectOptions = (palette: ThemePalette, readOnly = false): Blockly.BlocklyOptions => {
+/**
+ * 注入选项：渲染器、主题、网格与缩放。DOM 宿主由调用方给。
+ *
+ * **故意没有工具箱**：画布显示的是目录给的实现，结构只读——
+ * 「往里拖一块新积木」在新模型下等于「改实现」，而实现不归画布管（spec §4.1 只给了参数这一条写路径）。
+ * 因此也不给垃圾桶：块删不掉。
+ */
+export const buildInjectOptions = (
+	palette: ThemePalette,
+	catalog: CapabilityCatalog,
+	readOnly = false,
+): Blockly.BlocklyOptions => {
 	const complete = requireCompletePalette(palette);
 	return {
 		renderer: CODE_CANVAS_RENDERER,
-		theme: createCodeCanvasTheme(complete),
-		toolbox: buildActionToolbox(),
-		trashcan: true,
+		theme: createCodeCanvasTheme(complete, catalog),
+		trashcan: false,
 		sounds: false,
 		readOnly,
 		grid: { spacing: 24, length: 2, colour: gridColour(complete), snap: false },
 		// startScale 只是「还没量到内容之前」的起步比例：装好之后由 fitWorkspaceToContent
-		// 按内容算一个能装下整条链的比例并居中（见 viewport.ts）。
+		// 按内容算一个能装下整条实现链的比例并居中（见 viewport.ts）。
 		// 下限 0.45 留给用户自己缩，初始那一次不会被压到这个数以下（MIN_READABLE_SCALE）。
 		zoom: { controls: true, wheel: true, startScale: 0.85, minScale: 0.45, maxScale: 1.6, pinch: true },
 		move: { scrollbars: { horizontal: true, vertical: true }, drag: true, wheel: true },
 	};
 };
 
-/** 建一块可用的画布：先注册七块积木，再注入工作区。 */
-export const createCanvasWorkspace = (host: Element, palette: ThemePalette, readOnly = false): Blockly.WorkspaceSvg => {
-	registerActionBlocks();
-	return Blockly.inject(host, buildInjectOptions(palette, readOnly));
+/** 建一块可用的画布：先按目录注册实现积木，再注入工作区。 */
+export const createCanvasWorkspace = (
+	host: Element,
+	palette: ThemePalette,
+	catalog: CapabilityCatalog,
+	readOnly = false,
+): Blockly.WorkspaceSvg => {
+	registerImplementationBlocks(catalog);
+	return Blockly.inject(host, buildInjectOptions(palette, catalog, readOnly));
 };

@@ -1,19 +1,17 @@
-// @vitest-environment happy-dom
 /**
- * 代码面板的界面验收：
- * 1. 示例任务 → 四行调用，带行号；
- * 2. 安全限值看得见；
- * 3. **改一个参数 → 面板那行的数字跟着变**（这条联动是 M2 的核心）；
- * 4. `selectedNodeId` 变化 → 对应行高亮；
- * 5. M3 的第三个入口：**点一行就是选那一步**（推共享状态，另两栏据此高亮），
- *    且序号徽标只落在调用行上、与流程卡片同一个组件；
- * 6. 它在右栏里常驻——右栏是固定分区，它总被挂上（接线测试）。
+ * 代码面板的界面验收（新模型：**面板显示当前选中模块的实现**）：
+ * 1. 加载后（还没选）退到第一个模块——前进的实现三行；标题说清看的是哪个模块；
+ * 2. **点流程画布的卡片 → 面板换成那个模块的实现**，数值来自该节点的参数（教学价值那条链）；
+ * 3. 改一个参数 → 面板那个数字跟着变；
+ * 4. 行 ↔ implementation 步骤的映射写在 DOM 上（`data-line` / `data-step`），不在视图里重算；
+ * 5. 安全限值仍常驻（它属于整个任务）；
+ * 6. 面板是只读的派生：退档不改共享选中状态，也不自己校验。
  */
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it } from 'vitest';
-import { renderDeclaration } from '@codecanvas/code-render';
 import { computeWorkflowDigest, type WorkflowDeclaration, type WorkflowNode } from '@codecanvas/contracts';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
+import FlowView from '../flow/FlowView.vue';
 import RightPanel from '../right/RightPanel.vue';
 import CodePanel from './CodePanel.vue';
 
@@ -38,103 +36,109 @@ const applyParam = (nodeId: string, name: string, value: number): boolean => {
 const lineTexts = (wrapper: ReturnType<typeof mount>): string[] =>
 	wrapper.findAll('li.cp-line .cp-src').map((cell) => cell.text());
 
-const activeLines = (wrapper: ReturnType<typeof mount>): string[] =>
-	wrapper
-		.findAll('li.cp-line.is-active')
-		.map((line) => line.attributes('data-line') ?? '')
-		.filter((line) => line !== '');
+const lineNumbers = (wrapper: ReturnType<typeof mount>): (string | undefined)[] =>
+	wrapper.findAll('li.cp-line').map((line) => line.attributes('data-line'));
+
+const stepIndexes = (wrapper: ReturnType<typeof mount>): (string | undefined)[] =>
+	wrapper.findAll('li.cp-line').map((line) => line.attributes('data-step'));
 
 beforeEach(() => {
 	loadSampleTask();
+	doc.select(null);
 });
 
-describe('CodePanel', () => {
-	it('示例任务渲染出四行调用，且每行带行号', () => {
+describe('CodePanel · 当前模块的实现', () => {
+	it('页面加载后（还没选中）显示第一个模块「前进」的实现', () => {
 		const wrapper = mount(CodePanel);
-		const lines = wrapper.findAll('li.cp-line');
 
-		expect(lines).toHaveLength(5); // 1 行头部注释 + 4 个调用
-		expect(wrapper.findAll('li.cp-line .cp-ln').map((cell) => cell.text())).toEqual([
-			'1',
-			'2',
-			'3',
-			'4',
-			'5',
-		]);
+		expect(wrapper.get('[data-testid="code-title"]').text()).toBe('前进 · 实现');
 		expect(lineTexts(wrapper)).toEqual([
-			'# 前进，遇障停止后转向 · task-demo-001',
-			'move(linear=0.2, angular=0.0, duration=5.0)',
-			'stop_if_obstacle(sensors=["/scan0"], distance=0.5)',
-			'turn(angular=0.8, duration=2.0)',
-			'stop()',
+			'set_velocity(linear=0.2, angular=0.0)',
+			'wait(seconds=5.0)',
+			'stop_motion()',
 		]);
-		expect(wrapper.findAll('li.cp-line.is-call')).toHaveLength(4);
-		expect(wrapper.text()).toContain('4 个调用');
+		expect(lineNumbers(wrapper)).toEqual(['1', '2', '3']);
+		expect(wrapper.text()).toContain('3 个原语');
+		// 退档显示得说出来：现在显示的模块并不是「选中的」那个
+		expect(wrapper.get('[data-testid="code-footer-fallback"]').text()).toContain('还没选中模块');
 	});
 
-	it('序号徽标只落在调用行上，且按声明顺序是 1/2/3/4（首行注释没有徽标）', () => {
+	it('退档只是显示，不去改写共享的选中状态', () => {
+		mount(CodePanel);
+		expect(doc.selectedNodeId.value).toBeNull();
+		expect(doc.selectedBlockId.value).toBeNull();
+	});
+
+	it('点流程画布的「避障停止」卡 → 面板换成它的实现，数值来自该节点的参数', async () => {
+		const flow = mount(FlowView);
+		const panel = mount(CodePanel);
+
+		const card = flow
+			.findAll('[data-testid="flow-node-card"]')
+			.find((node) => node.get('[data-testid="flow-node-action"]').text() === '避障停止');
+		expect(card).toBeDefined();
+		await card?.trigger('click');
+
+		expect(panel.get('[data-testid="code-title"]').text()).toBe('避障停止 · 实现');
+		expect(lineTexts(panel)).toEqual([
+			'read_scan(sensor=["/scan0"])',
+			'compare_below(threshold=0.5)',
+			'brake()',
+		]);
+		// 选中态是共享的：面板显示的正是流程卡片上那张卡
+		expect(doc.selectedNodeId.value).toBe(declaration().nodes[1]?.id);
+		expect(panel.find('[data-testid="code-footer-fallback"]').exists()).toBe(false);
+	});
+
+	it('选中别的模块，标题与实现整块换掉（不是叠一份上去）', async () => {
+		const wrapper = mount(CodePanel);
+		doc.select(declaration().nodes[3]?.id ?? null);
+		await wrapper.vm.$nextTick();
+
+		expect(wrapper.get('[data-testid="code-title"]').text()).toBe('停止 · 实现');
+		expect(lineTexts(wrapper)).toEqual(['stop_motion()']);
+	});
+
+	it('选中项清空 → 回到退档的第一模块', async () => {
+		const wrapper = mount(CodePanel);
+		doc.select(declaration().nodes[2]?.id ?? null);
+		await wrapper.vm.$nextTick();
+		expect(wrapper.get('[data-testid="code-title"]').text()).toBe('转向 · 实现');
+
+		doc.select(null);
+		await wrapper.vm.$nextTick();
+		expect(wrapper.get('[data-testid="code-title"]').text()).toBe('前进 · 实现');
+	});
+
+	it('行 ↔ 步骤的映射在 DOM 上：行号 1 起、步骤号 0 起，与渲染包的产出逐字一致', () => {
 		const wrapper = mount(CodePanel);
 
-		// 徽标总数 = 调用行数（注释行不属于任何步骤）
-		const badges = wrapper.findAll('[data-testid="code-line-index"]');
-		expect(badges).toHaveLength(4);
-		expect(badges.map((badge) => badge.text())).toEqual(['1', '2', '3', '4']);
-
-		// 每个徽标都落在带 nodeId 的调用行里
-		expect(badges.map((badge) => badge.attributes('data-seq'))).toEqual(['1', '2', '3', '4']);
-		expect(wrapper.find('li.cp-line[data-kind="comment"] [data-testid="code-line-index"]').exists()).toBe(false);
-
-		// 徽标是共享组件：与流程卡片同一个 class，色值来自同一组 --cc-seq-* 变量
-		expect(badges[0]!.classes()).toContain('cc-seq');
-
-		// 行 → 步骤序数：第 2 个调用行是第 2 步
-		const callLines = wrapper.findAll('[data-testid="code-call-line"]');
-		expect(callLines.map((line) => line.attributes('data-step'))).toEqual(['1', '2', '3', '4']);
+		expect(stepIndexes(wrapper)).toEqual(['0', '1', '2']);
+		expect(wrapper.findAll('li.cp-line').map((line) => line.attributes('data-primitive'))).toEqual([
+			'set_velocity',
+			'wait',
+			'stop_motion',
+		]);
+		// 行首徽标是「实现里的第几步」，与 data-step 同一口径
+		const badges = wrapper.findAll('[data-testid="code-step-index"]');
+		expect(badges.map((badge) => badge.text())).toEqual(['1', '2', '3']);
+		expect(badges.map((badge) => badge.attributes('data-seq'))).toEqual(['1', '2', '3']);
+		expect(badges[0]?.classes()).toContain('cc-seq');
 	});
 
-	it('行与 nodeId 的对应写在 DOM 上（界面高亮与测试共用同一份映射）', () => {
-		const wrapper = mount(CodePanel);
-		const nodes = declaration().nodes;
-		const ids = wrapper.findAll('li.cp-line').map((line) => line.attributes('data-node-id') ?? null);
-
-		expect(ids[0]).toBeNull();
-		expect(ids.slice(1)).toEqual(nodes.map((node) => node.id));
-	});
-
-	it('安全限值显示出来，不是躺在 JSON 里', () => {
-		const wrapper = mount(CodePanel);
-		const limits = wrapper.get('[data-testid="code-limits"]');
-		expect(limits.text()).toContain('max_linear');
-		expect(limits.text()).toContain('0.3 m/s');
-		expect(limits.text()).toContain('1.2 rad/s');
-		expect(limits.text()).toContain('30 s');
-		expect(limits.text()).toContain('运行前需确认：是');
-	});
-
-	it('改一个数字 → 面板对应那行的数字跟着变', async () => {
+	it('改一个数字 → 面板那个数字跟着变，其它行不动', async () => {
 		const wrapper = mount(CodePanel);
 		const moveNode = declaration().nodes[0];
 		expect(moveNode).toBeDefined();
 		if (moveNode === undefined) return;
 
-		expect(lineTexts(wrapper)[1]).toBe('move(linear=0.2, angular=0.0, duration=5.0)');
+		expect(lineTexts(wrapper)[0]).toBe('set_velocity(linear=0.2, angular=0.0)');
 
 		expect(applyParam(moveNode.id, 'linear', 0.15)).toBe(true);
 		await wrapper.vm.$nextTick();
 
-		expect(lineTexts(wrapper)[1]).toBe('move(linear=0.15, angular=0.0, duration=5.0)');
-		// 其它行不动
-		expect(lineTexts(wrapper)[3]).toBe('turn(angular=0.8, duration=2.0)');
-	});
-
-	it('面板是声明的纯函数：同一份声明 → 同一份文本，且与渲染包的输出逐字一致', () => {
-		const first = mount(CodePanel);
-		const second = mount(CodePanel);
-		const expected = renderDeclaration(declaration());
-
-		expect(lineTexts(first)).toEqual(lineTexts(second));
-		expect(lineTexts(first)).toEqual(expected.lines.map((line) => line.text));
-		expect(first.text()).toContain(`${expected.callCount} 个调用`);
+		expect(lineTexts(wrapper)[0]).toBe('set_velocity(linear=0.15, angular=0.0)');
+		expect(lineTexts(wrapper)[1]).toBe('wait(seconds=5.0)');
 	});
 
 	it('越界值被写回通道拦下：真相不动，面板跟着不动（面板不自己修正，也不自己校验）', async () => {
@@ -152,83 +156,62 @@ describe('CodePanel', () => {
 		expect(doc.diagnostics.value.length).toBeGreaterThan(0);
 	});
 
-	it('selectedNodeId 变化 → 它渲染出的那几行高亮，别的行不亮', async () => {
+	it('安全限值仍常驻，且说明它是整个任务的上限', () => {
 		const wrapper = mount(CodePanel);
-		expect(activeLines(wrapper)).toEqual([]);
+		const limits = wrapper.get('[data-testid="code-limits"]');
 
-		const second = declaration().nodes[1];
-		if (second === undefined) return;
-		doc.select(second.id);
-		await wrapper.vm.$nextTick();
-		expect(activeLines(wrapper)).toEqual(['3']);
+		expect(limits.text()).toContain('max_linear');
+		expect(limits.text()).toContain('0.3 m/s');
+		expect(limits.text()).toContain('1.2 rad/s');
+		expect(limits.text()).toContain('30 s');
+		expect(limits.text()).toContain('运行前需确认：是');
+		expect(limits.text()).toContain('整个任务的上限');
 
-		doc.select(declaration().nodes[0]?.id ?? null);
-		await wrapper.vm.$nextTick();
-		expect(activeLines(wrapper)).toEqual(['2']);
-
-		doc.select(null);
-		await wrapper.vm.$nextTick();
-		expect(activeLines(wrapper)).toEqual([]);
-		expect(wrapper.text()).toContain('在积木那侧改一个参数，这里跟着变');
+		// 换个模块，限值一栏不动
+		doc.select(declaration().nodes[1]?.id ?? null);
+		return wrapper.vm.$nextTick().then(() => {
+			expect(wrapper.get('[data-testid="code-limits"]').text()).toBe(limits.text());
+		});
 	});
 
-	it('选中时那一行的徽标也进选中态（三处同一个徽标状态，不只换个底色）', async () => {
+	it('只读：面板里没有任何写入口（没有输入框、没有按钮）', () => {
 		const wrapper = mount(CodePanel);
-		expect(wrapper.findAll('[data-testid="code-line-index"][data-active="true"]')).toHaveLength(0);
-
-		doc.select(declaration().nodes[1]!.id);
-		await wrapper.vm.$nextTick();
-
-		const activeBadges = wrapper.findAll('[data-testid="code-line-index"][data-active="true"]');
-		expect(activeBadges).toHaveLength(1);
-		expect(activeBadges[0]!.text()).toBe('2');
-		expect(activeBadges[0]!.classes()).toContain('is-active');
+		expect(wrapper.findAll('input, textarea, select, button')).toHaveLength(0);
+		expect(wrapper.text()).toContain('只读');
 	});
 
-	it('点第 2 个调用行 → 选中推给共享状态，另两栏据此高亮（代码行是联动的第三个入口）', async () => {
-		const wrapper = mount(CodePanel);
-		const nodes = declaration().nodes;
-
-		await wrapper.findAll('[data-testid="code-call-line"]')[1]!.trigger('click');
-
-		expect(doc.selectedNodeId.value).toBe(nodes[1]!.id);
-		expect(activeLines(wrapper)).toEqual(['3']);
-		// 推的是 nodeId；blockId 由积木那侧按映射表解析（与流程卡片同一条路）。
-		expect(doc.selectedBlockId.value).toBeNull();
+	it('面板是声明的纯函数：同一份声明 + 同一个选中 → 同一份文本', () => {
+		const first = mount(CodePanel);
+		const second = mount(CodePanel);
+		expect(lineTexts(first)).toEqual(lineTexts(second));
 	});
 
-	it('键盘也能选（行是按钮语义，Enter / Space 与点击同义）', async () => {
-		const wrapper = mount(CodePanel);
-		const nodes = declaration().nodes;
-		const second = wrapper.findAll('[data-testid="code-call-line"]')[1]!;
+	it('面板碰不到「目录里没有的能力」：写回通道只放协议里的七种动作进来', async () => {
+		const current = declaration();
+		const nodes: WorkflowNode[] = current.nodes.map((node, index) =>
+			index === 0 ? { ...node, parameters: { ...node.parameters, action: 'publish_to_hardware' } } : node,
+		);
+		const draft = { ...current, nodes };
 
-		await second.trigger('keydown', { key: 'Enter' });
-		expect(doc.selectedNodeId.value).toBe(nodes[1]!.id);
+		// 声明层看不见参数语义（spec §1.2 的不透明载荷），但写回通道还有第二道闸：任务协议校验器。
+		// 于是流程/积木能产生的节点，action 一定是七种动作之一——而一期目录覆盖了全部七种，
+		// 所以「查不到能力」那条分支在界面上走不到（渲染包里另有单测覆盖它）。
+		expect(doc.applyDeclaration({ ...draft, digest: computeWorkflowDigest(draft) })).toBe(false);
+		await Promise.resolve();
 
-		doc.select(null);
-		await wrapper.vm.$nextTick();
-		await wrapper.findAll('[data-testid="code-call-line"]')[3]!.trigger('keydown', { key: ' ' });
-		expect(doc.selectedNodeId.value).toBe(nodes[3]!.id);
-	});
-
-	it('注释行不属于任何步骤：不是按钮，点了也不改选中', async () => {
-		const wrapper = mount(CodePanel);
-		const comment = wrapper.find('li.cp-line[data-kind="comment"]');
-
-		expect(comment.find('button').exists()).toBe(false);
-		expect(comment.attributes('data-node-id')).toBeUndefined();
-		await comment.trigger('click');
-		expect(doc.selectedNodeId.value).toBeNull();
+		expect(doc.declaration.value?.nodes[0]?.parameters['action']).toBe('move');
+		expect(mount(CodePanel).get('[data-testid="code-title"]').text()).toBe('前进 · 实现');
 	});
 });
 
 // 右栏改成固定分区（上虚拟设备、下代码面板）之后，这条接线断言随之反过来：它总在。
 // 右栏自身的布局与顺序另见 `views/right/RightPanel.test.ts`。
 describe('接线：代码面板在右栏常驻（固定布局，不挑状态）', () => {
-	it('右栏里挂的就是代码面板', () => {
+	it('右栏里挂的就是代码面板，显示的是第一个模块的实现', () => {
 		const wrapper = mount(RightPanel);
 		expect(wrapper.find('.code-panel').exists()).toBe(true);
-		expect(wrapper.text()).toContain('move(linear=0.2, angular=0.0, duration=5.0)');
+		expect(wrapper.text()).toContain('前进 · 实现');
+		expect(wrapper.text()).toContain('set_velocity(linear=0.2, angular=0.0)');
 	});
 
 	it('右栏仍是右栏：测试 id 在容器上，代码面板在它里面', () => {

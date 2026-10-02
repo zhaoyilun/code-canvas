@@ -1,5 +1,5 @@
 {
-  "name": "@codecanvas/code-render",
+  "name": "@codecanvas/capabilities",
   "version": "0.1.0",
   "private": true,
   "type": "module",
@@ -11,13 +11,11 @@
   "dependencies": {
     "@codecanvas/contracts": "workspace:*"
   },
-  "devDependencies": {
-    "@codecanvas/capabilities": "workspace:*",
-    "@codecanvas/task-import": "workspace:*",
-    "vitest": "^5.0.3"
-  },
   "scripts": {
     "test": "vitest run --passWithNoTests",
     "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.3"
   }
 }

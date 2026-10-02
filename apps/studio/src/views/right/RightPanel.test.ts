@@ -42,8 +42,10 @@ describe('右栏 · 代码面板常驻', () => {
 		expect(wrapper.get('[data-testid="right-panel-code"]').find('[data-testid="code-panel"]').exists()).toBe(
 			true,
 		);
-		expect(wrapper.text()).toContain('move(linear=0.2, angular=0.0, duration=5.0)');
-		expect(wrapper.text()).toContain('stop_if_obstacle(sensors=["/scan0"], distance=0.5)');
+		// 新模型：面板显示当前模块的实现（没有选中时是第一个模块），不再是整任务一串调用
+		expect(wrapper.text()).toContain('前进 · 实现');
+		expect(wrapper.text()).toContain('set_velocity(linear=0.2, angular=0.0)');
+		expect(wrapper.text()).toContain('wait(seconds=5.0)');
 	});
 
 	it('安全限值也还在（面板整块都在，不是只留个标题）', () => {
@@ -53,7 +55,7 @@ describe('右栏 · 代码面板常驻', () => {
 
 	it('改一个参数 → 面板跟着变', async () => {
 		const wrapper = panel();
-		expect(wrapper.text()).toContain('move(linear=0.2');
+		expect(wrapper.text()).toContain('set_velocity(linear=0.2');
 
 		const first = doc.declaration.value?.nodes[0];
 		expect(first).toBeDefined();
@@ -62,7 +64,7 @@ describe('右栏 · 代码面板常驻', () => {
 		expect(applyParam(first.id, 'linear', 0.15)).toBe(true);
 		await wrapper.vm.$nextTick();
 
-		expect(wrapper.text()).toContain('move(linear=0.15, angular=0.0, duration=5.0)');
+		expect(wrapper.text()).toContain('set_velocity(linear=0.15, angular=0.0)');
 	});
 
 	it('面板是右栏的主内容：它的槽位带着撑满所需的约束（flex 吃剩余高度 + min-height 0）', () => {
