@@ -1,11 +1,11 @@
 /**
- * 代码面板的界面验收（新模型：**面板显示当前选中模块的实现**）：
- * 1. 加载后（还没选）退到第一个模块——前进的实现三行；标题说清看的是哪个模块；
- * 2. **点流程画布的卡片 → 面板换成那个模块的实现**，数值来自该节点的参数（教学价值那条链）；
+ * 代码面板的界面验收（**语句树 → 带缩进的代码 + 选中步双向联动**）：
+ * 1. 加载后（还没选）退到第一个模块——前进的实现三行；
+ * 2. **点流程画布的卡片 → 面板换成那个模块的实现**，避障停止那三行带缩进；
  * 3. 改一个参数 → 面板那个数字跟着变；
- * 4. 行 ↔ implementation 步骤的映射写在 DOM 上（`data-line` / `data-step`），不在视图里重算；
- * 5. 安全限值仍常驻（它属于整个任务）；
- * 6. 面板是只读的派生：退档不改共享选中状态，也不自己校验。
+ * 4. 行 ↔ 步骤的映射写在 DOM 上（`data-line` / `data-step` / `data-path`），不在视图里重算；
+ * 5. **点某一行 → `selectStep(顶层下标)`**；`selectedStepIndex` 变了 → 那一步的所有行全亮；
+ * 6. 安全限值仍常驻；面板是只读的派生（退档不改共享选中状态，也不自己校验）。
  */
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -33,8 +33,20 @@ const applyParam = (nodeId: string, name: string, value: number): boolean => {
 	return doc.applyDeclaration({ ...draft, digest: computeWorkflowDigest(draft) });
 };
 
+/**
+ * 面板上每一行的**渲染文本**——读真实 DOM 的 `textContent`，不是 VTU 的 `.text()`。
+ *
+ * 为什么较真：行首缩进就在 `<code>` 里（`INDENT_UNIT` = 4 个空格），
+ * 而 `.text()` 会把它折掉（VTU 读的是 vdom 归一化过的文本）。
+ * 缩进是这段程序的一部分，测试就必须从 DOM 里逐字读出来，而不是从别处拼回来。
+ */
 const lineTexts = (wrapper: ReturnType<typeof mount>): string[] =>
-	wrapper.findAll('li.cp-line .cp-src').map((cell) => cell.text());
+	wrapper
+		.findAll('li.cp-line .cp-src')
+		.map((cell) => (cell.element as HTMLElement).textContent ?? '');
+
+const indents = (wrapper: ReturnType<typeof mount>): string[] =>
+	wrapper.findAll('li.cp-line').map((line) => line.attributes('data-indent') ?? '');
 
 const lineNumbers = (wrapper: ReturnType<typeof mount>): (string | undefined)[] =>
 	wrapper.findAll('li.cp-line').map((line) => line.attributes('data-line'));
@@ -42,9 +54,30 @@ const lineNumbers = (wrapper: ReturnType<typeof mount>): (string | undefined)[] 
 const stepIndexes = (wrapper: ReturnType<typeof mount>): (string | undefined)[] =>
 	wrapper.findAll('li.cp-line').map((line) => line.attributes('data-step'));
 
+const stepPaths = (wrapper: ReturnType<typeof mount>): (string | undefined)[] =>
+	wrapper.findAll('li.cp-line').map((line) => line.attributes('data-path'));
+
+const selectedLines = (wrapper: ReturnType<typeof mount>): number[] =>
+	wrapper
+		.findAll('li.cp-line')
+		.filter((line) => line.attributes('data-selected') === 'true')
+		.map((line) => Number(line.attributes('data-line')));
+
+/** 流程画布上点某张卡（「避障停止」这类），走界面那条路选中模块。 */
+const clickFlowCard = async (flow: ReturnType<typeof mount>, label: string): Promise<void> => {
+	const card = flow
+		.findAll('[data-testid="flow-node-card"]')
+		.find((node) => node.get('[data-testid="flow-node-action"]').text() === label);
+	expect(card).toBeDefined();
+	await card?.trigger('click');
+};
+
 beforeEach(() => {
 	loadSampleTask();
+	// 顺带清掉步选中：`select(null)` 只在**节点真的变了**时才清（它自己的守卫），
+	// 上一个用例可能刚好把节点留在 null 上。这里把两件事都摆平，用例之间才互不干扰。
 	doc.select(null);
+	doc.selectStep(null);
 });
 
 describe('CodePanel · 当前模块的实现', () => {
@@ -67,24 +100,26 @@ describe('CodePanel · 当前模块的实现', () => {
 		mount(CodePanel);
 		expect(doc.selectedNodeId.value).toBeNull();
 		expect(doc.selectedBlockId.value).toBeNull();
+		expect(doc.selectedStepIndex.value).toBeNull();
 	});
 
-	it('点流程画布的「避障停止」卡 → 面板换成它的实现，数值来自该节点的参数', async () => {
+	it('点流程画布的「避障停止」卡 → 面板渲染出带缩进的三行（赋值 + if + 缩进的 brake）', async () => {
 		const flow = mount(FlowView);
 		const panel = mount(CodePanel);
 
-		const card = flow
-			.findAll('[data-testid="flow-node-card"]')
-			.find((node) => node.get('[data-testid="flow-node-action"]').text() === '避障停止');
-		expect(card).toBeDefined();
-		await card?.trigger('click');
+		await clickFlowCard(flow, '避障停止');
 
 		expect(panel.get('[data-testid="code-title"]').text()).toBe('避障停止 · 实现');
+		// 三行：一行赋值、一行分支头、一行**缩进一档**的子语句（缩进写在文本里）
 		expect(lineTexts(panel)).toEqual([
-			'read_scan(sensor=["/scan0"])',
-			'compare_below(threshold=0.5)',
-			'brake()',
+			'reading = read_scan(sensors=["/scan0"])',
+			'if reading < 0.5:',
+			'    brake()',
 		]);
+		expect(indents(panel)).toEqual(['0', '0', '1']);
+		expect(
+			panel.findAll('li.cp-line').map((line) => line.attributes('data-kind')),
+		).toEqual(['set', 'if', 'call']);
 		// 选中态是共享的：面板显示的正是流程卡片上那张卡
 		expect(doc.selectedNodeId.value).toBe(declaration().nodes[1]?.id);
 		expect(panel.find('[data-testid="code-footer-fallback"]').exists()).toBe(false);
@@ -110,20 +145,40 @@ describe('CodePanel · 当前模块的实现', () => {
 		expect(wrapper.get('[data-testid="code-title"]').text()).toBe('前进 · 实现');
 	});
 
-	it('行 ↔ 步骤的映射在 DOM 上：行号 1 起、步骤号 0 起，与渲染包的产出逐字一致', () => {
+	it('行 ↔ 步骤的映射在 DOM 上：行号 1 起、顶层步骤号 0 起、路径精确到分支', () => {
 		const wrapper = mount(CodePanel);
 
 		expect(stepIndexes(wrapper)).toEqual(['0', '1', '2']);
+		expect(stepPaths(wrapper)).toEqual(['0', '1', '2']);
 		expect(wrapper.findAll('li.cp-line').map((line) => line.attributes('data-primitive'))).toEqual([
 			'set_velocity',
 			'wait',
 			'stop_motion',
 		]);
-		// 行首徽标是「实现里的第几步」，与 data-step 同一口径
+		// 行首徽标是「模块内部的第几条顶层语句」，与 data-step 同一口径
 		const badges = wrapper.findAll('[data-testid="code-step-index"]');
 		expect(badges.map((badge) => badge.text())).toEqual(['1', '2', '3']);
 		expect(badges.map((badge) => badge.attributes('data-seq'))).toEqual(['1', '2', '3']);
 		expect(badges[0]?.classes()).toContain('cc-seq');
+	});
+
+	it('一个 if 展开的多行共享同一个顶层步骤号，徽标只挂在分支头上（不重复三次）', async () => {
+		const wrapper = mount(CodePanel);
+		doc.select(declaration().nodes[1]?.id ?? null);
+		await wrapper.vm.$nextTick();
+
+		expect(stepIndexes(wrapper)).toEqual(['0', '1', '1']);
+		expect(stepPaths(wrapper)).toEqual(['0', '1', '1.then.0']);
+		// 三行只有两枚徽标：第 1 步（赋值）与第 2 步（if）
+		expect(wrapper.findAll('[data-testid="code-step-index"]').map((badge) => badge.text())).toEqual([
+			'1',
+			'2',
+		]);
+		// 分支头带 data-step-head，用来把整步滚进视野
+		expect(wrapper.findAll('[data-step-head]').map((line) => line.attributes('data-step-head'))).toEqual([
+			'0',
+			'1',
+		]);
 	});
 
 	it('改一个数字 → 面板那个数字跟着变，其它行不动', async () => {
@@ -139,6 +194,23 @@ describe('CodePanel · 当前模块的实现', () => {
 
 		expect(lineTexts(wrapper)[0]).toBe('set_velocity(linear=0.15, angular=0.0)');
 		expect(lineTexts(wrapper)[1]).toBe('wait(seconds=5.0)');
+	});
+
+	it('改实现里被引用的那个参数（避障阈值）→ if 条件里的数字跟着变', async () => {
+		const wrapper = mount(CodePanel);
+		const obstacle = declaration().nodes[1];
+		if (obstacle === undefined) return;
+
+		doc.select(obstacle.id);
+		await wrapper.vm.$nextTick();
+		expect(lineTexts(wrapper)[1]).toBe('if reading < 0.5:');
+
+		expect(applyParam(obstacle.id, 'distance', 1.5)).toBe(true);
+		await wrapper.vm.$nextTick();
+		expect(lineTexts(wrapper)[1]).toBe('if reading < 1.5:');
+		// 结构没变：还是三行、还是那三条语句
+		expect(lineTexts(wrapper)[0]).toBe('reading = read_scan(sensors=["/scan0"])');
+		expect(lineTexts(wrapper)[2]).toBe('    brake()');
 	});
 
 	it('越界值被写回通道拦下：真相不动，面板跟着不动（面板不自己修正，也不自己校验）', async () => {
@@ -201,6 +273,106 @@ describe('CodePanel · 当前模块的实现', () => {
 
 		expect(doc.declaration.value?.nodes[0]?.parameters['action']).toBe('move');
 		expect(mount(CodePanel).get('[data-testid="code-title"]').text()).toBe('前进 · 实现');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 选中步：点代码 → selectStep；selectedStepIndex → 高亮（两边共用的那根线）
+// ---------------------------------------------------------------------------
+
+describe('CodePanel · 选中步（与积木共用 selectedStepIndex）', () => {
+	it('点代码第 2 行 → selectStep(1)（顶层下标，0 基）', async () => {
+		const wrapper = mount(CodePanel);
+		expect(doc.selectedStepIndex.value).toBeNull();
+
+		await wrapper.findAll('li.cp-line')[1]?.trigger('click');
+
+		expect(doc.selectedStepIndex.value).toBe(1);
+		expect(selectedLines(wrapper)).toEqual([2]);
+	});
+
+	it('selectedStepIndex 变化 → 属于那一步的行全部高亮（一个 if 会是多行）', async () => {
+		const wrapper = mount(CodePanel);
+		doc.select(declaration().nodes[1]?.id ?? null);
+		await wrapper.vm.$nextTick();
+
+		doc.selectStep(1);
+		await wrapper.vm.$nextTick();
+
+		// 第 1 步是那个 `if`：分支头与缩进的 brake 一起亮
+		expect(selectedLines(wrapper)).toEqual([2, 3]);
+		expect(
+			wrapper.findAll('li.cp-line.is-selected').map((line) => line.attributes('data-path')),
+		).toEqual(['1', '1.then.0']);
+		// 徽标也跟着进选中态（三处联动里最稳的那条线索）
+		const badges = wrapper.findAll('[data-testid="code-step-index"]');
+		expect(badges.map((badge) => badge.attributes('data-active'))).toEqual(['false', 'true']);
+	});
+
+	it('点第 1 行（赋值那步）→ 只有它亮', async () => {
+		const wrapper = mount(CodePanel);
+		doc.select(declaration().nodes[1]?.id ?? null);
+		await wrapper.vm.$nextTick();
+
+		await wrapper.findAll('li.cp-line')[0]?.trigger('click');
+
+		expect(doc.selectedStepIndex.value).toBe(0);
+		expect(selectedLines(wrapper)).toEqual([1]);
+	});
+
+	it('再点同一行 → 收回选中（不然没法取消）', async () => {
+		const wrapper = mount(CodePanel);
+		const line = wrapper.findAll('li.cp-line')[1];
+		await line?.trigger('click');
+		expect(doc.selectedStepIndex.value).toBe(1);
+
+		await line?.trigger('click');
+		expect(doc.selectedStepIndex.value).toBeNull();
+		expect(selectedLines(wrapper)).toEqual([]);
+	});
+
+	it('换模块时选中步清空：跨模块谈「第几步」没有意义', async () => {
+		const wrapper = mount(CodePanel);
+		await wrapper.findAll('li.cp-line')[1]?.trigger('click');
+		expect(doc.selectedStepIndex.value).toBe(1);
+
+		doc.select(declaration().nodes[1]?.id ?? null);
+		await wrapper.vm.$nextTick();
+
+		expect(doc.selectedStepIndex.value).toBeNull();
+		expect(selectedLines(wrapper)).toEqual([]);
+	});
+
+	it('键盘走同一条路：回车选中那一行所属的步', async () => {
+		const wrapper = mount(CodePanel);
+		const line = wrapper.findAll('li.cp-line')[1];
+		expect(line?.attributes('role')).toBe('button');
+		expect(line?.attributes('tabindex')).toBe('0');
+
+		await line?.trigger('keydown', { key: 'Enter' });
+
+		expect(doc.selectedStepIndex.value).toBe(1);
+		expect(selectedLines(wrapper)).toEqual([2]);
+	});
+
+	it('注释行不可点（它不占步骤号）——没有 role/tabindex，点了也不改选中', async () => {
+		const wrapper = mount(CodePanel);
+		const current = declaration();
+		const nodes: WorkflowNode[] = current.nodes.map((node, index) =>
+			index === 0 ? { ...node, disabled: true } : node,
+		);
+		const draft = { ...current, nodes };
+		expect(doc.applyDeclaration({ ...draft, digest: computeWorkflowDigest(draft) })).toBe(true);
+		await wrapper.vm.$nextTick();
+
+		const first = wrapper.findAll('li.cp-line')[0];
+		expect(first?.attributes('data-kind')).toBe('comment');
+		expect(first?.classes()).not.toContain('is-clickable');
+		expect(first?.attributes('tabindex')).toBeUndefined();
+		expect(doc.selectedStepIndex.value).toBeNull();
+		await first?.trigger('click');
+		// 注释行不占步骤号 → 点了也不改选中（它没有 role / tabindex，也不该有）
+		expect(doc.selectedStepIndex.value).toBeNull();
 	});
 });
 

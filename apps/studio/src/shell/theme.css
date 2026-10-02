@@ -64,8 +64,20 @@
 	--cc-right-w: 360px;
 	--cc-topbar-h: 48px;
 	--cc-statusbar-h: 44px;
-	/* 上层输入带：粘贴 / 拖入任务 JSON 的那条。诊断出来时它会自己长高。 */
-	--cc-inputband-h: 88px;
+	/*
+	 * 上层输入带：粘贴 / 拖入 / 从接口取任务 JSON 的那条。诊断出来时它会自己长高。
+	 *
+	 * 原先钉死 88px，只够两行——连一份任务 JSON 的头几行都露不出来，更别说在里面改。
+	 * 现在按视口高度**连续**地取：37vh，下限 150px（约 4 行），上限 340px（约 15 行）。
+	 *
+	 * 为什么不写成分档的媒体查询：带子高多少，下面三栏就少多少，两者是一条零和账。
+	 * 分档会在档位上跳变（801px 和 899px 高的窗口差一整行），连续取则到处都刚好——
+	 * 高屏给到十行以上，一份完整任务能看全；矮窗自动退到四行，三栏还剩得下。
+	 *
+	 * 上限定成 340px 是「不喧宾夺主」那一档：1080p 上带子占约三成，工作区仍有 ~650px。
+	 * 真正的下限保证是 37vh——视口再矮也只是带子变薄，三栏不会被挤没。
+	 */
+	--cc-inputband-h: clamp(150px, 37vh, 340px);
 
 	/*
 	 * 积木动作色（**仅追加**，上面已有的变量一个没动；只给积木画布用）。
@@ -133,6 +145,24 @@
 	 */
 	--cc-col-gap: 26px;
 	--cc-col-gap-tight: 16px;
+
+	/*
+	 * 转译链的状态色（**仅追加**，上面已有的变量一个没动）。
+	 *
+	 * 那条链原先只是静态装饰。现在它要回答两个问题——「在不在干活」「干完没有」——
+	 * 所以要三档，缺一档都读不出来：
+	 *   进行中（is-live）  → 最亮 + 呼吸，是唯一会动的东西，动完就停
+	 *   已点亮（is-lit）   → 强调色的安静版，表示这一段过了
+	 *   失败（is-failed）  → 危险色，停在出错的那一段
+	 * 三档全部从已有变量派生，不新增色号：链上的强调色就是三处序号徽标那一条。
+	 */
+	--cc-chain-live: var(--cc-accent-strong);
+	--cc-chain-lit: var(--cc-accent);
+	--cc-chain-lit-veil: var(--cc-accent-veil);
+	--cc-chain-lit-border: var(--cc-accent-dim);
+	--cc-chain-failed: var(--cc-danger-strong);
+	--cc-chain-failed-veil: var(--cc-danger-veil);
+	--cc-chain-failed-border: var(--cc-danger);
 }
 
 * {

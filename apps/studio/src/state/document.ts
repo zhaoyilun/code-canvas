@@ -102,9 +102,24 @@ function applyDeclaration(next: WorkflowDeclaration): boolean {
 	return true;
 }
 
+/**
+ * 选中实现里的第几步（语句树的下标，0 基）。
+ *
+ * 它必须跟节点一起变：跨模块谈「第 3 步」没有意义，所以换节点时清空。
+ * 代码行与积木块都靠它对齐——「点代码某行 → 高亮积木那一步」就是这条。
+ */
+const selectedStepIndex = ref<number | null>(null);
+
 function select(nodeId: string | null, blockId: string | null = null): void {
+	// 取消选中（nodeId 为 null）也要清步选中：否则会出现「没有任何节点被选中，
+	// 但某一步还亮着」这种自相矛盾的状态——守卫只比较 nodeId 变没变是拦不住它的。
+	if (nodeId === null || selectedNodeId.value !== nodeId) selectedStepIndex.value = null;
 	selectedNodeId.value = nodeId;
 	selectedBlockId.value = blockId;
+}
+
+function selectStep(index: number | null): void {
+	selectedStepIndex.value = index;
 }
 
 export function useStudioDocument() {
@@ -113,6 +128,7 @@ export function useStudioDocument() {
 		diagnostics,
 		selectedNodeId,
 		selectedBlockId,
+		selectedStepIndex,
 		nodes: computed<readonly WorkflowNode[]>(() => declaration.value?.nodes ?? []),
 		selectedNode: computed<WorkflowNode | null>(() => {
 			const id = selectedNodeId.value;
@@ -123,6 +139,7 @@ export function useStudioDocument() {
 		loadTaskJson,
 		applyDeclaration,
 		select,
+		selectStep,
 	};
 }
 

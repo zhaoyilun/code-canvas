@@ -3,20 +3,23 @@
  * 右栏代码面板（spec §4.1）：**编译产物，只读**。
  *
  * 粒度是「工作流上的一个模块 = 一个函数」：面板显示**当前选中模块的实现**——
- * 那个能力在目录里的 `implementation`，也就是机器为了执行它具体做了什么。
- * 文本一个字都不在这里拼：`renderImplementation()` 从 `PHASE1_ROBOT_CATALOG` 的原语定义推导，
- * 连「第几行是第几步」也是它给的（`steps[]` / `steps[].stepIndex`），这里只渲染，不重算。
+ * 那个能力在目录里的 `implementation`（一棵**语句树**），也就是机器为了执行它具体做了什么。
+ * 文本一个字都不在这里拼：`renderImplementation()` 从 `PHASE1_ROBOT_CATALOG` 的原语定义递归推导，
+ * 连缩进、「第几行是哪一步」也是它给的（`lines[].stepPath` / `lines[].stepIndex`），这里只渲染，不重算。
  *
  * - 选中项从 `useStudioDocument()` 读（流程卡片、积木、都一样）；还没选时退到第一个模块，
  *   于是面板一打开就有东西可看——**退档只影响显示，不去改写共享的选中状态**。
- * - 选中变化 → 重新渲染，这就是「点流程卡片 → 代码跟着换」那条链。
- * - 行首的序号徽标是这次渲染里的**第几步实现**（`SequenceBadge`，与流程卡片、积木同一个组件、
- *   同一组 `--cc-seq-*` 变量）；行号与步骤号分开摆，因为一行实现不等于一步工作流。
+ * - **点某一行 → `selectStep(该行的顶层下标)`**；反过来 `selectedStepIndex` 一变，
+ *   属于那一步的行全部高亮（一个顶层 `if` 会有好几行）。积木那边接的是同一根线、同一套
+ *   `--cc-*` 高亮语言（`--cc-highlight`），所以「点代码 → 积木亮」这条链是同一个状态推出来的。
+ * - 行首的序号徽标是这个模块里的**第几条顶层语句**（`SequenceBadge`，与流程卡片、积木同一个组件、
+ *   同一组 `--cc-seq-*` 变量）。一个 `if` 的子语句行不再挂徽标（它们和分支头是同一步），
+ *   否则同一个数字会在三行上重复，反倒看不出一共几步。
  * - 安全限值常驻底部——它属于**整个任务**（`meta.limits`），不随选中哪个模块变。
  */
 import { computed, nextTick, ref, watch } from 'vue';
 import { PHASE1_ROBOT_CATALOG } from '@codecanvas/capabilities';
-import { renderImplementation } from '@codecanvas/code-render';
+import { renderImplementation, type RenderedLine } from '@codecanvas/code-render';
 import { useStudioDocument } from '../../state/document';
 import { stepNumbersOf } from '../shared/sequence-badge';
 import SequenceBadge from '../shared/SequenceBadge.vue';
@@ -52,7 +55,52 @@ const warnings = computed(() => program.value.diagnostics);
 
 const scroller = ref<HTMLElement | null>(null);
 
-// 换模块时视线回到实现的第一行。scrollIntoView 在测试用的 DOM 实现里可能没有，所以先探一下再调。
+/** 当前选中的是**哪一条顶层语句**（0 基）；null = 没选。 */
+const selectedStep = computed(() => doc.selectedStepIndex.value);
+
+/** 这一行属不属于当前选中步：属于就整行高亮（一个 `if` 的每一行都亮）。 */
+const isSelectedStep = (line: RenderedLine): boolean =>
+	selectedStep.value !== null && line.stepIndex === selectedStep.value;
+
+/**
+ * 每一行的**行号 → 顶层语句头行号**。徽标只挂在头上：
+ * 同一个数字在三行上重复不等于「这三行是同一步」，而是让人以为有三步。
+ * 判据是「上一行的顶层下标与我不同」——`if` 的 then/else 子语句行因此不挂徽标。
+ */
+const stepHeads = computed(() => {
+	const heads = new Set<number>();
+	let previousStep: number | null = null;
+	for (const line of program.value.lines) {
+		if (line.stepIndex !== null && line.stepIndex !== previousStep) heads.add(line.line);
+		previousStep = line.stepIndex;
+	}
+	return heads;
+});
+
+const isStepHead = (line: RenderedLine): boolean => stepHeads.value.has(line.line);
+
+/**
+ * 点一行 = 选中它所属的那一步。再点同一行收回选中（不然就没法「取消选中」了）——
+ * 收回只动 `selectedStepIndex`，不动节点选中。
+ */
+const pickLine = (line: RenderedLine): void => {
+	if (line.stepIndex === null) return;
+	doc.selectStep(selectedStep.value === line.stepIndex ? null : line.stepIndex);
+};
+
+/** 键盘走同一件事：回车/空格选中那一行所属的步。 */
+const pickLineByKey = (event: KeyboardEvent, line: RenderedLine): void => {
+	if (event.key !== 'Enter' && event.key !== ' ') return;
+	event.preventDefault();
+	pickLine(line);
+};
+
+/** 读屏用的整行说明：缩进说成「缩进 n 档」，比四个空格好懂。 */
+const describeLine = (line: RenderedLine): string =>
+	line.indent === 0 ? line.text.trim() : `缩进 ${line.indent} 档：${line.text.trim()}`;
+
+// 换模块时视线回到实现的第一行，并清掉上一步的选中（跨模块谈「第几步」没有意义，
+// 这半件事 `state/document.ts` 的 `select()` 已经做了；这里只负责滚动）。
 watch(
 	() => program.value.nodeId,
 	async () => {
@@ -63,6 +111,16 @@ watch(
 		}
 	},
 );
+
+/** 选中的那一步：把它滚进视野（积木那边点过来时，代码这侧得跟上）。 */
+watch(selectedStep, async (index) => {
+	if (index === null) return;
+	await nextTick();
+	const target = scroller.value?.querySelector(`[data-step-head="${index}"]`);
+	if (target !== null && target !== undefined && typeof target.scrollIntoView === 'function') {
+		target.scrollIntoView({ block: 'nearest' });
+	}
+});
 </script>
 
 <template>
@@ -90,26 +148,50 @@ watch(
 			<div v-else ref="scroller" class="cp-code" data-testid="code-scroll">
 				<ol class="cp-lines">
 					<!--
-						一行 = 实现里的一步原语（或一句注记）。行号、步骤号分开摆：
-						`data-step` 是 `implementation` 的下标（0 基），界面的高亮与联动一律读它。
+						一行 = 一条语句（或一句注记）。`if` 展开成多行，子语句那几行的缩进**已经写在文本里**
+						（4 个空格一档，见 code-render 的 INDENT_UNIT），所以复制出去的文本与看到的一致。
+						`data-step` 是**顶层**语句下标（0 基，界面联动只认它）；
+						`data-path` 是精确树路径（`1.then.0`），高亮到具体那一行。
 					-->
 					<li
 						v-for="line in program.lines"
 						:key="line.line"
 						class="cp-line"
-						:class="{ 'is-call': line.kind === 'call', 'is-unsupported': line.kind === 'unsupported' }"
+						:class="{
+							'is-call': line.kind === 'call',
+							'is-set': line.kind === 'set',
+							'is-branch': line.kind === 'if' || line.kind === 'else',
+							'is-unsupported': line.kind === 'unsupported',
+							'is-selected': isSelectedStep(line),
+							'is-clickable': line.stepIndex !== null,
+						}"
 						:data-line="line.line"
 						:data-kind="line.kind"
+						:data-indent="line.indent"
 						:data-step="line.stepIndex ?? undefined"
+						:data-path="line.stepPath ?? undefined"
+						:data-step-head="isStepHead(line) ? (line.stepIndex ?? undefined) : undefined"
 						:data-primitive="line.primitiveRef ?? undefined"
+						:data-selected="isSelectedStep(line) ? 'true' : 'false'"
 						:data-node-id="activeNode?.id ?? undefined"
+						:role="line.stepIndex !== null ? 'button' : undefined"
+						:tabindex="line.stepIndex !== null ? 0 : undefined"
+						:title="line.stepIndex !== null ? `选中第 ${line.stepIndex + 1} 步（${describeLine(line)}）` : undefined"
+						@click="pickLine(line)"
+						@keydown="pickLineByKey($event, line)"
 					>
 						<span class="cp-hit">
+							<!--
+								徽标只挂在顶层语句的头上：一个 `if` 展开的三行是同一步，
+								三行都挂「2」会让人以为有三步。
+							-->
 							<SequenceBadge
-								v-if="line.stepIndex !== null"
+								v-if="line.stepIndex !== null && isStepHead(line)"
 								:index="line.stepIndex + 1"
+								:active="isSelectedStep(line)"
 								testid="code-step-index"
 							/>
+							<span v-else class="cp-seq-gap" aria-hidden="true" />
 							<span class="cp-ln" aria-hidden="true">{{ line.line }}</span>
 							<code class="cp-src">{{ line.text === '' ? ' ' : line.text }}</code>
 						</span>
@@ -256,13 +338,38 @@ watch(
 	line-height: 1.7;
 }
 
+/*
+ * 一行 = 一条语句。行本身可点（点它 = 选中它那一步），所以给指针反馈；
+ * 缩进写在文本里（`white-space: pre-wrap` 保住行首空格），这一层不再补 padding。
+ */
 .cp-line {
 	display: flex;
 	align-items: stretch;
+	/* 高亮用的描边常驻（透明），选中时只换颜色——换粗细会让整块文字左右跳一格。 */
+	border-left: var(--cc-highlight-border-width) solid transparent;
+}
+
+/* 只有占着步骤号的行可点（注释行不占，点了也没有「第几步」可选）。 */
+.cp-line.is-clickable {
+	cursor: pointer;
+}
+
+.cp-line.is-clickable:hover {
+	background: var(--cc-surface-raised);
+}
+
+.cp-line:focus-visible {
+	outline: 1px solid var(--cc-highlight);
+	outline-offset: -1px;
+}
+
+.cp-line.is-selected {
+	background: var(--cc-accent-veil);
+	border-left-color: var(--cc-highlight);
 }
 
 /*
- * 行内容：序号徽标 + 行号 + 源码。三种行（调用 / 说明 / 注记）共用同一套排版，
+ * 行内容：序号徽标 + 行号 + 源码。五种行（调用 / 赋值 / 分支头 / 说明 / 注记）共用同一套排版，
  * 差别只在颜色与「有没有徽标」——不为了好看把行号码齐到不同的列上。
  */
 .cp-hit {
@@ -272,6 +379,12 @@ watch(
 	flex: 1 1 auto;
 	min-width: 0;
 	padding: 0 var(--cc-space-2);
+}
+
+/* 没有徽标的行占住同样的宽度：源码左边缘于是永远对齐。 */
+.cp-seq-gap {
+	flex: 0 0 auto;
+	width: 20px;
 }
 
 .cp-ln {
@@ -291,8 +404,14 @@ watch(
 	overflow-wrap: anywhere;
 }
 
-.cp-line.is-call .cp-src {
+.cp-line.is-call .cp-src,
+.cp-line.is-set .cp-src {
 	color: var(--cc-text);
+}
+
+/* 分支头（`if` / `else`）与它缩进的体：同一段程序的两个层次，靠字号与颜色分出来。 */
+.cp-line.is-branch .cp-src {
+	color: var(--cc-accent-strong);
 }
 
 .cp-line.is-unsupported .cp-src {

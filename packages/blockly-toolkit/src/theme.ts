@@ -96,9 +96,10 @@ export const createCodeCanvasTheme = (palette: ThemePalette, catalog: Capability
 			insertionMarkerOpacity: 0.5,
 			markerColour: complete['--cc-accent'],
 			cursorColour: complete['--cc-accent'],
-			selectedGlowColour: complete['--cc-accent'],
+			// 选中辉光与另外两栏同一个变量：`--cc-highlight`（theme.css 里它派生自强调色）。
+			selectedGlowColour: complete['--cc-highlight'],
 			selectedGlowOpacity: 0.7,
-			replacementGlowColour: complete['--cc-accent-strong'],
+			replacementGlowColour: complete['--cc-highlight'],
 			replacementGlowOpacity: 0.7,
 		},
 		fontStyle: size === null ? { family: complete['--cc-font-mono'] } : { family: complete['--cc-font-mono'], size },

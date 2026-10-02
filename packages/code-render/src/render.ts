@@ -4,10 +4,15 @@
  * 粒度是「工作流上的一个模块 = 一个函数」：节点的 `parameters.action` 就是 `capabilityRef`，
  * 代码面板显示这个能力在目录里的 `implementation`——机器为了执行它具体做了什么。
  *
- * 三条不许破的规矩：
+ * **实现是一棵语句树**（`call` / `set` / `if`，见 `@codecanvas/contracts` 的 `capability.ts`），
+ * 所以这里是**递归**渲染：语句 → 表达式 → 语句。`if` 展开成多行、给子语句加缩进，
+ * 因为「一串平铺的调用」看不出这是一段程序——数据形状改好了，渲染就得跟上。
+ *
+ * 四条不许破的规矩：
  * - **参数名与顺序来自 `catalog.primitives`**（原语定义），这里一个参数名都不手写；
  * - 目录里没有的能力/原语不假装认识：给诊断 + 说明行，节点名照样显示；
- * - 行 ↔ 步骤的映射**在这里产出**（`lines[].stepIndex` 与 `steps[]`），界面只读不重算。
+ * - 行 ↔ 步骤的映射**在这里产出**（`lines[].stepPath` / `lines[].stepIndex` / `steps[]`），界面只读不重算；
+ * - **缩进是文本的一部分**（4 个空格），不靠 CSS——复制的文本和面板上看到的必须是同一段程序。
  *
  * 限值一并返回：它是**整个任务**的安全上限（`meta.limits`），不随选中哪个模块变，
  * 所以放在同一个程序对象里交给面板，界面不用自己再去拼一遍。
@@ -18,33 +23,57 @@ import {
 	findPrimitive,
 	jsonDetail,
 	type CapabilityCatalog,
+	type CapabilitySpec,
 	type Diagnostic,
+	type ImplArgument,
+	type ImplExpression,
+	type ImplStatement,
+	type PrimitiveSpec,
 	type WorkflowDeclaration,
 	type WorkflowNode,
 } from '@codecanvas/contracts';
 import { EMPTY_LIMITS, describeLimits, type RenderedLimits } from './limits';
-import { renderArgument } from './values';
+import { asRenderable, renderByType, renderConstant, valueMessage } from './values';
+
+/** 缩进一档 = 4 个空格。 */
+export const INDENT_UNIT = '    ';
 
 /** 行号从 1 起，与编辑器行号一致。 */
 export interface RenderedLine {
 	readonly line: number;
+	/** 完整源码文本，**含行首缩进**（缩进是程序的一部分，不是样式）。 */
 	readonly text: string;
-	/** `call` = 一个原语调用；`unsupported` = 目录里查不到、只能说明；`comment` = 节点自身的注记。 */
-	readonly kind: 'call' | 'unsupported' | 'comment';
-	/** 这一行对应 `implementation` 的第几步（**0 基**）；注释行是 null。 */
+	/** 缩进档数（0 = 顶层）。 */
+	readonly indent: number;
+	/** `call`/`set` = 一条语句；`if`/`else` = 分支头；`unsupported` = 目录里查不到；`comment` = 节点自身的注记。 */
+	readonly kind: 'call' | 'set' | 'if' | 'else' | 'unsupported' | 'comment';
+	/** 这一行所属的**顶层**语句下标（0 基）；注释行是 null。界面联动只认它。 */
 	readonly stepIndex: number | null;
-	/** 这一行调的原语名；注释行是 null。 */
+	/** 这一行精确对应的树路径，例如 `"1"`、`"1.then.0"`、`"1.else.2"`；注释行是 null。 */
+	readonly stepPath: string | null;
+	/** 这一行调的原语名；赋值/分支/注释行是 null。 */
 	readonly primitiveRef: string | null;
+	/** 这一行调的原语在目录里查得到（说明行是 false）。 */
+	readonly known: boolean;
 }
 
-/** `implementation` 里的一步渲染在哪儿。 */
+/** `implementation` 里的一条**顶层**语句渲染在哪儿。 */
 export interface RenderedStepSpan {
 	/** 在 `capability.implementation` 里的位置（0 基）。 */
 	readonly index: number;
-	readonly primitiveRef: string;
-	/** 渲染到第几行（1 基）。 */
-	readonly line: number;
-	/** 这一步的原语在目录里查得到。查不到时那一行是说明行，不是调用。 */
+	/** 树路径，顶层就是下标本身：`"0"`、`"1"`…… */
+	readonly path: string;
+	/** 该顶层语句的种类；界面据此决定这一步长什么样。 */
+	readonly kind: ImplStatement['kind'];
+	/** 顶层语句直接调的那个原语；`set` / `if` 没有就是 null。 */
+	readonly primitiveRef: string | null;
+	/** 渲染到第几行（1 基）——这一行的**头**（`if` 的条件行就是头）。 */
+	line: number;
+	/** 它渲染出的最后一行（1 基）；`if` 含整个 then/else 体。渲染完后回填。 */
+	lastLine: number;
+	/** 这一步渲染出的所有行数。渲染完后回填。 */
+	lineCount: number;
+	/** 这一步调的原语在目录里查得到；`set` / `if` 恒为 true（它自己不是调用）。 */
 	readonly known: boolean;
 }
 
@@ -62,7 +91,7 @@ export interface RenderedImplementation {
 	/** 整个任务的安全限值（不随选中模块变）。 */
 	readonly limits: RenderedLimits;
 	readonly diagnostics: readonly Diagnostic[];
-	/** 渲染出来的原语调用行数——「实现里有几步就有几个调用」（查不到的原语不算）。 */
+	/** 渲染出来的原语调用数：语句调用 + 表达式里的调用（查不到的与注释不算）。 */
 	readonly callCount: number;
 }
 
@@ -92,6 +121,50 @@ const emptyProgram = (limits: RenderedLimits, diagnostics: readonly Diagnostic[]
 	callCount: 0,
 });
 
+const indentOf = (depth: number): string => INDENT_UNIT.repeat(depth);
+
+const joinLines = (lines: readonly RenderedLine[]): string => lines.map((line) => line.text).join('\n');
+
+/** 诊断消息里的「谁」：`能力.路径`，读的人一眼能找到是哪个调用出的问题。 */
+const at = (node: WorkflowNode, stepPath: string): string =>
+	`${String(node.parameters['action'] ?? '?')} 的 ${stepPath}`;
+
+const isImplExpression = (argument: ImplArgument): argument is ImplExpression =>
+	typeof argument === 'object' && argument !== null && !Array.isArray(argument);
+
+type Kind = RenderedLine['kind'];
+
+/** 压一行（行号 = 已产出行数 + 1），返回它的行号。 */
+type PushLine = (
+	text: string,
+	kind: Kind,
+	depth: number,
+	stepIndex: number | null,
+	stepPath: string | null,
+	primitiveRef: string | null,
+	known: boolean,
+) => number;
+
+interface RenderState {
+	readonly capability: CapabilitySpec;
+	readonly catalog: CapabilityCatalog;
+	readonly node: WorkflowNode;
+	readonly collector: DiagnosticCollector;
+	readonly lines: RenderedLine[];
+	readonly steps: RenderedStepSpan[];
+	readonly push: PushLine;
+	/** 本能力实现里 `set` 过的局部变量名（`{kind:'param'}` 的第一顺位解析目标）。 */
+	readonly locals: readonly string[];
+	/** 表达式里渲染出的调用数（赋值右边、条件里、嵌套实参里那些）。 */
+	expressionCalls: number;
+}
+
+/**
+ * 递归渲染一个能力实现。
+ *
+ * 内部状态只有四样：已产出的行、顶层语句的 span、一条诊断收集器、
+ * 表达式调用的计数。行号永远等于已产出行数 + 1，所以嵌套展开多少层都不会把映射算错。
+ */
 export const renderImplementation = (input: ImplementationRenderInput): RenderedImplementation => {
 	const collector = new DiagnosticCollector();
 	const { node, catalog, declaration } = input;
@@ -102,8 +175,19 @@ export const renderImplementation = (input: ImplementationRenderInput): Rendered
 
 	const lines: RenderedLine[] = [];
 	const steps: RenderedStepSpan[] = [];
-	const push = (text: string, kind: RenderedLine['kind'], stepIndex: number | null, primitiveRef: string | null): void => {
-		lines.push({ line: lines.length + 1, text, kind, stepIndex, primitiveRef });
+
+	const push: PushLine = (text, kind, depth, stepIndex, stepPath, primitiveRef, known) => {
+		lines.push({
+			line: lines.length + 1,
+			text: indentOf(depth) + text,
+			indent: depth,
+			kind,
+			stepIndex,
+			stepPath,
+			primitiveRef,
+			known,
+		});
+		return lines.length;
 	};
 
 	const rawAction = node.parameters['action'];
@@ -129,14 +213,14 @@ export const renderImplementation = (input: ImplementationRenderInput): Rendered
 				details: { value: action, catalog: catalog.catalogRef, revision: catalog.revisionRef },
 			});
 		}
-		push(`# 查不到能力「${action ?? '?'}」的实现`, 'unsupported', null, null);
+		push(`# 查不到能力「${action ?? '?'}」的实现`, 'unsupported', 0, null, null, null, false);
 		return {
 			nodeId: node.id,
 			nodeName: node.name,
 			title: `${action ?? singleLine(node.name)} · 实现`,
 			capabilityRef: action,
 			capabilityLabel: null,
-			text: lines.map((line) => line.text).join('\n'),
+			text: joinLines(lines),
 			lines,
 			steps,
 			limits,
@@ -145,53 +229,21 @@ export const renderImplementation = (input: ImplementationRenderInput): Rendered
 		};
 	}
 
-	if (node.disabled) push(`# disabled: ${singleLine(node.name)}`, 'comment', null, null);
+	if (node.disabled) push(`# disabled: ${singleLine(node.name)}`, 'comment', 0, null, null, null, true);
 
-	for (const [index, implementationStep] of capability.implementation.entries()) {
-		const primitive = findPrimitive(catalog, implementationStep.step);
+	const state: RenderState = {
+		capability,
+		catalog,
+		node,
+		collector,
+		lines,
+		steps,
+		push,
+		locals: localsOf(capability),
+		expressionCalls: 0,
+	};
 
-		if (primitive === undefined) {
-			collector.error({
-				code: 'code_render.primitive.unknown',
-				message: `目录里没有原语「${implementationStep.step}」，这一步渲染不出调用`,
-				path: `nodes.${node.id}.parameters.action`,
-				ref: node.id,
-				details: { capability: capability.capabilityRef, step: implementationStep.step, index },
-			});
-			push(`# 目录里没有原语「${implementationStep.step}」`, 'unsupported', index, implementationStep.step);
-			steps.push({ index, primitiveRef: implementationStep.step, line: lines.length, known: false });
-			continue;
-		}
-
-		// 实参表里多出来的键不渲染（名字与顺序由原语定义决定），但要说出来——静默丢掉等于骗人。
-		const declared = new Set(primitive.parameters.map((parameter) => parameter.name));
-		for (const name of Object.keys(implementationStep.arguments)) {
-			if (declared.has(name)) continue;
-			collector.warning({
-				code: 'code_render.argument.undeclared',
-				message: `${qualifiedName(capability.capabilityRef, implementationStep.step)} 多给了实参 ${name}，原语定义里没有它，不渲染`,
-				path: `nodes.${node.id}.parameters.action`,
-				ref: node.id,
-				details: { primitive: implementationStep.step, argument: name, parameters: [...declared] },
-			});
-		}
-
-		const rendered = primitive.parameters.map((parameter) =>
-			renderArgument(
-				parameter,
-				implementationStep.arguments[parameter.name],
-				{ primitiveRef: implementationStep.step, nodeParameters: node.parameters, nodeId: node.id },
-				collector,
-			),
-		);
-		push(
-			`${implementationStep.step}(${rendered.map((argument) => `${argument.name}=${argument.text}`).join(', ')})`,
-			'call',
-			index,
-			implementationStep.step,
-		);
-		steps.push({ index, primitiveRef: implementationStep.step, line: lines.length, known: true });
-	}
+	renderBody(state, capability.implementation, 0, null, null, null);
 
 	return {
 		nodeId: node.id,
@@ -199,30 +251,484 @@ export const renderImplementation = (input: ImplementationRenderInput): Rendered
 		title: `${capability.label} · 实现`,
 		capabilityRef: capability.capabilityRef,
 		capabilityLabel: capability.label,
-		text: lines.map((line) => line.text).join('\n'),
+		text: joinLines(lines),
 		lines,
 		steps,
 		limits,
 		diagnostics: collector.diagnostics,
-		callCount: lines.filter((line) => line.kind === 'call').length,
+		// 「几个原语」= 语句调用 + 表达式里的调用——`reading = read_scan(...)` 也是一次调用。
+		callCount: lines.filter((line) => line.kind === 'call' && line.known).length + state.expressionCalls,
 	};
 };
 
-/** 诊断消息里的「谁」：`能力.原语`，读的人一眼能找到是哪个调用的实参出了问题。 */
-const qualifiedName = (capabilityRef: string, primitiveRef: string): string => `${capabilityRef} 的 ${primitiveRef}`;
+/**
+ * 渲染一串语句。
+ *
+ * 顶层每条语句**登记一个 span**（`steps[]`），嵌套语句共享所属顶层的 span——
+ * 于是「第 n 步」在树里始终指「第 n 条顶层语句」，与界面口径一致。
+ *
+ * 前两个参数是「我是不是顶层」的唯一判据（不是可省参数）：顶层传 `null`，
+ * 嵌套时**必须**把外层的 `topIndex` 与 `topSpan` 原样传下去——漏传就会把子语句当顶层，
+ * 于是「第几步」全错（`0.then.0` 会被记成第 0 步）。
+ */
+const renderBody = (
+	state: RenderState,
+	statements: readonly ImplStatement[],
+	depth: number,
+	topIndex: number | null,
+	parentPath: string | null,
+	topSpan: RenderedStepSpan | null,
+): void => {
+	statements.forEach((statement, index) => {
+		const path = parentPath === null ? String(index) : `${parentPath}.${index}`;
 
-/** 这一行对应 `implementation` 的第几步（0 基）；注释行与越界行号给 null。 */
+		if (topSpan === null) {
+			// 顶层：先占位，等这条语句（含它的分支）渲染完再回填 lastLine / lineCount。
+			const head = state.lines.length + 1;
+			const span: RenderedStepSpan = {
+				index,
+				path,
+				kind: statement.kind,
+				primitiveRef: statement.kind === 'call' ? statement.primitiveRef : null,
+				line: head,
+				lastLine: head,
+				lineCount: 0,
+				known: statement.kind !== 'call' || findPrimitive(state.catalog, statement.primitiveRef) !== undefined,
+			};
+			state.steps.push(span);
+			renderStatement(state, statement, path, index, depth, span);
+			span.lineCount = state.lines.length - head + 1;
+			span.lastLine = state.lines.length;
+			return;
+		}
+		renderStatement(state, statement, path, topIndex, depth, topSpan);
+	});
+};
+
+const renderStatement = (
+	state: RenderState,
+	statement: ImplStatement,
+	path: string,
+	topIndex: number | null,
+	depth: number,
+	topSpan: RenderedStepSpan,
+): void => {
+	const { push, node, collector, capability } = state;
+
+	if (statement.kind === 'call') {
+		const primitive = findPrimitive(state.catalog, statement.primitiveRef);
+		if (primitive === undefined) {
+			unknownPrimitive(state, statement.primitiveRef, path, false);
+			push(
+				`# 目录里没有原语「${statement.primitiveRef}」`,
+				'unsupported',
+				depth,
+				topIndex,
+				path,
+				statement.primitiveRef,
+				false,
+			);
+			return;
+		}
+		push(
+			`${statement.primitiveRef}(${renderArguments(state, primitive, statement.arguments, path)})`,
+			'call',
+			depth,
+			topIndex,
+			path,
+			statement.primitiveRef,
+			true,
+		);
+		return;
+	}
+
+	if (statement.kind === 'set') {
+		// 赋值的右值永远加括号：孤立看也认得出这是一整个取值。
+		const value = renderExpression(state, statement.value, path, true);
+		push(`${statement.target} = ${value}`, 'set', depth, topIndex, path, null, true);
+		return;
+	}
+
+	// if：条件行 + 缩进一档的 then 体；有 else 就再接一行 `else:` 与它的体。
+	push(
+		`if ${renderExpression(state, statement.condition, path, false)}:`,
+		'if',
+		depth,
+		topIndex,
+		path,
+		null,
+		true,
+	);
+
+	// ty: 嵌套语句**继承**所属顶层语句的 stepIndex 与 span——「第几步」在树里只认顶层。
+	renderBody(state, statement.then, depth + 1, topIndex, `${path}.then`, topSpan);
+
+	if (statement.else === undefined) return;
+	push('else:', 'else', depth, topIndex, path, null, true);
+	renderBody(state, statement.else, depth + 1, topIndex, `${path}.else`, topSpan);
+};
+
+/** `{kind:'param'}` 的解析范围：本能力实现里 `set` 过的局部变量 + 本能力的参数。 */
+const localsOf = (capability: CapabilitySpec): readonly string[] => {
+	const targets: string[] = [];
+	const visit = (statements: readonly ImplStatement[]): void => {
+		for (const statement of statements) {
+			if (statement.kind === 'set') targets.push(statement.target);
+			if (statement.kind !== 'if') continue;
+			visit(statement.then);
+			visit(statement.else ?? []);
+		}
+	};
+	visit(capability.implementation);
+	return targets;
+};
+
+const unknownPrimitive = (state: RenderState, primitiveRef: string, path: string, nested: boolean): void => {
+	state.collector.error({
+		code: 'code_render.primitive.unknown',
+		message: nested
+			? `目录里没有原语「${primitiveRef}」，这一步的表达式渲染不出来`
+			: `目录里没有原语「${primitiveRef}」，这一步渲染不出调用`,
+		path: `nodes.${state.node.id}.parameters.action`,
+		ref: state.node.id,
+		details: { capability: state.capability.capabilityRef, step: primitiveRef, stepPath: path },
+	});
+};
+
+// ---------------------------------------------------------------------------
+// 调用与实参
+// ---------------------------------------------------------------------------
+
+/**
+ * 实参表文本：`参数名=值` 用 `, ` 连接。
+ *
+ * **参数名与顺序逐字来自原语定义**——实现里多给的实参不渲染（静默丢掉等于骗人，所以给警告），
+ * 缺的实参渲染成占位符（`null`/`[]`）并给警告，绝不猜。
+ */
+const renderArguments = (
+	state: RenderState,
+	primitive: PrimitiveSpec,
+	args: Readonly<Record<string, ImplArgument>>,
+	path: string,
+): string => {
+	const { node, collector } = state;
+	const declared = new Set(primitive.parameters.map((parameter) => parameter.name));
+
+	for (const name of Object.keys(args)) {
+		if (declared.has(name)) continue;
+		collector.warning({
+			code: 'code_render.argument.undeclared',
+			message: `${at(node, path)} 的 ${primitive.primitiveRef} 多给了实参 ${name}，原语定义里没有它，不渲染`,
+			path: `nodes.${node.id}.parameters.action`,
+			ref: node.id,
+			details: { primitive: primitive.primitiveRef, argument: name, parameters: [...declared], stepPath: path },
+		});
+	}
+
+	return primitive.parameters
+		.map((parameter) =>
+			`${parameter.name}=${renderArgument(state, primitive, parameter, args[parameter.name], path)}`,
+		)
+		.join(', ');
+};
+
+/** 只由字符串组成的数组（传感器列表这种实参）。 */
+const isStringArray = (value: unknown): value is readonly string[] =>
+	Array.isArray(value) && value.every((item) => typeof item === 'string');
+
+/** 一个实参 → 文本。缺省 / 取值不符都给警告 + 占位符，不静默编一个值。 */
+const renderArgument = (
+	state: RenderState,
+	primitive: PrimitiveSpec,
+	parameter: PrimitiveSpec['parameters'][number],
+	raw: ImplArgument | undefined,
+	path: string,
+): string => {
+	const { node, collector } = state;
+	const where = `${at(node, path)} 的 ${primitive.primitiveRef}.${parameter.name}`;
+
+	if (raw === undefined) {
+		collector.warning({
+			code: 'code_render.argument.missing',
+			message: `${where} 没有实参，渲染成占位符`,
+			path: `nodes.${node.id}.parameters.${parameter.name}`,
+			ref: node.id,
+			details: { primitive: primitive.primitiveRef, parameter: parameter.name, stepPath: path },
+		});
+		return renderByType(parameter.type, undefined, parameter.integer === true).text;
+	}
+
+	// 表达式实参：值（数字/字符串/布尔）按**原语定义**提示类型，结构（比较、嵌套调用……）自带形状。
+	if (isImplExpression(raw)) {
+		const text = renderExpression(state, raw, path, false, parameter);
+		// 表达式实参也要过「取值可用吗」这道闸：空数组/非数组在字面量那边会给诊断，
+		// 在表达式这边（例如实现里写死的 `read_scan(sensors: [])`）同样不能静默放行。
+		// 只查**字面量**：`{kind:'param'}` 是引用，它的类型由原语定义那条路管。
+		if (parameter.type === 'sensor' && raw.kind === 'literal' && (!isStringArray(raw.value) || raw.value.length === 0)) {
+			collector.warning({
+				code: isStringArray(raw.value) ? 'code_render.argument.empty_sensor_array' : 'code_render.argument.not_sensor_array',
+				message: `${where} 的传感器实参不是一个非空字符串数组，照原样写出`,
+				path: `nodes.${node.id}.parameters.${parameter.name}`,
+				ref: node.id,
+				details: { primitive: primitive.primitiveRef, parameter: parameter.name, stepPath: path },
+			});
+		}
+		return text;
+	}
+
+	const rendered = renderByType(parameter.type, asRenderable(raw), parameter.integer === true);
+	if (rendered.code === null) return rendered.text;
+	collector.warning({
+		code: rendered.code,
+		message: `${where} ${valueMessage(rendered.code)}`,
+		path: `nodes.${node.id}.parameters`,
+		ref: node.id,
+		details: {
+			primitive: primitive.primitiveRef,
+			parameter: parameter.name,
+			expected: parameter.type,
+			value: jsonDetail(raw),
+			stepPath: path,
+		},
+	});
+	return rendered.text;
+};
+
+// ---------------------------------------------------------------------------
+// 表达式：递归 + 按优先级加括号
+// ---------------------------------------------------------------------------
+
+/**
+ * 二元运算符的符号与结合力度（数越大越紧）。`and`/`or` 与比较同级——宁可多括号也别写错结合性。
+ * 用 Map 而不是 Record：查不到的运算符要能被 `precedenceOf` 明确拒绝，不许静默当 0。
+ */
+const BINARY = new Map<string, { readonly symbol: string; readonly precedence: number }>([
+	['multiply', { symbol: '*', precedence: 7 }],
+	['divide', { symbol: '/', precedence: 7 }],
+	['add', { symbol: '+', precedence: 6 }],
+	['subtract', { symbol: '-', precedence: 6 }],
+	['lt', { symbol: '<', precedence: 3 }],
+	['lte', { symbol: '<=', precedence: 3 }],
+	['gt', { symbol: '>', precedence: 3 }],
+	['gte', { symbol: '>=', precedence: 3 }],
+	['eq', { symbol: '==', precedence: 3 }],
+	['neq', { symbol: '!=', precedence: 3 }],
+	['and', { symbol: 'and', precedence: 3 }],
+	['or', { symbol: 'or', precedence: 3 }],
+]);
+
+/** 运算符的符号与力度。契约把运算符枚举钉死了，查不到说明契约与渲染器分叉了——直接抛。 */
+const binaryOf = (operator: string): { readonly symbol: string; readonly precedence: number } => {
+	const found = BINARY.get(operator);
+	if (found === undefined) throw new Error(`unknown binary operator: ${operator}`);
+	return found;
+};
+
+/** 叶子（字面量 / 引用 / 调用）的结合力度最高，永远不会被加括号。 */
+const LEAF_PRECEDENCE = 100;
+/**
+ * 单独一个引用（`param`）的力度：比所有运算符低、比顶层阈值（0）高——
+ * 于是 `x = (0.2)` 加括号（孤立看也认得出这是一个取值），
+ * 而 `if reading < 0.5:` 里的 `reading` 不加（它是 `<` 的操作数，不是嵌套）。
+ */
+const CONSTANT_PRECEDENCE = 5;
+const UNARY_PRECEDENCE = 8;
+
+/**
+ * 表达式 → 文本。
+ *
+ * `alwaysParen`：这是不是一个**顶层表达式**（赋值的右值、`if` 的条件）——是就永远加括号，
+ * 孤立看也认得出这是一整个取值；嵌套的按优先级判断（`precedence` 低的子表达式裹起来）。
+ */
+const renderExpression = (
+	state: RenderState,
+	expression: ImplExpression,
+	path: string,
+	alwaysParen: boolean,
+	declaredParameter?: PrimitiveSpec['parameters'][number],
+): string => {
+	const { node, collector } = state;
+
+	switch (expression.kind) {
+		case 'literal': {
+			const value = renderConstant(expression.value, false, collector, {
+				code: `${at(node, path)} 的字面量`,
+				message: '实现里的字面量不是能写进代码的取值，渲染成 null',
+				path: `nodes.${node.id}.parameters.action`,
+				ref: node.id,
+				details: { stepPath: path },
+			});
+			// 字面量落在实参位置上：原语定义说这个参数是什么类型，就按它渲染（`integer` 也认）。
+			// 字面量本身是叶子：`(1.0) + (2.0)` 只是噪音，所以它从不被裹括号。
+			if (declaredParameter !== undefined && declaredParameter.type !== 'sensor') {
+				return renderByType(
+					declaredParameter.type,
+					asRenderable(expression.value),
+					declaredParameter.integer === true,
+				).text;
+			}
+			return value.text;
+		}
+
+		case 'param': {
+			const text = renderParam(state, expression, path, declaredParameter);
+			return wrap(text, CONSTANT_PRECEDENCE, 0, alwaysParen);
+		}
+
+		case 'call': {
+			const primitive = findPrimitive(state.catalog, expression.primitiveRef);
+			if (primitive === undefined) {
+				unknownPrimitive(state, expression.primitiveRef, path, true);
+				return `/* 目录里没有原语「${expression.primitiveRef}」 */`;
+			}
+			if (primitive.returns === undefined) {
+				// 没声明 `returns` 就说明它不返回值；出现在表达式里是目录写错了，点出来但照渲染。
+				collector.error({
+					code: 'code_render.primitive.not_returning',
+					message: `${at(node, path)} 的 ${primitive.primitiveRef} 没有声明返回值，却出现在表达式里`,
+					path: `nodes.${node.id}.parameters.action`,
+					ref: node.id,
+					details: { primitive: primitive.primitiveRef, stepPath: path },
+				});
+			}
+			state.expressionCalls += 1;
+			// 调用是叶子里最紧的：`x = read_status()` 不该变成 `x = (read_status())`。
+			return `${expression.primitiveRef}(${renderArguments(state, primitive, expression.arguments, path)})`;
+		}
+
+		case 'binary': {
+			const operator = binaryOf(expression.operator);
+			const left = renderOperand(state, expression.left, path, operator.precedence, declaredParameter);
+			const right = renderOperand(state, expression.right, path, operator.precedence, declaredParameter);
+			return wrap(`${left} ${operator.symbol} ${right}`, operator.precedence, 0, alwaysParen);
+		}
+
+		case 'unary': {
+			const prefix = expression.operator === 'not' ? 'not ' : '-';
+			const operand = renderOperand(state, expression.value, path, UNARY_PRECEDENCE, declaredParameter);
+			// `not false` / `not x` 没有歧义，不给操作数加括号（`-(x)` 才是该加的那种）。
+			const bare = expression.value.kind === 'literal' || expression.value.kind === 'param';
+			return wrap(`${prefix}${operand}`, UNARY_PRECEDENCE, 0, alwaysParen && !bare);
+		}
+	}
+};
+
+/** 子表达式：结合力度低于父运算符就裹括号（阈值给的是**父运算符自己的**力度）。 */
+const renderOperand = (
+	state: RenderState,
+	expression: ImplExpression,
+	path: string,
+	parentPrecedence: number,
+	declaredParameter?: PrimitiveSpec['parameters'][number],
+): string => {
+	const text = renderExpression(state, expression, path, false, declaredParameter);
+	return wrap(text, precedenceOf(expression), parentPrecedence, false);
+};
+
+const precedenceOf = (expression: ImplExpression): number => {
+	if (expression.kind === 'binary') return binaryOf(expression.operator).precedence;
+	if (expression.kind === 'unary') return UNARY_PRECEDENCE;
+	// 字面量是叶子：它旁边加括号只会变成噪音（`(1.0) + (2.0)`）。
+	if (expression.kind === 'literal') return LEAF_PRECEDENCE;
+	if (expression.kind === 'param') return CONSTANT_PRECEDENCE;
+	return LEAF_PRECEDENCE;
+};
+
+const wrap = (text: string, precedence: number, threshold: number, force: boolean): string =>
+	force || precedence < threshold ? `(${text})` : text;
+
+/**
+ * `{kind:'param'}` → 文本。三种引用分得清清楚楚：
+ *
+ * 1. **局部变量**（本能力实现里 `set` 过的名字，如 `reading`）→ **写名字**。
+ *    它的值由运行时上一条赋值决定，渲染层算不出来；而名字正是这段程序里真实存在的东西
+ *    （`reading = read_scan(...)` 上一行刚给过它）。写 `null` 才是把程序说错。
+ * 2. **本能力的参数**（如 `linear`）→ **写本节点同名参数的实际值**（`0.2`）。
+ *    这就是「同一份实现被不同参数复用」那条链：改积木上的数字，这里跟着变。
+ * 3. 两边都不是 → 诊断 + 占位符 `null`，绝不猜。
+ */
+const renderParam = (
+	state: RenderState,
+	expression: ImplExpression & { kind: 'param' },
+	path: string,
+	declaredParameter?: PrimitiveSpec['parameters'][number],
+): string => {
+	const { node, collector, capability, locals } = state;
+	const name: string = expression.name;
+	const isLocal = locals.includes(name);
+	const isCapabilityParameter = capability.parameters.some((parameter) => parameter.name === name);
+
+	// 实参位置（`名字=值`）写不出局部变量名，只能退回节点的同名字段——
+	// 一期目录里没有这种用法，真出现了按值渲染比按名字渲染更接近机器会执行的东西。
+	if (isLocal && declaredParameter === undefined) return name;
+
+	const value = node.parameters[name];
+	if (value === undefined) {
+		collector.warning({
+			code: 'code_render.param.unresolved',
+			message:
+				isLocal || isCapabilityParameter
+					? `${at(node, path)} 的 ${name} 在本节点取不到值，渲染成占位符`
+					: `${at(node, path)} 引用了 ${name}，它既不是局部变量也不是本能力的参数，渲染成占位符`,
+			path: `nodes.${node.id}.parameters.${name}`,
+			ref: node.id,
+			details: { name, local: isLocal, capabilityParameter: isCapabilityParameter, stepPath: path },
+		});
+		return 'null';
+	}
+
+	if (declaredParameter !== undefined) {
+		// 实参位置：按原语定义渲染（含 `integer`）。取不到合法取值时给诊断 + 占位符，
+		// 与实现里直接写死的实参走同一条码（引用与字面量不该有两套口径）。
+		const asValue = asRenderable(value);
+		const rendered = renderByType(declaredParameter.type, asValue, declaredParameter.integer === true);
+		if (rendered.code !== null) {
+			collector.warning({
+				code: rendered.code,
+				message: `${at(node, path)} 的 ${name} ${valueMessage(rendered.code)}`,
+				path: `nodes.${node.id}.parameters.${name}`,
+				ref: node.id,
+				details: { name, expected: declaredParameter.type, stepPath: path, value: jsonDetail(value) },
+			});
+		}
+		return rendered.text;
+	}
+
+	return renderConstant(value, false, collector, {
+		code: `${at(node, path)} 的 ${name}`,
+		message: `引用 ${name} 的取值不是能写进代码的值，渲染成 null`,
+		path: `nodes.${node.id}.parameters.${name}`,
+		ref: node.id,
+		details: { name, local: isLocal, stepPath: path },
+	}).text;
+};
+
+// ---------------------------------------------------------------------------
+// 反向查询：行 ↔ 步骤（界面只读这两向，不自己重算）
+// ---------------------------------------------------------------------------
+
+/** 这一行对应 `implementation` 的第几步（**顶层下标**，0 基）；注释行与越界行号给 null。 */
 export const stepIndexAtLine = (program: RenderedImplementation, line: number): number | null =>
 	program.lines.find((item) => item.line === line)?.stepIndex ?? null;
 
-/** 反向查询：第 n 步（0 基）渲染在第几行。 */
-export const lineOfStep = (program: RenderedImplementation, index: number): number | null =>
-	program.steps.find((step) => step.index === index)?.line ?? null;
+/** 这一行的精确树路径（`"1"`、`"1.then.0"`）；注释行与越界行号给 null。 */
+export const stepPathAtLine = (program: RenderedImplementation, line: number): string | null =>
+	program.lines.find((item) => item.line === line)?.stepPath ?? null;
+
+/** 反向查询：树路径渲染在第几行；指不到给 null。 */
+export const lineOfStep = (program: RenderedImplementation, stepPath: string): number | null =>
+	program.lines.find((line) => line.stepPath === stepPath)?.line ?? null;
+
+/** 反向查询：第 n 条**顶层**语句占的所有行（一个 `if` 会是好几行）。 */
+export const linesOfTopStep = (
+	program: RenderedImplementation,
+	topIndex: number,
+): readonly RenderedLine[] => program.lines.filter((line) => line.stepIndex === topIndex);
 
 /** 某一行的文本；越界给 null。 */
 export const lineText = (program: RenderedImplementation, line: number): string | null =>
 	program.lines.find((item) => item.line === line)?.text ?? null;
 
-/** 只有调用行参与「几步几个调用」的计数与样式。 */
+/** 只有真正渲染出调用的行参与「几个原语」的计数与样式（说明行、赋值行、分支头不算）。 */
 export const callLines = (program: RenderedImplementation): readonly RenderedLine[] =>
-	program.lines.filter((line) => line.kind === 'call');
+	program.lines.filter((line) => line.kind === 'call' && line.known);

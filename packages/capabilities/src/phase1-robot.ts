@@ -4,14 +4,17 @@
  * ⚠ **这份 `implementation` 是示意，不是设备真实逻辑。** 一期协议（`docs/reference/task_protocol.py`）
  * 只规定「要做什么」和参数范围，没有任何「怎么做」的信息；真实实现在 RoboFrame / 设备侧。
  * 这里手写一份，是为了先把「点一个模块 → 看到它的实现」这条穿透链在演示上跑通。
- * 等 RoboFrame 能给出真正的原语序列，换掉这个文件即可，数据结构不用动。
+ * 等 RoboFrame 能给出真正的实现，换掉这个文件即可，数据结构不用动。
+ *
+ * 实现的形状是**语句树**（见 `@codecanvas/contracts` 的 `capability.ts`）：调用、赋值、条件。
+ * 所以 `避障停止` 写出来是「读一次激光 → 如果读数小于阈值就刹停」，而不是三行平铺的调用。
  */
 import type { CapabilityCatalog } from '@codecanvas/contracts';
 
 export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 	catalogRef: 'phase1_robot',
 	displayName: '一期设备（差速底盘 + 六轴臂）',
-	revisionRef: 'phase1-robot-catalog-v1',
+	revisionRef: 'phase1-robot-catalog-v2',
 
 	primitives: [
 		{
@@ -33,24 +36,21 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 			parameters: [],
 		},
 		{
+			primitiveRef: 'brake',
+			label: '紧急刹停',
+			parameters: [],
+		},
+		{
 			primitiveRef: 'read_scan',
 			label: '读取激光',
-			parameters: [{ name: 'sensor', label: '传感器', type: 'sensor' }],
-		},
-		{
-			primitiveRef: 'compare_below',
-			label: '判断小于',
-			parameters: [{ name: 'threshold', label: '阈值', type: 'number' }],
-		},
-		{
-			primitiveRef: 'brake',
-			label: '刹停',
-			parameters: [],
+			parameters: [{ name: 'sensors', label: '传感器', type: 'sensor' }],
+			returns: 'number',
 		},
 		{
 			primitiveRef: 'read_status',
-			label: '读取状态',
+			label: '读取运行状态',
 			parameters: [],
+			returns: 'string',
 		},
 		{
 			primitiveRef: 'drive_joint',
@@ -87,9 +87,20 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 				{ name: 'duration', label: '时长', type: 'number' },
 			],
 			implementation: [
-				{ step: 'set_velocity', arguments: { linear: '$linear', angular: '$angular' } },
-				{ step: 'wait', arguments: { seconds: '$duration' } },
-				{ step: 'stop_motion', arguments: {} },
+				{
+					kind: 'call',
+					primitiveRef: 'set_velocity',
+					arguments: {
+						linear: { kind: 'param', name: 'linear' },
+						angular: { kind: 'param', name: 'angular' },
+					},
+				},
+				{
+					kind: 'call',
+					primitiveRef: 'wait',
+					arguments: { seconds: { kind: 'param', name: 'duration' } },
+				},
+				{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} },
 			],
 		},
 		{
@@ -101,9 +112,17 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 				{ name: 'duration', label: '时长', type: 'number' },
 			],
 			implementation: [
-				{ step: 'set_velocity', arguments: { linear: 0, angular: '$angular' } },
-				{ step: 'wait', arguments: { seconds: '$duration' } },
-				{ step: 'stop_motion', arguments: {} },
+				{
+					kind: 'call',
+					primitiveRef: 'set_velocity',
+					arguments: { linear: 0, angular: { kind: 'param', name: 'angular' } },
+				},
+				{
+					kind: 'call',
+					primitiveRef: 'wait',
+					arguments: { seconds: { kind: 'param', name: 'duration' } },
+				},
+				{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} },
 			],
 		},
 		{
@@ -111,7 +130,7 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 			label: '停止',
 			kind: 'skill',
 			parameters: [],
-			implementation: [{ step: 'stop_motion', arguments: {} }],
+			implementation: [{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} }],
 		},
 		{
 			capabilityRef: 'stop_if_obstacle',
@@ -121,10 +140,27 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 				{ name: 'sensors', label: '传感器', type: 'sensor' },
 				{ name: 'distance', label: '距离', type: 'number' },
 			],
+			// 读一次激光，读数小于阈值就紧急刹停——这一步是**有条件**的，所以是 if 而不是平铺的调用。
 			implementation: [
-				{ step: 'read_scan', arguments: { sensor: '$sensors' } },
-				{ step: 'compare_below', arguments: { threshold: '$distance' } },
-				{ step: 'brake', arguments: {} },
+				{
+					kind: 'set',
+					target: 'reading',
+					value: {
+						kind: 'call',
+						primitiveRef: 'read_scan',
+						arguments: { sensors: { kind: 'param', name: 'sensors' } },
+					},
+				},
+				{
+					kind: 'if',
+					condition: {
+						kind: 'binary',
+						operator: 'lt',
+						left: { kind: 'param', name: 'reading' },
+						right: { kind: 'param', name: 'distance' },
+					},
+					then: [{ kind: 'call', primitiveRef: 'brake', arguments: {} }],
+				},
 			],
 		},
 		{
@@ -132,7 +168,13 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 			label: '读取状态',
 			kind: 'skill',
 			parameters: [],
-			implementation: [{ step: 'read_status', arguments: {} }],
+			implementation: [
+				{
+					kind: 'set',
+					target: 'status',
+					value: { kind: 'call', primitiveRef: 'read_status', arguments: {} },
+				},
+			],
 		},
 		{
 			capabilityRef: 'arm_joint',
@@ -145,8 +187,13 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 			],
 			implementation: [
 				{
-					step: 'drive_joint',
-					arguments: { joint_id: '$joint_id', angle: '$joint', time: '$time' },
+					kind: 'call',
+					primitiveRef: 'drive_joint',
+					arguments: {
+						joint_id: { kind: 'param', name: 'joint_id' },
+						angle: { kind: 'param', name: 'joint' },
+						time: { kind: 'param', name: 'time' },
+					},
 				},
 			],
 		},
@@ -165,15 +212,16 @@ export const PHASE1_ROBOT_CATALOG: CapabilityCatalog = {
 			],
 			implementation: [
 				{
-					step: 'drive_joints',
+					kind: 'call',
+					primitiveRef: 'drive_joints',
 					arguments: {
-						joint1: '$joint1',
-						joint2: '$joint2',
-						joint3: '$joint3',
-						joint4: '$joint4',
-						joint5: '$joint5',
-						joint6: '$joint6',
-						time: '$time',
+						joint1: { kind: 'param', name: 'joint1' },
+						joint2: { kind: 'param', name: 'joint2' },
+						joint3: { kind: 'param', name: 'joint3' },
+						joint4: { kind: 'param', name: 'joint4' },
+						joint5: { kind: 'param', name: 'joint5' },
+						joint6: { kind: 'param', name: 'joint6' },
+						time: { kind: 'param', name: 'time' },
 					},
 				},
 			],

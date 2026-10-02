@@ -20,6 +20,12 @@ export const THEME_VARIABLES = [
 	'--cc-accent-strong',
 	'--cc-accent-dim',
 	'--cc-danger',
+	/*
+	 * 选中步的高亮色：三栏共用同一根线（流程卡片描边、代码行底纹、积木选中辉光）。
+	 * 积木这边的辉光是 SVG 画的，取不到 CSS，所以它也从这里读同一个变量——
+	 * 「同一套高亮语言」只有这样才是真的同一套。
+	 */
+	'--cc-highlight',
 	/* 动作色：turn / stop_if_obstacle / arm_joint / arm6_joints 用（见 theme.css 末尾）。 */
 	'--cc-block-turn',
 	'--cc-block-guard',

@@ -1,11 +1,16 @@
 /**
- * 代码面板渲染的验收测试（新模型：**一个模块 = 一个函数，面板显示它的实现**）。
+ * 代码面板渲染的验收测试（**语句树 → 有结构的代码**）。
  *
- * 四件事必须有机械证据：
+ * 六件事必须有机械证据：
  * 1. 渲染规则**可追溯到原语定义**（`catalog.primitives[].parameters`）——参数名与顺序一个都不手写；
- * 2. `$name` 占位取的是**本节点**的同名参数，字面量照原样；
- * 3. 行 ↔ implementation 步骤的映射（正反两向）真能对上，含注释行造成的偏移；
- * 4. 数字**不失真**——渲染出的字面量读回来必须还是原值；任务级限值照旧看得见。
+ * 2. `{kind:'param'}` 解析成**本节点同名参数的实际值**，字面量照原样；
+ * 3. 树真的长成了程序：赋值一行、`if` 一行 + **缩进**的子语句；括号按优先级加，宁可多也不能错；
+ * 4. 行 ↔ 步骤的正反映射（顶层下标 + 精确树路径），含注释行与 `if` 造成的偏移；
+ * 5. 数字**不失真**——渲染出的字面量读回来必须还是原值；任务级限值照旧看得见；
+ * 6. 目录里查不到的东西（能力 / 原语 / 引用）不假装认识。
+ *
+ * 这一版把老形状（`implementation: [{step, arguments}]`）的断言改成了语句树，
+ * **一条用例都没删**：能平移的都平移，只属于老形状的那条（多给实参）换了构造方式。
  */
 import { describe, expect, it } from 'vitest';
 import { PHASE1_ROBOT_CATALOG } from '@codecanvas/capabilities';
@@ -16,7 +21,9 @@ import {
 	findPrimitive,
 	WORKFLOW_FORMAT_VERSION,
 	type CapabilityCatalog,
+	type CapabilitySpec,
 	type CatalogParameter,
+	type ImplStatement,
 	type JsonObject,
 	type JsonValue,
 	type WorkflowDeclaration,
@@ -25,11 +32,14 @@ import {
 } from '@codecanvas/contracts';
 import { importTaskJson } from '@codecanvas/task-import';
 import {
+	INDENT_UNIT,
 	callLines,
 	lineOfStep,
 	lineText,
+	linesOfTopStep,
 	renderImplementation,
 	stepIndexAtLine,
+	stepPathAtLine,
 	type RenderedImplementation,
 } from '../src/index';
 
@@ -99,7 +109,12 @@ const render = (
 		declaration: options.declaration === undefined ? declarationOf([nodeOf(parameters)]) : options.declaration,
 	});
 
+/** 每一行的完整文本（**含行首缩进**——缩进是程序的一部分）。 */
 const texts = (program: RenderedImplementation): string[] => program.lines.map((line) => line.text);
+
+/** 去掉行首缩进后的文本：比对「这一行写了什么」时更清楚。 */
+const trimmed = (program: RenderedImplementation): string[] =>
+	program.lines.map((line) => line.text.trim());
 
 /** 按动作取示例任务里的那个节点：它的参数就是任务的参数。 */
 const sampleNode = (action: string): WorkflowNode => {
@@ -143,12 +158,44 @@ const argsOf = (line: string): Map<string, string> => {
 	parts.push(current);
 
 	for (const part of parts) {
-		const trimmed = part.trim();
-		const eq = trimmed.indexOf('=');
-		args.set(trimmed.slice(0, eq), trimmed.slice(eq + 1));
+		const item = part.trim();
+		const eq = item.indexOf('=');
+		args.set(item.slice(0, eq), item.slice(eq + 1));
 	}
 	return args;
 };
+
+/** 深度优先遍历语句树里的每条语句——用来把「每一条语句都渲染出来了」钉住。 */
+const eachStatement = (statements: readonly ImplStatement[], visit: (statement: ImplStatement) => void): void => {
+	for (const statement of statements) {
+		visit(statement);
+		if (statement.kind !== 'if') continue;
+		eachStatement(statement.then, visit);
+		eachStatement(statement.else ?? [], visit);
+	}
+};
+
+/** 语句树里所有**调用**（语句调用 + 表达式调用）的路径与实参——检查参数名时的底稿。 */
+const statementCalls = (
+	statements: readonly ImplStatement[],
+	prefix = '',
+): { readonly path: string; readonly statement: ImplStatement & { kind: 'call' } }[] => {
+	const found: { path: string; statement: ImplStatement & { kind: 'call' } }[] = [];
+	statements.forEach((statement, index) => {
+		const path = prefix === '' ? String(index) : `${prefix}.${index}`;
+		if (statement.kind === 'call') found.push({ path, statement });
+		if (statement.kind !== 'if') return;
+		found.push(...statementCalls(statement.then, `${path}.then`));
+		found.push(...statementCalls(statement.else ?? [], `${path}.else`));
+	});
+	return found;
+};
+
+/** 一条只含一个能力的目录：用例自己造病态实现时用（原语仍是一期那份）。 */
+const catalogWith = (capability: CapabilitySpec): CapabilityCatalog => ({
+	...PHASE1_ROBOT_CATALOG,
+	capabilities: [capability],
+});
 
 describe('示例任务的模块 → 实现（逐字比对）', () => {
 	it('前进（move）：三步原语，数值来自本节点的参数', () => {
@@ -165,16 +212,23 @@ describe('示例任务的模块 → 实现（逐字比对）', () => {
 		expect(program.diagnostics).toEqual([]);
 	});
 
-	it('避障停止（stop_if_obstacle）：传感器数组照字面量，阈值来自本节点', () => {
+	it('避障停止（stop_if_obstacle）：赋值 + if + **缩进的** brake——三行，缩进进文本', () => {
 		const program = renderSample('stop_if_obstacle');
 
+		// 这是验收标准里那三行：一个赋值、一个分支头、一条缩进一档的子语句。
 		expect(texts(program)).toEqual([
-			'read_scan(sensor=["/scan0"])',
-			'compare_below(threshold=0.5)',
-			'brake()',
+			'reading = read_scan(sensors=["/scan0"])',
+			'if reading < 0.5:',
+			`${INDENT_UNIT}brake()`,
 		]);
+		expect(program.text).toBe(
+			['reading = read_scan(sensors=["/scan0"])', 'if reading < 0.5:', '    brake()'].join('\n'),
+		);
+		expect(program.lines.map((line) => line.indent)).toEqual([0, 0, 1]);
 		expect(program.title).toBe('避障停止 · 实现');
 		expect(program.diagnostics).toEqual([]);
+		// 「几个原语」= 渲染出调用的行数：赋值右边那次 read_scan；`brake()` 是另一条语句（step 1）。
+		expect(program.callCount).toBe(2);
 	});
 
 	it('转向（turn）：实现里的字面量 `linear: 0` 照原样，`angular` 来自节点', () => {
@@ -194,8 +248,16 @@ describe('示例任务的模块 → 实现（逐字比对）', () => {
 		expect(program.title).toBe('停止 · 实现');
 	});
 
+	it('读取状态（get_status）：赋值右边是一个有返回值的原语调用', () => {
+		// 示例任务里没有这一步，手工造一个同形状的节点（`get_status` 无参数）。
+		const program = render({ step_id: 's5', action: 'get_status' });
+		expect(texts(program)).toEqual(['status = read_status()']);
+		expect(program.callCount).toBe(1);
+		expect(program.diagnostics).toEqual([]);
+	});
+
 	it('text 就是各行用换行拼起来（面板与文本两条路不会分叉）', () => {
-		const program = renderSample('move');
+		const program = renderSample('stop_if_obstacle');
 		expect(program.text).toBe(program.lines.map((line) => line.text).join('\n'));
 	});
 
@@ -240,22 +302,28 @@ describe('渲染规则可追溯到原语定义（不许手写参数名）', () =
 
 			const program = render(parameters);
 
-			// 行数 = implementation 步数；一行一个原语调用
-			expect(program.lines).toHaveLength(capability.implementation.length);
-			expect(program.callCount).toBe(capability.implementation.length);
+			// 树里每一条**调用语句**都渲染成了一行调用，行号由映射查得到。
+			const calls = statementCalls(capability.implementation);
+			// 「几个原语」还包含表达式里的调用（`reading = read_scan(…)` 也算一次）
+			expect(program.callCount).toBeGreaterThanOrEqual(calls.length);
+			expect(callLines(program)).toHaveLength(calls.length);
 
-			for (const [index, step] of capability.implementation.entries()) {
-				const primitive = findPrimitive(PHASE1_ROBOT_CATALOG, step.step);
+			for (const { path, statement } of calls) {
+				const primitive = findPrimitive(PHASE1_ROBOT_CATALOG, statement.primitiveRef);
 				expect(primitive).toBeDefined();
 				if (primitive === undefined) continue;
 
-				const line = lineText(program, index + 1);
+				const line = lineOfStep(program, path);
 				expect(line).not.toBeNull();
 				if (line === null) continue;
 
+				const text = lineText(program, line);
+				expect(text).not.toBeNull();
+				if (text === null) continue;
+
 				// 原语名 + 参数名序列 + 顺序，全部来自定义，测试这边只做对照
-				expect(line.startsWith(`${step.step}(`)).toBe(true);
-				expect([...argsOf(line).keys()]).toEqual(primitive.parameters.map((parameter) => parameter.name));
+				expect(text.trim().startsWith(`${statement.primitiveRef}(`)).toBe(true);
+				expect([...argsOf(text).keys()]).toEqual(primitive.parameters.map((parameter) => parameter.name));
 			}
 
 			expect(program.diagnostics).toEqual([]);
@@ -263,27 +331,34 @@ describe('渲染规则可追溯到原语定义（不许手写参数名）', () =
 	);
 
 	it('无参数的原语一律渲染成 `名字()`，不留空括号里的空格', () => {
-		expect(texts(render({ step_id: 's1', action: 'stop' }))).toEqual(['stop_motion()']);
-		expect(texts(render({ step_id: 's1', action: 'get_status' }))).toEqual(['read_status()']);
+		expect(trimmed(render({ step_id: 's1', action: 'stop' }))).toEqual(['stop_motion()']);
+		expect(trimmed(render({ step_id: 's1', action: 'get_status' }))).toEqual(['status = read_status()']);
+		// 赋值右值是**调用**（叶子最紧的一档）→ 不加括号
+		expect(trimmed(render({ step_id: 's1', action: 'get_status' }))).not.toContain('status = (read_status())');
 	});
 
 	it('原语定义里没有的实参不渲染（实现写多了也不许偷偷进代码）', () => {
-		const catalog: CapabilityCatalog = {
-			...PHASE1_ROBOT_CATALOG,
-			capabilities: [
-				{
+		const program = render(
+			{ step_id: 's1', action: 'extra_args', v: 0.2 },
+			{
+				catalog: catalogWith({
 					capabilityRef: 'extra_args',
 					label: '多余的实参',
 					kind: 'skill',
 					parameters: [{ name: 'v', label: '速度', type: 'number' }],
-					implementation: [{ step: 'set_velocity', arguments: { linear: '$v', angular: 9, nope: 1 } }],
-				},
-			],
-		};
-		const program = render({ step_id: 's1', action: 'extra_args', v: 0.2 }, { catalog });
+					implementation: [
+						{
+							kind: 'call',
+							primitiveRef: 'set_velocity',
+							arguments: { linear: 9, angular: { kind: 'param', name: 'v' }, nope: 1 },
+						},
+					],
+				}),
+			},
+		);
 
-		// `nope` 在原语定义里没有 → 不进代码，只出诊断；`angular` 是字面量，照原样。
-		expect(texts(program)).toEqual(['set_velocity(linear=0.2, angular=9.0)']);
+		// `nope` 在原语定义里没有 → 不进代码，只出诊断；`linear` 是字面量，照原样。
+		expect(texts(program)).toEqual(['set_velocity(linear=9.0, angular=0.2)']);
 		expect(program.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
 			'code_render.argument.undeclared',
 		]);
@@ -291,11 +366,189 @@ describe('渲染规则可追溯到原语定义（不许手写参数名）', () =
 	});
 });
 
-describe('$name 占位与字面量', () => {
-	it('$name 取本节点同名参数，改参数 → 那一行的数字跟着变', () => {
-		const first = render({ step_id: 's1', action: 'move', linear: 0.2, angular: 0, duration: 5 }, {
-			declaration: declarationOf([nodeOf({ step_id: 's1', action: 'move', linear: 0.2, angular: 0, duration: 5 })]),
+describe('语句树 → 代码：结构、缩进、优先级', () => {
+	/** 一个把语句树各种形态都用上的能力：赋值、if/else、嵌套 binary、unary、嵌套调用。 */
+	const branchy: CapabilitySpec = {
+		capabilityRef: 'branchy',
+		label: '带分支的',
+		kind: 'skill',
+		parameters: [{ name: 'v', label: '速度', type: 'number' }],
+		implementation: [
+			{
+				kind: 'set',
+				target: 'reading',
+				value: { kind: 'call', primitiveRef: 'read_scan', arguments: { sensors: ['/scan0'] } },
+			},
+			{
+				kind: 'if',
+				condition: {
+					kind: 'binary',
+					operator: 'lt',
+					left: { kind: 'binary', operator: 'multiply', left: { kind: 'param', name: 'v' }, right: { kind: 'literal', value: 2 } },
+					right: { kind: 'literal', value: 0.5 },
+				},
+				then: [
+					{ kind: 'call', primitiveRef: 'brake', arguments: {} },
+					{
+						kind: 'if',
+						condition: { kind: 'unary', operator: 'not', value: { kind: 'literal', value: false } },
+						then: [{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} }],
+						else: [{ kind: 'call', primitiveRef: 'set_velocity', arguments: { linear: 0, angular: 0 } }],
+					},
+				],
+			},
+		],
+	};
+
+	it('if/else 展开成多行，缩进按层加（4 个空格一档）', () => {
+		const program = render({ action: 'branchy', v: 0.3 }, { catalog: catalogWith(branchy) });
+
+		expect(texts(program)).toEqual([
+			'reading = read_scan(sensors=["/scan0"])',
+			'if (0.3) * 2.0 < 0.5:',
+			'    brake()',
+			'    if not false:',
+			'        stop_motion()',
+			'    else:',
+			'        set_velocity(linear=0.0, angular=0.0)',
+		]);
+		expect(program.lines.map((line) => line.indent)).toEqual([0, 0, 1, 1, 2, 1, 2]);
+		expect(program.lines.map((line) => line.kind)).toEqual([
+			'set',
+			'if',
+			'call',
+			'if',
+			'call',
+			'else',
+			'call',
+		]);
+		expect(program.diagnostics).toEqual([]);
+	});
+
+	it('优先级：引用裹括号、字面量不裹（宁可多括号也别写错结合性）', () => {
+		const program = render({ action: 'branchy', v: 0.3 }, { catalog: catalogWith(branchy) });
+		// `v` 是引用（力度 5）落在 `*`（7）里 → 裹；`2` 是字面量（叶子，100）→ 不裹。
+		// `<`（3）比 `*` 松 → 左操作数不裹；`0.5` 是字面量 → 不裹。
+		expect(trimmed(program)[1]).toBe('if (0.3) * 2.0 < 0.5:');
+		// `not` 的操作数若是字面量/引用，没有歧义 → 不加括号。
+		expect(trimmed(program)[3]).toBe('if not false:');
+	});
+
+	it('字面量与引用在同一位置上的差别：引用裹、字面量不裹', () => {
+		const withLiteral = render(
+			{ action: 'op' },
+			{
+				catalog: catalogWith({
+					capabilityRef: 'op',
+					label: '运算符',
+					kind: 'skill',
+					parameters: [],
+					implementation: [
+						{
+							kind: 'set',
+							target: 'r',
+							value: {
+								kind: 'binary',
+								operator: 'multiply',
+								left: { kind: 'literal', value: 2 },
+								right: { kind: 'binary', operator: 'add', left: { kind: 'literal', value: 1 }, right: { kind: 'literal', value: 3 } },
+							},
+						},
+					],
+				}),
+			},
+		);
+		// `1 + 3`（6）比 `*`（7）松 → 裹；两个字面量自己是叶子 → 不裹。
+		expect(texts(withLiteral)).toEqual(['r = (2.0 * (1.0 + 3.0))']);
+	});
+
+	it('嵌套调用与赋值右值：右值整体加括号，嵌套调用照原样', () => {
+		const program = renderSample('stop_if_obstacle');
+		expect(trimmed(program)[0]).toBe('reading = read_scan(sensors=["/scan0"])');
+		// 单独一个引用（局部变量）在赋值右值上也加括号——孤立看认得出它是一个取值。
+		const single = render(
+			{ action: 'copy', v: 0.2 },
+			{
+				catalog: catalogWith({
+					capabilityRef: 'copy',
+					label: '复制',
+					kind: 'skill',
+					parameters: [{ name: 'v', label: '速度', type: 'number' }],
+					implementation: [{ kind: 'set', target: 'x', value: { kind: 'param', name: 'v' } }],
+				}),
+			},
+		);
+		expect(texts(single)).toEqual(['x = (0.2)']);
+	});
+
+	it('binary 运算符用符号：`lt` → `<`、`add` → `+`……一个词都不漏', () => {
+		const operators: readonly [string, string][] = [
+			['lt', '<'],
+			['lte', '<='],
+			['gt', '>'],
+			['gte', '>='],
+			['eq', '=='],
+			['neq', '!='],
+			['add', '+'],
+			['subtract', '-'],
+			['multiply', '*'],
+			['divide', '/'],
+			['and', 'and'],
+			['or', 'or'],
+		];
+		expect(operators).toHaveLength(12);
+		for (const [operator, symbol] of operators) {
+			const program = render(
+				{ action: 'op' },
+				{
+					catalog: catalogWith({
+						capabilityRef: 'op',
+						label: '运算符',
+						kind: 'skill',
+						parameters: [],
+						implementation: [
+							{
+								kind: 'set',
+								target: 'r',
+								value: {
+									kind: 'binary',
+									operator: operator as 'lt',
+									left: { kind: 'literal', value: 1 },
+									right: { kind: 'literal', value: 2 },
+								},
+							},
+						],
+					}),
+				},
+			);
+			expect(texts(program)).toEqual([`r = (1.0 ${symbol} 2.0)`]);
+		}
+	});
+
+	it('语句树里每一条语句都渲染出来了（一条不漏，也没多出来）', () => {
+		const capability = findCapability(PHASE1_ROBOT_CATALOG, 'stop_if_obstacle');
+		expect(capability).toBeDefined();
+		if (capability === undefined) return;
+
+		const program = renderSample('stop_if_obstacle');
+		const paths: string[] = [];
+		eachStatement(capability.implementation, (statement) => {
+			void statement;
+			paths.push('visited');
 		});
+		// 只有两条顶层语句，却渲染出三行：if 的子语句也各占一行。
+		expect(capability.implementation).toHaveLength(2);
+		expect(program.lines).toHaveLength(3);
+		expect(program.lines.map((line) => line.stepPath)).toEqual(['0', '1', '1.then.0']);
+	});
+});
+
+describe('param 解析与字面量', () => {
+	it('引用本节点同名参数，改参数 → 那一行的数字跟着变', () => {
+		const first = render(
+			{ step_id: 's1', action: 'move', linear: 0.2, angular: 0, duration: 5 },
+			{ declaration: declarationOf([nodeOf({ step_id: 's1', action: 'move', linear: 0.2, angular: 0, duration: 5 })]) },
+		);
 		expect(texts(first)[0]).toBe('set_velocity(linear=0.2, angular=0.0)');
 
 		const changed = render({ step_id: 's1', action: 'move', linear: 0.15, angular: 0, duration: 5 });
@@ -310,46 +563,76 @@ describe('$name 占位与字面量', () => {
 		expect(program.diagnostics).toEqual([]);
 	});
 
-	it('$name 指不到本节点的参数时给诊断 + 占位符，不猜', () => {
-		const catalog: CapabilityCatalog = {
-			...PHASE1_ROBOT_CATALOG,
-			capabilities: [
-				{
+	it('引用指不到本节点的参数时给诊断 + 占位符，不猜', () => {
+		const program = render(
+			{ step_id: 's1', action: 'dangling' },
+			{
+				catalog: catalogWith({
 					capabilityRef: 'dangling',
 					label: '悬空引用',
 					kind: 'skill',
 					parameters: [],
-					implementation: [{ step: 'wait', arguments: { seconds: '$duration' } }],
-				},
-			],
-		};
-		const program = render({ step_id: 's1', action: 'dangling' }, { catalog });
+					implementation: [
+						{ kind: 'call', primitiveRef: 'wait', arguments: { seconds: { kind: 'param', name: 'duration' } } },
+					],
+				}),
+			},
+		);
 
 		expect(texts(program)).toEqual(['wait(seconds=null)']);
-		expect(program.diagnostics.map((diagnostic) => diagnostic.code)).toEqual(['code_render.argument.missing']);
+		expect(program.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+			'code_render.param.unresolved',
+		]);
 		expect(program.diagnostics[0]?.severity).toBe('warning');
 	});
 
-	it('传感器数组保持顺序；空数组与非数组都给诊断', () => {
+	it('局部变量写在左边、右边取节点参数的实际值（不是变量名）', () => {
+		const program = renderSample('stop_if_obstacle');
+		// `reading` 是本能力实现里 set 出来的局部变量，左边写名字、右边是读激光那个调用。
+		expect(trimmed(program)[0]).toBe('reading = read_scan(sensors=["/scan0"])');
+		// 条件里的 `reading` 是引用、`distance` 是本节点参数 0.5 → 写出来是数字。
+		expect(trimmed(program)[1]).toBe('if reading < 0.5:');
+	});
+
+	it('传感器数组保持顺序；空数组与非数组都给诊断（实现里写死的也算）', () => {
+		// 实现里直接写死的数组（匿名数组，`implArgumentSchema` 允许的形态）也过同一道闸。
+		const hardcoded = render(
+			{ action: 'hardcoded_sensors' },
+			{
+				catalog: catalogWith({
+					capabilityRef: 'hardcoded_sensors',
+					label: '写死的传感器',
+					kind: 'skill',
+					parameters: [],
+					implementation: [
+						{ kind: 'call', primitiveRef: 'read_scan', arguments: { sensors: ['/scan2', '/scan1'] } },
+					],
+				}),
+			},
+		);
+		expect(texts(hardcoded)).toEqual(['read_scan(sensors=["/scan2", "/scan1"])']);
+		expect(hardcoded.diagnostics).toEqual([]);
+
 		const many = render({ step_id: 's2', action: 'stop_if_obstacle', sensors: ['/scan1', '/scan0'], distance: 0.5 });
-		expect(texts(many)[0]).toBe('read_scan(sensor=["/scan1", "/scan0"])');
+		expect(texts(many)[0]).toBe('reading = read_scan(sensors=["/scan1", "/scan0"])');
 
 		const empty = render({ step_id: 's2', action: 'stop_if_obstacle', sensors: [], distance: 0.5 });
-		expect(texts(empty)[0]).toBe('read_scan(sensor=[])');
+		expect(texts(empty)[0]).toBe('reading = read_scan(sensors=[])');
+		// 空数组不当成合法字面量：给诊断（与老形状同一条码）。
 		expect(empty.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
 			'code_render.argument.empty_sensor_array',
 		]);
 
 		const wrong = render({ step_id: 's2', action: 'stop_if_obstacle', sensors: '/scan0', distance: 0.5 });
-		expect(texts(wrong)[0]).toBe('read_scan(sensor=[])');
+		expect(texts(wrong)[0]).toBe('reading = read_scan(sensors=[])');
 		expect(wrong.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
 			'code_render.argument.not_sensor_array',
 		]);
 	});
 });
 
-describe('行 ↔ implementation 步骤的映射', () => {
-	it('每一行都带步骤号（0 基），steps[] 与之一一对应', () => {
+describe('行 ↔ 语句树路径的映射', () => {
+	it('每一行都带顶层步骤号（0 基）与精确路径，steps[] 与顶层语句一一对应', () => {
 		const program = renderSample('move');
 		const capability = findCapability(PHASE1_ROBOT_CATALOG, 'move');
 		expect(capability).toBeDefined();
@@ -357,16 +640,36 @@ describe('行 ↔ implementation 步骤的映射', () => {
 
 		expect(program.steps).toHaveLength(capability.implementation.length);
 		expect(program.lines.map((line) => line.stepIndex)).toEqual([0, 1, 2]);
+		expect(program.lines.map((line) => line.stepPath)).toEqual(['0', '1', '2']);
+		expect(program.steps.map((step) => step.path)).toEqual(['0', '1', '2']);
 		expect(program.steps.map((step) => step.primitiveRef)).toEqual(
-			capability.implementation.map((step) => step.step),
+			capability.implementation.map((statement) =>
+				statement.kind === 'call' ? statement.primitiveRef : null,
+			),
 		);
 		expect(program.steps.every((step) => step.known)).toBe(true);
 
 		for (const step of program.steps) {
 			expect(stepIndexAtLine(program, step.line)).toBe(step.index);
-			expect(lineOfStep(program, step.index)).toBe(step.line);
+			expect(lineOfStep(program, step.path)).toBe(step.line);
 			expect(program.lines[step.line - 1]?.primitiveRef).toBe(step.primitiveRef);
 		}
+	});
+
+	it('一个 if 的多行都算同一步：顶层下标相同，路径各不相同', () => {
+		const program = renderSample('stop_if_obstacle');
+
+		expect(program.lines.map((line) => line.stepIndex)).toEqual([0, 1, 1]);
+		expect(program.lines.map((line) => line.stepPath)).toEqual(['0', '1', '1.then.0']);
+		expect(program.steps).toHaveLength(2);
+		expect(program.steps[1]).toMatchObject({ index: 1, path: '1', kind: 'if', line: 2, lastLine: 3, lineCount: 2 });
+
+		// 反向：第 1 步的所有行（1 基的行号），以及精确到 .then 那条
+		expect(linesOfTopStep(program, 1).map((line) => line.line)).toEqual([2, 3]);
+		expect(linesOfTopStep(program, 0).map((line) => line.line)).toEqual([1]);
+		expect(lineOfStep(program, '1.then.0')).toBe(3);
+		expect(stepPathAtLine(program, 3)).toBe('1.then.0');
+		expect(stepIndexAtLine(program, 3)).toBe(1);
 	});
 
 	it('注释行不占步骤号，但会让后面几行的行号整体偏移（映射不是 index+1 硬算的）', () => {
@@ -383,21 +686,25 @@ describe('行 ↔ implementation 步骤的映射', () => {
 			'wait(seconds=5.0)',
 			'stop_motion()',
 		]);
-		expect(program.lines[0]).toMatchObject({ kind: 'comment', stepIndex: null, primitiveRef: null });
+		expect(program.lines[0]).toMatchObject({ kind: 'comment', stepIndex: null, stepPath: null, primitiveRef: null });
 		expect(stepIndexAtLine(program, 1)).toBeNull();
 		expect(program.lines.map((line) => line.stepIndex)).toEqual([null, 0, 1, 2]);
-		expect(lineOfStep(program, 0)).toBe(2);
+		expect(lineOfStep(program, '0')).toBe(2);
+		expect(linesOfTopStep(program, 0).map((line) => line.line)).toEqual([2]);
 	});
 
-	it('越界行号 / 步骤号给 null，不猜', () => {
+	it('越界行号 / 路径给 null，不猜', () => {
 		const program = renderSample('move');
 		expect(stepIndexAtLine(program, 0)).toBeNull();
 		expect(stepIndexAtLine(program, 999)).toBeNull();
-		expect(lineOfStep(program, 99)).toBeNull();
+		expect(stepPathAtLine(program, 0)).toBeNull();
+		expect(lineOfStep(program, '99')).toBeNull();
+		expect(lineOfStep(program, '9.then.0')).toBeNull();
+		expect(linesOfTopStep(program, 99)).toEqual([]);
 		expect(lineText(program, 999)).toBeNull();
 	});
 
-	it('调用行数 = 实现步数，且每一行的步骤号都不重不漏', () => {
+	it('调用行数 = 树里的调用条数，且每一行都指向真实的语句', () => {
 		for (const capability of PHASE1_ROBOT_CATALOG.capabilities) {
 			const parameters: JsonObject = { step_id: 's1', action: capability.capabilityRef };
 			for (const parameter of capability.parameters) {
@@ -405,10 +712,17 @@ describe('行 ↔ implementation 步骤的映射', () => {
 					parameter.type === 'sensor' ? ['/scan0'] : parameter.type === 'number' ? 1 : true;
 			}
 			const program = render(parameters);
-			const indexes = callLines(program).map((line) => line.stepIndex);
+			const calls = statementCalls(capability.implementation);
 
-			expect(callLines(program)).toHaveLength(capability.implementation.length);
-			expect(indexes).toEqual(capability.implementation.map((_, index) => index));
+			expect(callLines(program)).toHaveLength(calls.length);
+			// 每一行的路径都能在树里找到那条语句（顶层或任意嵌套深度）
+			for (const line of callLines(program)) {
+				expect(calls.map((call) => call.path)).toContain(line.stepPath);
+			}
+			// 顶层下标不重不漏，且 ≤ 顶层语句数
+			expect([...new Set(program.lines.map((line) => line.stepIndex))]).toEqual(
+				capability.implementation.map((_, index) => index),
+			);
 		}
 	});
 });
@@ -418,29 +732,19 @@ describe('数值不失真', () => {
 		const declaration = sampleDeclaration();
 		for (const node of declaration.nodes) {
 			const program = renderImplementation({ node, catalog: PHASE1_ROBOT_CATALOG, declaration });
-			for (const step of program.steps) {
-				const line = lineText(program, step.line);
-				expect(line).not.toBeNull();
-				if (line === null) continue;
+			for (const line of callLines(program)) {
 				const capability = findCapability(PHASE1_ROBOT_CATALOG, String(node.parameters['action']));
-				const implementation = capability?.implementation[step.index];
-				const primitive = findPrimitive(PHASE1_ROBOT_CATALOG, step.primitiveRef);
-				if (implementation === undefined || primitive === undefined) continue;
+				const primitive = line.primitiveRef === null ? undefined : findPrimitive(PHASE1_ROBOT_CATALOG, line.primitiveRef);
+				if (capability === undefined || primitive === undefined) continue;
 
-				const args = argsOf(line);
+				const args = argsOf(line.text);
 				for (const parameter of primitive.parameters) {
 					const rendered = args.get(parameter.name);
 					expect(rendered).toBeDefined();
-					const raw = implementation.arguments[parameter.name];
-					// 只有引用本节点参数的实参才和节点上的数字比得上
-					if (typeof raw !== 'string' || !raw.startsWith('$')) continue;
-					const original = node.parameters[raw.slice(1)];
-					// 传感器这类数组实参按字面量比；数值走「读回来还是原值」那条。
-					if (Array.isArray(original)) {
-						expect(JSON.parse(rendered as string)).toEqual(original);
-					} else {
-						expect(Number(rendered)).toBe(original);
-					}
+					// 节点上的原值：能力参数就取同名那个
+					const original = node.parameters[parameter.name];
+					if (typeof original === 'number') expect(Number(rendered)).toBe(original);
+					if (Array.isArray(original)) expect(JSON.parse(rendered as string)).toEqual(original);
 				}
 			}
 		}
@@ -464,15 +768,35 @@ describe('数值不失真', () => {
 		expect(texts(huge)[0]).toBe('set_velocity(linear=0.0, angular=1e+21)');
 	});
 
-	it('取不到值的实参渲染成占位符并给诊断，不静默编一个数', () => {
+	it('实参引用的参数在本节点取不到值 → 占位符 + 诊断，不静默编一个数', () => {
 		const program = render({ step_id: 's1', action: 'move', linear: 0.2 });
 		expect(texts(program)).toEqual([
 			'set_velocity(linear=0.2, angular=null)',
 			'wait(seconds=null)',
 			'stop_motion()',
 		]);
+		// 语句树里 `angular`/`duration` 是 `{kind:'param'}` 引用：取不到值走「引用解析不了」那条诊断。
 		expect(program.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
-			'code_render.argument.missing',
+			'code_render.param.unresolved',
+			'code_render.param.unresolved',
+		]);
+	});
+
+	it('原语缺了某个实参（连引用都没有）→ 占位符 + argument.missing', () => {
+		const program = render(
+			{ action: 'missing_arg' },
+			{
+				catalog: catalogWith({
+					capabilityRef: 'missing_arg',
+					label: '缺实参',
+					kind: 'skill',
+					parameters: [],
+					implementation: [{ kind: 'call', primitiveRef: 'set_velocity', arguments: { linear: 0.2 } }],
+				}),
+			},
+		);
+		expect(texts(program)).toEqual(['set_velocity(linear=0.2, angular=null)']);
+		expect(program.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
 			'code_render.argument.missing',
 		]);
 	});
@@ -500,39 +824,109 @@ describe('目录里查不到的东西不假装认识', () => {
 		expect(program.lines[0]?.kind).toBe('unsupported');
 	});
 
-	it('实现指向的原语不在目录里 → error 诊断 + 说明行，步骤号仍然占位', () => {
-		const catalog: CapabilityCatalog = {
-			...PHASE1_ROBOT_CATALOG,
-			capabilities: [
-				{
+	it('实现指向的原语不在目录里 → error 诊断 + 说明行，这一步仍然占着行', () => {
+		const program = render(
+			{ step_id: 's1', action: 'broken' },
+			{
+				catalog: catalogWith({
 					capabilityRef: 'broken',
 					label: '断的',
 					kind: 'skill',
 					parameters: [],
 					implementation: [
-						{ step: 'wait', arguments: { seconds: 1 } },
-						{ step: 'teleport', arguments: {} },
+						{ kind: 'call', primitiveRef: 'wait', arguments: { seconds: 1 } },
+						{ kind: 'call', primitiveRef: 'teleport', arguments: {} },
 					],
-				},
-			],
-		};
-		const program = render({ step_id: 's1', action: 'broken' }, { catalog });
+				}),
+			},
+		);
 
-		expect(texts(program)).toEqual(['wait(seconds=1.0)', '# 目录里没有原语「teleport」']);
+		expect(trimmed(program)).toEqual(['wait(seconds=1.0)', '# 目录里没有原语「teleport」']);
 		expect(program.callCount).toBe(1);
 		expect(program.steps.map((step) => step.known)).toEqual([true, false]);
-		expect(program.lines[1]).toMatchObject({ kind: 'unsupported', stepIndex: 1, primitiveRef: 'teleport' });
+		expect(program.lines[1]).toMatchObject({
+			kind: 'unsupported',
+			stepIndex: 1,
+			stepPath: '1',
+			primitiveRef: 'teleport',
+			known: false,
+		});
 		expect(program.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
 			'code_render.primitive.unknown',
 		]);
 		expect(program.diagnostics[0]?.severity).toBe('error');
 	});
 
+	it('嵌套在 if 里的未知原语：缩进保住，诊断指得出路径', () => {
+		const program = render(
+			{ step_id: 's1', action: 'nested_broken' },
+			{
+				catalog: catalogWith({
+					capabilityRef: 'nested_broken',
+					label: '嵌套断的',
+					kind: 'skill',
+					parameters: [],
+					implementation: [
+						{
+							kind: 'if',
+							condition: { kind: 'literal', value: true },
+							then: [{ kind: 'call', primitiveRef: 'teleport', arguments: {} }],
+						},
+					],
+				}),
+			},
+		);
+
+		expect(texts(program)).toEqual(['if true:', '    # 目录里没有原语「teleport」']);
+		expect(program.diagnostics[0]?.details).toMatchObject({ stepPath: '0.then.0' });
+		expect(program.callCount).toBe(0);
+		expect(lineOfStep(program, '0.then.0')).toBe(2);
+	});
+
+	it('表达式里用了没声明返回值的原语 → 点出来，但照渲染', () => {
+		const program = render(
+			{ step_id: 's1', action: 'bad_expr' },
+			{
+				catalog: catalogWith({
+					capabilityRef: 'bad_expr',
+					label: '表达式用错原语',
+					kind: 'skill',
+					parameters: [],
+					implementation: [
+						{
+							kind: 'set',
+							target: 'x',
+							value: { kind: 'call', primitiveRef: 'stop_motion', arguments: {} },
+						},
+					],
+				}),
+			},
+		);
+
+		expect(texts(program)).toEqual(['x = stop_motion()']);
+		expect(program.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+			'code_render.primitive.not_returning',
+		]);
+	});
+
 	it('空目录也不崩：所有能力都按「查不到」处理', () => {
-		const catalog: CapabilityCatalog = { ...PHASE1_ROBOT_CATALOG, capabilities: [
-			{ capabilityRef: 'none', label: '空', kind: 'skill', parameters: [], implementation: [{ step: 'nothing', arguments: {} }] },
-		] };
-		const program = render({ step_id: 's1', action: 'move' }, { catalog });
+		const program = render(
+			{ step_id: 's1', action: 'move' },
+			{
+				catalog: {
+					...PHASE1_ROBOT_CATALOG,
+					capabilities: [
+						{
+							capabilityRef: 'none',
+							label: '空',
+							kind: 'skill',
+							parameters: [],
+							implementation: [{ kind: 'call', primitiveRef: 'nothing', arguments: {} }],
+						},
+					],
+				},
+			},
+		);
 		expect(program.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
 			'code_render.capability.unknown',
 		]);
@@ -581,14 +975,17 @@ describe('安全限值必须看得见（属于整个任务，不随选中的模�
 	});
 
 	it('没有 meta.limits 时退到安全上限显示并给诊断', () => {
-		const program = render({ step_id: 's1', action: 'stop' }, { declaration: declarationOf([nodeOf({ step_id: 's1', action: 'stop' })], {}) });
+		const program = render(
+			{ step_id: 's1', action: 'stop' },
+			{ declaration: declarationOf([nodeOf({ step_id: 's1', action: 'stop' })], {}) },
+		);
 		expect(program.limits.present).toBe(false);
 		expect(program.limits.numeric.map((limit) => limit.value)).toEqual([0.3, 1.2, 30.0]);
 		expect(program.diagnostics.map((diagnostic) => diagnostic.code)).toContain('code_render.limits.missing');
 	});
 });
 
-describe('整数字段', () => {
+describe('整数字段与字符串字面量', () => {
 	/**
 	 * 目录里标了 `integer` 的参数（关节号、毫秒时长）不该渲染成 `3.0` / `1500.0`；
 	 * 没标的仍然带小数——`joint`（角度）就是这一侧，90 度写成 `90.0` 是对的。
@@ -613,5 +1010,74 @@ describe('整数字段', () => {
 		expect(texts(program)[0]).toBe(
 			'drive_joints(joint1=10.0, joint2=20.0, joint3=30.0, joint4=40.0, joint5=50.0, joint6=60.0, time=1500)',
 		);
+	});
+
+	it('字符串与布尔字面量：加引号 / 写 true|false（字面量是叶子，不加括号）', () => {
+		const program = render(
+			{ action: 'literals' },
+			{
+				catalog: catalogWith({
+					capabilityRef: 'literals',
+					label: '字面量',
+					kind: 'skill',
+					parameters: [],
+					implementation: [
+						{ kind: 'set', target: 'a', value: { kind: 'literal', value: 'scan0' } },
+						{ kind: 'set', target: 'b', value: { kind: 'literal', value: true } },
+						{ kind: 'set', target: 'c', value: { kind: 'literal', value: false } },
+					],
+				}),
+			},
+		);
+		expect(texts(program)).toEqual(['a = "scan0"', 'b = true', 'c = false']);
+	});
+});
+
+describe('样例之外的目录形状（防回归）', () => {
+	it('空实现清单的能力：渲染出空程序而不是崩溃', () => {
+		const program = render(
+			{ action: 'noop' },
+			{
+				catalog: catalogWith({
+					capabilityRef: 'noop',
+					label: '什么都不做',
+					kind: 'skill',
+					parameters: [],
+					// 契约要求至少一条语句，这里放一条无参数调用，退化成一行。
+					implementation: [{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} }],
+				}),
+			},
+		);
+		expect(texts(program)).toEqual(['stop_motion()']);
+		expect(program.lines[0]?.stepPath).toBe('0');
+	});
+
+	it('实现里引用不存在的局部变量时给诊断，不编值', () => {
+		const program = render(
+			{ action: 'weird' },
+			{
+				catalog: catalogWith({
+					capabilityRef: 'weird',
+					label: '怪引用',
+					kind: 'skill',
+					parameters: [],
+					implementation: [
+						{ kind: 'set', target: 'r', value: { kind: 'param', name: 'ghost' } },
+					],
+				}),
+			},
+		);
+		expect(texts(program)).toEqual(['r = (null)']);
+		expect(program.diagnostics.map((diagnostic) => diagnostic.code)).toEqual([
+			'code_render.param.unresolved',
+		]);
+	});
+});
+
+/** 老测试里 `sampleNode` 用不上了，但保留它把「示例任务的节点」这条口径钉住（防语料漂移）。 */
+describe('示例语料本身', () => {
+	it('示例任务里那四步都还在，参数没被改过', () => {
+		expect(sampleNode('move').parameters).toMatchObject({ linear: 0.2, angular: 0, duration: 5 });
+		expect(sampleNode('stop_if_obstacle').parameters).toMatchObject({ sensors: ['/scan0'], distance: 0.5 });
 	});
 });

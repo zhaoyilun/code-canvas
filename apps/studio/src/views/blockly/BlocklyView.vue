@@ -2,7 +2,8 @@
 /**
  * 左栏：积木画布（spec §4.1）。三个视图里**只有这块能改**。
  *
- * 画的是**当前选中模块的实现**：一个模块 = 一个能力，一块积木 = 实现里的一步。
+ * 画的是**当前选中模块的实现**：一个模块 = 一个能力，实现是一棵**语句树**——
+ * 赋值块、C 形条件块，条件里嵌着比较块、比较两侧再嵌引用块与数字块。
  * 改字段 → 编译回同一份 workflow 声明（只改这个节点的 parameters）→ `store.applyDeclaration`；
  * 校验不过就只留诊断。接线全在 `useBlocklyCanvas()` 里，这里只摆放 DOM 与显示状态。
  */
@@ -23,6 +24,7 @@ const {
 	selectedBlockId,
 	decoratedBlocks,
 	moduleTitle,
+	activeStepIndex,
 } = useBlocklyCanvas();
 
 const taskName = computed(() => store.declaration.value?.name ?? '');
@@ -58,6 +60,14 @@ const anchoredCount = computed(() => decoratedBlocks.value.length);
 				title="每块积木的 SVG 上都挂了 data-node-id，跨栏连线只靠它定位"
 			>
 				{{ anchoredCount }} 块带 nodeId 锚点
+			</span>
+			<span
+				v-if="activeStepIndex !== null"
+				class="footer-hint footer-step"
+				data-testid="blockly-selected-step"
+				title="实现里的第几步（顶层语句）；点积木或点代码行都会改这一个数"
+			>
+				选中第 {{ activeStepIndex + 1 }} 步
 			</span>
 			<span v-if="writeSuspended" class="footer-hint">画布不完整，写回已暂停</span>
 			<span v-else-if="selectedBlockId !== null" class="footer-hint" data-testid="blockly-selected">
@@ -163,8 +173,9 @@ const anchoredCount = computed(() => decoratedBlocks.value.length);
 /*
  * 序号徽标：它是画在积木 `<g>` 里的 SVG（见 `sequence-badge.ts`），所以色值走属性、
  * 交互走 pointer-events——这里只钉一件事：徽标不参与命中，点它等于点积木。
- * 新模型下它数的是「**实现里的第几步**」（这个模块内部 1、2、3），与流程卡片上
- * 「任务里的第几步」不是同一个数——后者属于整条链，前者属于这个模块的内部。
+ * 现在它只挂在**顶层语句**上，数的是「实现里的第几步」（这个模块内部 1、2、3）；
+ * 嵌在条件里、比较里的块不是「步」，不挂徽标。它与流程卡片上「任务里的第几步」
+ * 不是同一个数——后者属于整条链，前者属于这个模块的内部。
  */
 .canvas-host :deep(.cc-seq-badge) {
 	pointer-events: none;
@@ -207,6 +218,11 @@ const anchoredCount = computed(() => decoratedBlocks.value.length);
 .write-state.broken,
 .write-state.failed {
 	color: var(--cc-danger-strong);
+}
+
+/* 选中步：与另外两栏同一根线（`--cc-highlight`），只是这里是一句话。 */
+.footer-step {
+	color: var(--cc-highlight);
 }
 
 .footer-hint {

@@ -68,6 +68,7 @@ const palette = (): BadgePalette =>
 		'--cc-accent-strong': VALUE('--cc-accent-strong'),
 		'--cc-accent-dim': VALUE('--cc-accent-dim'),
 		'--cc-danger': VALUE('--cc-danger'),
+		'--cc-highlight': VALUE('--cc-highlight'),
 		'--cc-block-turn': VALUE('--cc-block-turn'),
 		'--cc-block-guard': VALUE('--cc-block-guard'),
 		'--cc-block-arm': VALUE('--cc-block-arm'),

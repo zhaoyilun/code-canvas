@@ -103,4 +103,31 @@ describe('积木画布 · 主题前提', () => {
 		store.select(null);
 		wrapper.unmount();
 	});
+
+	/**
+	 * 选中步（`selectedStepIndex`）是积木与代码面板共用的那根线：代码面板点某一行 → 这里亮出「第几步」，
+	 * 反之点积木也推同一个数（组件里由 `applySelection` 做）。这一层不依赖画布起没起来就能核对。
+	 */
+	it('选中步变了，画布顶部那一行就跟着说「第几步」（与代码面板同一个数）', async () => {
+		stubComputedStyle(themeVariables());
+		const wrapper = mount(BlocklyView, { attachTo: document.body });
+		await wrapper.vm.$nextTick();
+
+		const store = useStudioDocument();
+		expect(wrapper.find('[data-testid="blockly-selected-step"]').exists()).toBe(false);
+
+		// 代码面板点第 2 行（顶层语句下标 1）——它调的就是这一句。
+		store.selectStep(1);
+		await wrapper.vm.$nextTick();
+		expect(wrapper.find('[data-testid="blockly-selected-step"]').text()).toBe('选中第 2 步');
+
+		// 换模块 → 选中步清空（跨模块谈「第几步」没有意义）。
+		store.select(store.nodes.value[0]?.id ?? null);
+		await wrapper.vm.$nextTick();
+		expect(wrapper.find('[data-testid="blockly-selected-step"]').exists()).toBe(false);
+
+		store.selectStep(null);
+		store.select(null);
+		wrapper.unmount();
+	});
 });

@@ -2,17 +2,23 @@
  * 积木画布的全部接线（spec §4.1）：这是**唯一一条写路径**。
  *
  * 画布画的是**当前选中模块的实现**：节点 → `parameters.action`（能力引用）→ 目录里的
- * `implementation` → 每一步一块积木。没选中任何节点时显示第一个（否则画布空着，
- * 用户不知道要干什么）。换了模块才重画；同一个模块内点积木只换高亮。
+ * `implementation`（一棵语句树）→ 递归长成积木（赋值块、C 形条件块、嵌进去的比较与数字）。
+ * 没选中任何节点时显示第一个（否则画布空着，用户不知道要干什么）。换了模块才重画；
+ * 同一个模块内点积木只换高亮。
  *
  * 读：`store.declaration` 变了、或选中的模块换了 → 重画工作区。
  * 写：工作区里字段变了 → 防抖 → `compileWorkspace`（只给这一个节点的 parameters 打补丁，
  *     再跑声明校验 + 任务协议校验）→ 过了才 `store.applyDeclaration`，没过就只留诊断、真相不动。
  *     实现结构由目录给，画布改不了它——块拖不动、删不掉，字段照旧可写。
  *
- * 另外给画布补上它与另外两栏共用的标记：**积木上的序号徽标**（现在是「实现里的第几步」）
- * 与**积木元素上的 `data-node-id`**（跨栏连线的锚点，同一个模块的每块都挂，指向同一个节点）。
- * 事件驱动的整轮重扫，不追踪单块增量——一个模块就那么几步。
+ * 选中步（`store.selectedStepIndex`）：实现是一棵树，能谈「第几处」的只有**顶层语句**。
+ *   点积木 → 从它的 `data.stepPath` 推出所属的顶层语句下标 → `store.selectStep(...)`；
+ *   反过来 `selectedStepIndex` 变了 → `workspace.highlightBlock` 高亮那一步的顶层积木，
+ *   辉光色就是三栏共用的 `--cc-highlight`（主题侧读同一个变量）。代码面板那边接的是同一根线：
+ *   它按行号给出 stepIndex，这边就把对应的积木点亮。
+ *
+ * 另外给画布补上它与另外两栏共用的标记：**序号徽标**（数的是实现里的第几步，只数顶层语句）、
+ * 积木元素上的 `data-node-id`（跨栏连线的锚点）与 `data-cc-step-path`（树里的位置，调试与验收用）。
  *
  * 视图只负责摆放 DOM 与显示状态，Blockly 的用法都在 `@codecanvas/blockly-toolkit` 里。
  */
@@ -32,6 +38,7 @@ import {
 	paletteFromDocument,
 	renderDeclaration,
 	resolveSelection,
+	topLevelStepIndexOf,
 	type BlockIndex,
 	type ThemePalette,
 } from '@codecanvas/blockly-toolkit';
@@ -47,6 +54,13 @@ import {
 
 /** 一次字段编辑会连着来好几个事件（Blockly 自己也会补发），攒一下再编译。 */
 const WRITE_DEBOUNCE_MS = 120;
+
+/** 积木元素上记「它在实现树里的位置」的属性——验收与调试都读它，不靠肉眼认积木。 */
+export const STEP_PATH_ATTRIBUTE = 'data-cc-step-path';
+/** 块种类标签（`call_stmt` / `if` / `ref_num`…），同样是 DOM 上可核对的证据。 */
+export const NODE_TAG_ATTRIBUTE = 'data-cc-node-tag';
+/** 当前选中步的那块顶层积木上的标记（高亮语言与另外两栏同源）。 */
+export const STEP_ACTIVE_ATTRIBUTE = 'data-cc-step-active';
 
 export type CanvasStatus = 'idle' | 'synced' | 'written' | 'rejected' | 'broken' | 'failed';
 
@@ -71,14 +85,22 @@ export interface UseBlocklyCanvasResult {
 	readonly activeNodeId: ComputedRef<string | null>;
 	/** 顶部标题：「<能力的 label> · 实现」。 */
 	readonly moduleTitle: ComputedRef<string>;
+	/** 此刻选中的是模块内部第几步（顶层语句下标）；没选中就没有。 */
+	readonly activeStepIndex: ComputedRef<number | null>;
+	/** 此刻被点亮的积木（顶层那一步的块）。 */
+	readonly highlightedBlockId: Ref<string | null>;
 }
 
 export interface DecoratedBlock {
 	readonly nodeId: string;
 	readonly blockId: string;
 	readonly element: Element;
-	/** 在实现里的位置（0 基）；徽标上写的是它 + 1。 */
+	/** 在实现树里的下标路径（`"1.then.0"` 这种）。 */
+	readonly stepPath: string;
+	/** 顶层语句下标（0 基）；只有顶层块有徽标。 */
 	readonly stepIndex: number;
+	readonly topLevel: boolean;
+	readonly nodeTag: string;
 	readonly badge: SVGGElement | null;
 }
 
@@ -94,11 +116,12 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 	const failure = ref<string | null>(null);
 	const blockCount = ref(0);
 	const selectedBlockId = ref<string | null>(null);
+	const highlightedBlockId = ref<string | null>(null);
 	const decoratedBlocks = ref<readonly DecoratedBlock[]>([]);
 	/** 已经画出来的模块：选中变了但模块没变时，只换高亮、不重画。 */
 	let renderedNodeId: string | null = null;
 
-	/** blockKey（`nodeId#stepIndex`）→ blockId：块 id 分配一次就固定，重画时沿用。 */
+	/** blockKey（`nodeId#stepPath`）→ blockId：块 id 分配一次就固定，重画时沿用。 */
 	const blockIds = new Map<string, string>();
 	/** blockId → 已经被挂上徽标与属性的那个积木元素（重扫时用来摘掉过期的）。 */
 	const decorated = new Map<string, Element>();
@@ -169,53 +192,91 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 		return ref === null ? null : (findCapability(PHASE1_ROBOT_CATALOG, ref) ?? null);
 	});
 
-	/** 现在高亮/亮徽标的是哪一块：选中的那块，其次这个模块的第一块。 */
-	const activeBlockId = (): string | null => {
+	/**
+	 * 当前选中的是**第几步**：store 里的 `selectedStepIndex` 是权威（代码面板点行也是它），
+	 * 没有它时从选中的那块积木的 `data.stepPath` 推——两条路问的是同一件事。
+	 */
+	const activeStepIndex = computed<number | null>(() => {
+		const explicit = store.selectedStepIndex.value;
+		if (explicit !== null) return explicit;
+		const blockId = store.selectedBlockId.value;
+		if (blockId === null) return null;
+		const block = workspace.value?.getBlockById(blockId) ?? null;
+		return block === null ? null : (identityPayload(block)?.stepIndex ?? null);
+	});
+
+	/** 现在高亮/亮徽标的是哪一块：选中那一步的**顶层**积木，其次选中的那块，再其次模块的第一块。 */
+	const highlightTarget = (): string | null => {
 		const index = blockIndex.value;
+		const step = activeStepIndex.value;
+		if (index !== null && step !== null) {
+			const identity = index.byTopLevelStep.get(step);
+			if (identity !== undefined) return identity.blockId;
+		}
 		if (index === null) return null;
 		return resolveSelection(index, store.selectedBlockId.value, store.selectedNodeId.value)?.blockId ?? null;
 	};
 
 	/**
-	 * 画布 → 两处标记（M3 的「框」）。一次遍历干三件事，都是幂等的：
+	 * 画布 → 两处标记（M3 的「框」）+ 树的位置。一次遍历干四件事，都是幂等的：
 	 *   1. 给每块积木挂 `data-node-id`（跨栏连线只认这个属性，不关心它是积木、卡片还是代码行）；
-	 *   2. 挂/更新序号徽标——新模型下它数的是**实现里的第几步**（这个模块内部 1、2、3），
-	 *      亮的是当前选中那一块（在这个模块里，选中已经从「哪个模块」细化到「哪一步」）；
-	 *   3. 摘掉已经不在画布上的积木留下的徽标。
+	 *   2. 挂 `data-cc-step-path` / `data-cc-node-tag`——这块积木在实现树里的位置与种类，
+	 *      验收与调试读它，不用靠肉眼认；
+	 *   3. 只给**顶层语句**挂/更新序号徽标（徽标数的是「实现里的第几步」，嵌套节点不数步），
+	 *      亮的是当前选中那一步的那块；
+	 *   4. 摘掉已经不在画布上的积木留下的徽标。
 	 */
 	function syncDecorations(): void {
 		const current = workspace.value;
 		if (current === null) return;
 		const palette = badgeColors;
 		if (palette === null) return;
-		const active = activeBlockId();
+		const active = highlightTarget();
+		const activeStep = activeStepIndex.value;
 		const seen = new Set<Element>();
 		const rows: DecoratedBlock[] = [];
 
 		for (const block of current.getAllBlocks(false)) {
-			const payload = block.data;
-			const identity = parseIdentity(payload);
+			const identity = identityPayload(block);
 			if (identity === null) continue; // 不是这次渲染画出来的块：没有 nodeId，不硬编一个
 			const element = block.getSvgRoot();
 			if (!(element instanceof Element)) continue;
 
 			element.setAttribute(NODE_ID_ATTRIBUTE, identity.nodeId);
+			element.setAttribute(STEP_PATH_ATTRIBUTE, identity.stepPath);
+			element.setAttribute(NODE_TAG_ATTRIBUTE, identity.nodeTag);
+			if (identity.topLevel && activeStep !== null && identity.stepIndex === activeStep) {
+				element.setAttribute(STEP_ACTIVE_ATTRIBUTE, 'true');
+			} else {
+				element.removeAttribute(STEP_ACTIVE_ATTRIBUTE);
+			}
 			seen.add(element);
 
-			const stepIndex = identity.stepIndex;
-			const box = block.getHeightWidth();
-
-			let badge = badgeOfBlockElement(element);
-			if (badge === null && box.width > 0) {
-				badge = createBadgeElement(palette, stepIndex + 1);
-				element.append(badge);
+			// 徽标只挂顶层语句：它就是「实现里的第几步」，嵌套里的数字块不数步。
+			let badge: SVGGElement | null = null;
+			if (identity.topLevel) {
+				const box = block.getHeightWidth();
+				badge = badgeOfBlockElement(element);
+				if (badge === null && box.width > 0) {
+					badge = createBadgeElement(palette, identity.stepIndex + 1);
+					element.append(badge);
+				}
+				if (badge !== null) {
+					placeBadge(badge, box);
+					updateBadge(badge, palette, identity.stepIndex + 1, block.id === active);
+				}
 			}
-			if (badge !== null) {
-				placeBadge(badge, box);
-				updateBadge(badge, palette, stepIndex + 1, block.id === active);
-			}
 
-			rows.push({ nodeId: identity.nodeId, blockId: block.id, element, stepIndex, badge });
+			rows.push({
+				nodeId: identity.nodeId,
+				blockId: block.id,
+				element,
+				stepPath: identity.stepPath,
+				stepIndex: identity.stepIndex,
+				topLevel: identity.topLevel,
+				nodeTag: identity.nodeTag,
+				badge,
+			});
 		}
 
 		for (const [blockId, element] of decorated) {
@@ -271,6 +332,7 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 			rendering = false;
 		}
 		// 重画会换掉全部积木元素，徽标与 `data-node-id` 得重新挂一遍。
+		syncSelectionFromStore();
 		syncDecorations();
 	}
 
@@ -332,7 +394,10 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 	}
 
 	/**
-	 * 积木被选中 → 推给 store。
+	 * 积木被选中 → 推给 store（模块 + 块 + **第几步**）。
+	 *
+	 * 实现是一棵树，所以「第几步」只能是它所属的**顶层语句**下标：点嵌在条件里的数字块，
+	 * 说的也是「这条 if 是第 2 步」。代码面板按同一个数对齐行，两边才对得上。
 	 *
 	 * **只认认得出的块**：Blockly 在「取消高亮一块积木」时发的也是 `newElementId` 为空的
 	 * `Selected` 事件——与「点了画布空白处」形状完全一样，分不出来（实测：切换模块时的
@@ -345,22 +410,33 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 		const identity = index === null ? null : resolveSelection(index, blockId, null);
 		if (identity === null) return;
 		selectedBlockId.value = identity.blockId;
-		if (identity.nodeId === store.selectedNodeId.value && identity.blockId === store.selectedBlockId.value) return;
+		const already =
+			identity.nodeId === store.selectedNodeId.value &&
+			identity.blockId === store.selectedBlockId.value &&
+			identity.stepIndex === store.selectedStepIndex.value;
+		if (already) return;
 		store.select(identity.nodeId, identity.blockId);
+		store.selectStep(identity.stepIndex);
 	}
 
 	/** store 的选中 → 画布高亮；没给 blockId 时按 nodeId 找（流程画布、代码面板点过来的那种）。 */
 	function syncSelectionFromStore(): void {
 		const current = workspace.value;
 		if (current === null) return;
-		selectedBlockId.value = activeBlockId();
-		highlightBlock(current, selectedBlockId.value);
+		const index = blockIndex.value;
+		selectedBlockId.value =
+			index === null
+				? null
+				: (resolveSelection(index, store.selectedBlockId.value, store.selectedNodeId.value)?.blockId ?? null);
+		const target = highlightTarget();
+		highlightedBlockId.value = target;
+		highlightBlock(current, target);
 		// 徽标的选中态跟 `blocklyHighlighted` 是同一次选中推出来的，但那个 class 要等 Blockly 渲染完才落
 		// （见 `scheduleDecorations`），所以这一帧只排队。
 		scheduleDecorations();
 	}
 
-	/** 选中的模块换了才重画；同一模块内换高亮不算重画。 */
+	/** 选中的模块换了才重画；同一模块内换高亮（或换步）不算重画。 */
 	function syncModuleFromStore(): void {
 		const declaration = store.declaration.value;
 		const wanted = activeNodeId.value;
@@ -369,7 +445,6 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 			return;
 		}
 		render(declaration);
-		syncSelectionFromStore();
 	}
 
 	onMounted(() => {
@@ -449,6 +524,11 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 		syncModuleFromStore();
 	});
 
+	// 选中「步」变了（点代码面板某一行也是这条）：高亮那一步的顶层积木，不重画。
+	watch(store.selectedStepIndex, () => {
+		syncSelectionFromStore();
+	});
+
 	return {
 		hostRef,
 		diagnostics,
@@ -461,26 +541,54 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 		decoratedBlocks,
 		activeNodeId,
 		moduleTitle,
+		activeStepIndex,
+		highlightedBlockId,
 	};
 }
 
+interface BlockIdentityPayload {
+	readonly nodeId: string;
+	readonly stepPath: string;
+	readonly stepIndex: number;
+	readonly topLevel: boolean;
+	readonly nodeTag: string;
+}
+
 /**
- * 从积木的 `data` 里读回 nodeId 与实现位置。
+ * 从积木的 `data` 里读回 nodeId 与它在实现树里的位置。
  *
  * `@codecanvas/blockly-toolkit` 的 `identityOfBlock` 走的是同一份 `data`，
  * 但这里必须**不依赖 Blockly 的 Block 实例**——徽标与属性是 DOM 上的事。
  */
-function parseIdentity(data: string | null | undefined): { readonly nodeId: string; readonly stepIndex: number } | null {
+function identityPayload(block: Blockly.Block): BlockIdentityPayload | null {
+	const parsed = parseBlockData(block.data);
+	if (parsed === null) return null;
+	const stepIndex = topLevelStepIndexOf(parsed.stepPath);
+	if (stepIndex === null) return null;
+	return {
+		nodeId: parsed.nodeId,
+		stepPath: parsed.stepPath,
+		stepIndex,
+		topLevel: !parsed.stepPath.includes('.'),
+		nodeTag: parsed.nodeTag,
+	};
+}
+
+/** 解析 `block.data`（与 toolkit 的 `parseBlockData` 同形，这里只需要三个字段）。 */
+function parseBlockData(
+	data: string | null | undefined,
+): { readonly nodeId: string; readonly stepPath: string; readonly nodeTag: string } | null {
 	if (data === null || data === undefined || data.length === 0) return null;
 	try {
 		const parsed: unknown = JSON.parse(data);
 		if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null;
 		const record = parsed as Record<string, unknown>;
 		const nodeId = record['nodeId'];
-		const stepIndex = record['stepIndex'];
+		const stepPath = record['stepPath'];
+		const nodeTag = record['nodeTag'];
 		if (typeof nodeId !== 'string' || nodeId.length === 0) return null;
-		if (typeof stepIndex !== 'number' || !Number.isInteger(stepIndex) || stepIndex < 0) return null;
-		return { nodeId, stepIndex };
+		if (typeof stepPath !== 'string' || stepPath.length === 0) return null;
+		return { nodeId, stepPath, nodeTag: typeof nodeTag === 'string' ? nodeTag : '' };
 	} catch {
 		return null;
 	}

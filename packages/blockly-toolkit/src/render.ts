@@ -2,12 +2,15 @@
  * 声明 + 能力目录 → 工作区（spec §4.1 的「读」方向）。
  *
  * **画布画的是「当前这一个模块的实现」，不是整条任务链**：
- * 取当前选中的节点，用它的 `parameters.action` 去目录里查能力，拿到 `implementation`，
- * 每一步一块积木，按实现顺序用 `next` 串成一条链。
+ * 取当前选中的节点，用它的 `parameters.action` 去目录里查能力，拿到 `implementation`
+ * ——一棵**语句树**——然后递归地长成积木：赋值块、C 形的条件块、嵌在条件里的比较块、
+ * 再嵌进比较两侧的引用块与数字块。顶层语句之间用 `next` 串成一条链。
  * 没选中任何节点时取声明里的第一个——画布空着，用户不知道要干什么。
  *
- * 字段值分两种（见 `blocks.ts` 的 `ArgumentBinding`）：`$name` 填节点同名参数的实际值，
- * 字面量照目录原样显示。这里不判断合法性：声明不合法与否是校验器的事，这里只如实画出来。
+ * 字段值分两种（见 `blocks.ts` 的 `ArgumentBinding`）：绑到能力参数的填节点同名参数的实际值，
+ * 目录里写死的字面量照原样显示。这里不判断合法性：声明不合法与否是校验器的事，这里只如实画出来。
+ * 目录自己写歪了（悬空引用、漏给实参、类型进不了表达式、原语查不到）在这里报诊断——
+ * 那是目录的毛病，不是声明的问题。
  */
 import * as Blockly from 'blockly';
 import {
@@ -23,9 +26,12 @@ import {
 	type WorkflowNode,
 } from '@codecanvas/contracts';
 import {
-	describeImplementationStep,
+	describeImplementation,
+	isUnknownShape,
 	registerImplementationBlocks,
+	topLevelStepIndexOf,
 	type ImplementationBlockShape,
+	type ImplementationWidget,
 } from './blocks';
 import { createBlockIndex, serializeBlockData, type BlockIdentity, type BlockIndex } from './identity';
 
@@ -81,16 +87,16 @@ export const activeNodeOf = (
 	return nodes[0] ?? null;
 };
 
-/** 块 id 的分配键：同一个节点下按实现序号分。 */
-export const blockKeyOf = (nodeId: string, stepIndex: number): string => `${nodeId}#${String(stepIndex)}`;
+/** 块 id 的分配键：同一个节点下按树里的下标路径分。 */
+export const blockKeyOf = (nodeId: string, stepPath: string): string => `${nodeId}#${stepPath}`;
 
 /**
  * 字段值 → 积木字段。
  *
- * `$name` 的有值就用值；缺了（或不是数字）用协议默认值顶上并给警告——积木画不出「空」，
- * 但也不能假装声明里有这个数。字面量字段不用管：它显示的就是目录写的那个值。
+ * 绑到能力参数的有值就用值；缺了（或不是数字/字符串）用协议默认值顶上并给警告——
+ * 积木画不出「空」，但也不能假装声明里有这个数。只读字段不用管：它显示的就是目录里那个值。
  */
-const fieldsForStep = (
+const fieldsForShape = (
 	shape: ImplementationBlockShape,
 	node: WorkflowNode,
 	nodeIndex: number,
@@ -118,8 +124,13 @@ const fieldsForStep = (
 				message: `参数 ${parameter} 缺失或不是数字，积木先按协议默认值显示`,
 				path: `nodes[${String(nodeIndex)}].parameters.${parameter}`,
 				ref: node.id,
-				details: { capability: shape.capabilityRef, step: shape.primitiveRef, fallback: widget.value },
+				details: { capability: shape.capabilityRef, stepPath: shape.stepPath, fallback: widget.value },
 			});
+			continue;
+		}
+
+		if (widget.kind === 'text') {
+			fields[widget.fieldName] = typeof raw === 'string' ? raw : widget.value;
 			continue;
 		}
 
@@ -135,106 +146,145 @@ const fieldsForStep = (
 			continue;
 		}
 
-		// 只读字段：绑了参数但类型上没有可编辑控件（`pose` / `string`），显示声明里的值。
+		// 只读字段：绑了参数但类型上没有可编辑控件（`pose`），显示声明里的值。
 		fields[widget.fieldName] = typeof raw === 'string' || typeof raw === 'number' ? String(raw) : widget.text;
 	}
 
 	return fields;
 };
 
-/** 目录自身的毛病（悬空 `$name`、漏给实参）在这里报：它们不是声明的问题，是目录的问题。 */
-const checkBindings = (
+/** 目录自身的毛病（悬空名字、漏给实参、类型进不了表达式、原语查不到）在这里报。 */
+const checkShape = (
 	shape: ImplementationBlockShape,
 	node: WorkflowNode,
 	nodeIndex: number,
 	collector: DiagnosticCollector,
 ): void => {
+	const path = `nodes[${String(nodeIndex)}].parameters.action`;
+
+	if (isUnknownShape(shape)) {
+		collector.error({
+			code: 'blockly.render.unknown_primitive',
+			message: `能力 ${shape.capabilityRef} 的实现里「${shape.stepPath}」引用了目录 ${shape.primitiveRef ?? '?'} 里没有的原语，这一处只能画成占位块`,
+			path,
+			ref: node.id,
+			details: { capability: shape.capabilityRef, stepPath: shape.stepPath, primitive: shape.primitiveRef ?? '' },
+		});
+	}
+
 	for (const widget of shape.widgets) {
 		const binding = widget.binding;
 		if (binding.kind === 'unbound') {
 			collector.warning({
 				code: 'blockly.render.unbound_argument',
-				message: `能力 ${shape.capabilityRef} 的实现第 ${String(shape.stepIndex + 1)} 步（${shape.primitiveRef}）没给参数 ${widget.parameter} 的实参，画布只能留空`,
-				path: `nodes[${String(nodeIndex)}].parameters.action`,
+				message: `能力 ${shape.capabilityRef} 的实现里「${shape.stepPath}」没给参数 ${widget.parameter} 的实参，画布只能留空`,
+				path,
 				ref: node.id,
-				details: { capability: shape.capabilityRef, step: shape.primitiveRef, parameter: widget.parameter },
+				details: { capability: shape.capabilityRef, stepPath: shape.stepPath, parameter: widget.parameter },
 			});
 			continue;
 		}
-		if (binding.kind === 'literal' && typeof binding.value === 'string' && binding.value.startsWith('$')) {
-			// `$name` 落在字面量分支上只有一个原因：这个 `name` 不在能力参数表里（悬空引用）。
+		if (binding.kind === 'dangling') {
 			collector.warning({
 				code: 'blockly.render.dangling_argument',
-				message: `能力 ${shape.capabilityRef} 的实现里引用了不存在的参数 ${binding.value}，这一步的 ${widget.parameter} 只读显示原样`,
-				path: `nodes[${String(nodeIndex)}].parameters.action`,
+				message: `能力 ${shape.capabilityRef} 的实现里引用了既不是能力参数、也不是局部变量的 ${binding.name}，这一处只读显示原样`,
+				path,
 				ref: node.id,
-				details: { capability: shape.capabilityRef, step: shape.primitiveRef, argument: binding.value },
+				details: { capability: shape.capabilityRef, stepPath: shape.stepPath, name: binding.name },
+			});
+			continue;
+		}
+		if (binding.kind === 'not-a-value') {
+			collector.warning({
+				code: 'blockly.render.param_not_a_value',
+				message: `能力参数 ${binding.name} 的类型进不了表达式（契约只认 number / string / boolean），这一处只读显示名字`,
+				path,
+				ref: node.id,
+				details: { capability: shape.capabilityRef, stepPath: shape.stepPath, parameter: binding.name },
 			});
 		}
 	}
+
+	for (const input of shape.valueInputs) checkShape(input.child, node, nodeIndex, collector);
+	for (const input of shape.statementInputs) {
+		for (const child of input.blocks) checkShape(child, node, nodeIndex, collector);
+	}
 };
 
-/** 实现里每一步一块积木；缺原语的那一步画不出来，如实报错、不猜一块顶上。 */
-const statesForNode = (
-	catalog: CapabilityCatalog,
-	capability: CapabilitySpec,
-	node: WorkflowNode,
-	nodeIndex: number,
-	idFactory: StableIdFactory,
-	blockIds: Map<string, string>,
-	identities: BlockIdentity[],
-	collector: DiagnosticCollector,
-): Blockly.serialization.blocks.State[] => {
-	const states: Blockly.serialization.blocks.State[] = [];
-	const stepId = stepIdFromParameters(node.parameters, node.id);
+interface StateContext {
+	readonly node: WorkflowNode;
+	readonly stepId: string;
+	readonly capability: CapabilitySpec;
+	readonly nodeIndex: number;
+	readonly idFactory: StableIdFactory;
+	readonly blockIds: Map<string, string>;
+	readonly identities: BlockIdentity[];
+	readonly collector: DiagnosticCollector;
+}
 
-	capability.implementation.forEach((step, stepIndex) => {
-		const shape = describeImplementationStep(catalog, capability, step, stepIndex);
-		if (shape === null) {
-			collector.error({
-				code: 'blockly.render.unknown_primitive',
-				message: `能力 ${capability.capabilityRef} 的实现第 ${String(stepIndex + 1)} 步引用了目录里没有的原语 ${step.step}，这块积木画不出来`,
-				path: `nodes[${String(nodeIndex)}].parameters.action`,
-				ref: node.id,
-				details: { capability: capability.capabilityRef, step: step.step, stepIndex },
-			});
-			return;
-		}
+/** 一串语句 → 用 `next` 串起来的链，返回链头（空就是 null）。 */
+const statementChain = (states: readonly Blockly.serialization.blocks.State[]): Blockly.serialization.blocks.State | null => {
+	for (let index = states.length - 1; index > 0; index -= 1) {
+		const previous = states[index - 1];
+		const current = states[index];
+		if (previous === undefined || current === undefined) continue;
+		previous['next'] = { block: current };
+	}
+	return states[0] ?? null;
+};
 
-		checkBindings(shape, node, nodeIndex, collector);
+/**
+ * 一个节点 → 一块积木的序列化状态，值输入与语句口**递归**下去。
+ *
+ * 位置只有链头给：嵌在输入里的块由父块摆位，给了 `x/y` 反而会让 Blockly 把它当独立块。
+ */
+const stateForShape = (shape: ImplementationBlockShape, context: StateContext): Blockly.serialization.blocks.State => {
+	const { node, stepId, capability, nodeIndex, idFactory, blockIds, identities, collector } = context;
 
-		const key = blockKeyOf(node.id, stepIndex);
-		let blockId = blockIds.get(key);
-		if (blockId === undefined) {
-			blockId = idFactory.blockId();
-			blockIds.set(key, blockId);
-		}
+	const key = blockKeyOf(node.id, shape.stepPath);
+	let blockId = blockIds.get(key);
+	if (blockId === undefined) {
+		blockId = idFactory.blockId();
+		blockIds.set(key, blockId);
+	}
 
-		states.push({
-			id: blockId,
-			type: shape.type,
-			// 画布只显示这一个模块，位置不来自流程画布——链自己会顺着 `next` 往下排。
-			...(stepIndex === 0 ? { x: 32, y: 32 } : {}),
-			data: serializeBlockData({
-				nodeId: node.id,
-				stepId,
-				capabilityRef: capability.capabilityRef,
-				primitiveRef: shape.primitiveRef,
-				stepIndex,
-			}),
-			fields: fieldsForStep(shape, node, nodeIndex, collector),
-		});
-		identities.push({
-			blockId,
+	identities.push({
+		blockId,
+		nodeId: node.id,
+		stepId,
+		capabilityRef: capability.capabilityRef,
+		stepPath: shape.stepPath,
+		stepIndex: topLevelStepIndexOf(shape.stepPath) ?? 0,
+		nodeTag: shape.tag,
+		primitiveRef: shape.primitiveRef,
+	});
+
+	const state: Blockly.serialization.blocks.State = {
+		id: blockId,
+		type: shape.type,
+		data: serializeBlockData({
 			nodeId: node.id,
 			stepId,
 			capabilityRef: capability.capabilityRef,
+			stepPath: shape.stepPath,
+			nodeTag: shape.tag,
 			primitiveRef: shape.primitiveRef,
-			stepIndex,
-		});
-	});
+		}),
+		fields: fieldsForShape(shape, node, nodeIndex, collector),
+	};
 
-	return states;
+	const inputs: Record<string, Blockly.serialization.blocks.ConnectionState> = {};
+	for (const input of shape.valueInputs) {
+		const child = stateForShape(input.child, context);
+		inputs[input.name] = input.asShadow ? { shadow: child } : { block: child };
+	}
+	for (const input of shape.statementInputs) {
+		const head = statementChain(input.blocks.map((child) => stateForShape(child, context)));
+		if (head !== null) inputs[input.name] = { block: head };
+	}
+	if (Object.keys(inputs).length > 0) state.inputs = inputs;
+
+	return state;
 };
 
 /**
@@ -251,14 +301,13 @@ const preventStructuralEdits = (workspace: Blockly.Workspace): void => {
 
 export const renderDeclaration = (options: RenderOptions): RenderResult => {
 	const { workspace, declaration, catalog } = options;
-	// 目录里每个「能力 × 原语」都得先是 Blockly 认得的块类型，才画得出来。
+	// 目录里每个能力的每个节点都得先是 Blockly 认得的块类型，才画得出来。
 	// 这里替调用方做掉（幂等）——否则「忘了注册」会以一句 Invalid block definition 出现在运行时。
 	registerImplementationBlocks(catalog);
 	const idFactory = options.idFactory ?? createUlidIdFactory();
 	const collector = new DiagnosticCollector();
 	const blockIds = new Map(options.blockIds ?? []);
 	const identities: BlockIdentity[] = [];
-	const blocks: Blockly.serialization.blocks.State[] = [];
 
 	workspace.clear();
 
@@ -291,19 +340,28 @@ export const renderDeclaration = (options: RenderOptions): RenderResult => {
 		return { index: createBlockIndex([]), diagnostics: collector.diagnostics, blockIds, nodeId: node.id, capability: null };
 	}
 
-	blocks.push(
-		...statesForNode(catalog, capability, node, nodeIndex, idFactory, blockIds, identities, collector),
-	);
+	const statements = describeImplementation(catalog, capability);
+	// checkShape 自己会往下递归，所以只从顶层语句进去一次——重复检查会把同一条诊断报好几遍。
+	for (const statement of statements) checkShape(statement, node, nodeIndex, collector);
 
-	// 实现顺序 = 链的顺序：从尾往前挂 next，最后只 append 头一块，整条链一起进工作区。
-	for (let index = blocks.length - 1; index > 0; index -= 1) {
-		const previous = blocks[index - 1];
-		const current = blocks[index];
-		if (previous === undefined || current === undefined) continue;
-		previous['next'] = { block: current };
+	const context: StateContext = {
+		node,
+		stepId: stepIdFromParameters(node.parameters, node.id),
+		capability,
+		nodeIndex,
+		idFactory,
+		blockIds,
+		identities,
+		collector,
+	};
+	const states = statements.map((statement) => stateForShape(statement, context));
+	const head = statementChain(states);
+	if (head !== null) {
+		// 画布只显示这一个模块，位置不来自流程画布——链自己会顺着 `next` 往下排。
+		head['x'] = 32;
+		head['y'] = 32;
+		Blockly.serialization.blocks.append(head, workspace);
 	}
-	const head = blocks[0];
-	if (head !== undefined) Blockly.serialization.blocks.append(head, workspace);
 	preventStructuralEdits(workspace);
 
 	return {
@@ -315,7 +373,40 @@ export const renderDeclaration = (options: RenderOptions): RenderResult => {
 	};
 };
 
-/** 从工作区里按顺序取出链上的积木：先按位置取顶层块，再顺着 `next` 走到底。 */
+/**
+ * 工作区里这块积木挂的字段里，有没有绑到能力参数的那些（写回只认这些）。
+ * 这是给「选中联动」与诊断用的轻量判据，不参与编译。
+ */
+export const writableWidgetsOf = (shape: ImplementationBlockShape): readonly ImplementationWidget[] =>
+	shape.widgets.filter((widget) => widget.binding.kind === 'parameter');
+
+/**
+ * 工作区里的**每一块**积木，按树的前序排（父在子前、语句按顺序）。
+ *
+ * 旧模型下实现是扁平一串，`next` 走到头就是全部；现在是树，嵌在条件里、比较里的块
+ * 也是这个模块的实现的一部分——写回时漏掉它们，就会「用户改的数字没进真相」。
+ * `getAllBlocks()` 的顺序是 Blockly 内部顺序（与树无关），所以这里自己走一遍输入表。
+ */
+export const collectImplementationBlocks = (workspace: Blockly.Workspace): readonly Blockly.Block[] => {
+	const ordered: Blockly.Block[] = [];
+	const seen = new Set<string>();
+	const visit = (block: Blockly.Block): void => {
+		if (seen.has(block.id)) return;
+		seen.add(block.id);
+		ordered.push(block);
+		for (const input of block.inputList) {
+			const target = input.connection?.targetBlock();
+			if (target !== null && target !== undefined) visit(target);
+		}
+		// `next`（下一条语句）不是 inputList 里的一项，是块自己的连接——单独跟一遍。
+		const next = block.getNextBlock();
+		if (next !== null) visit(next);
+	};
+	for (const top of workspace.getTopBlocks(true)) visit(top);
+	return ordered;
+};
+
+/** 从工作区里按顺序取出顶层那串语句：先按位置取顶层块，再顺着 `next` 走到底。 */
 export const collectChainBlocks = (workspace: Blockly.Workspace): readonly Blockly.Block[] => {
 	const ordered: Blockly.Block[] = [];
 	for (const top of workspace.getTopBlocks(true)) {

@@ -1,23 +1,33 @@
 /**
  * 能力目录：一台设备会做什么，以及**它内部是怎么做的**。
  *
- * 两层结构：`primitives` 是这台设备支持的基础操作（原子运动、读传感器、等待……），
- * `capabilities` 是对外可见的动作，每个都带一串 `implementation`——由原语组成的执行步骤。
+ * 两层结构：
+ * - `primitives` 是这台设备支持的基础操作，是实现的**词汇表**——`set_velocity`、`read_scan`、
+ *   `open_gripper` 这类原子动作，有的**有返回值**（读传感器），有的没有（下发速度）。
+ * - `capabilities` 是对外可见的动作，每个带一棵 **`implementation` 语句树**：由原语组成的程序。
  *
- * 教学上的意义：`capabilities` 是流程画布上的模块（函数调用点），
- * `implementation` 就是那个函数的体（点开模块看到的"机器到底做了什么"）。
+ * 为什么是树而不是一串步骤：函数体是**程序**，有赋值、有分支、有嵌套。
+ * 扁平的调用清单既长不出「如果……那么」这样的积木，也渲染不出有结构的代码。
+ * 形状借鉴前作的 `LogicStatementV1` / `LogicExpressionV1`（见 docs/inherited.md），
+ * 但只保留这里够用的：调用、赋值、条件；字面量、引用、比较/算术、取反。
  *
- * 谁的设备谁提供目录（插件产出，核心只认这个形状），所以底盘和机械臂能长在同一套结构下，
- * 各自的原语集不同而已。
+ * 教学上的意义：`capabilities` 是流程画布上的模块（函数调用点），`implementation` 是函数体
+ * ——点开一个模块，看到的就是「机器为了执行它具体做了哪些事」。
+ *
+ * 谁的设备谁提供目录（插件产出，核心只认这个形状），所以底盘和机械臂能长在同一套结构下。
  *
  * 见 docs/spec.md §5。
  */
 import { z } from 'zod';
 import { stableReferenceSchema } from './stable-ids';
 
-/** 参数与实参的取值类型。`sensor` 与 `pose` 是给渲染层看的语义提示。 */
+/** 参数与返回值的取值类型。`sensor` 与 `pose` 是给渲染层看的语义提示。 */
 export const catalogValueTypeSchema = z.enum(['number', 'string', 'boolean', 'sensor', 'pose']);
 export type CatalogValueType = z.infer<typeof catalogValueTypeSchema>;
+
+/** 只有这些类型能出现在表达式里（sensor / pose 是参数侧的概念，不是值）。 */
+export const expressionValueTypeSchema = z.enum(['number', 'string', 'boolean']);
+export type ExpressionValueType = z.infer<typeof expressionValueTypeSchema>;
 
 export const catalogParameterSchema = z
 	.object({
@@ -26,44 +36,143 @@ export const catalogParameterSchema = z
 		type: catalogValueTypeSchema,
 		/**
 		 * 这个参数只取整数（关节号、毫秒时长这类）。缺省表示可以是小数。
-		 * 渲染层据此决定 `3` 还是 `3.0`，积木那边也可以据此给整数输入。
+		 * 渲染层据此决定写 `3` 还是 `3.0`。
 		 */
 		integer: z.boolean().optional(),
 	})
 	.strict();
 export type CatalogParameter = z.infer<typeof catalogParameterSchema>;
 
-/** 一个基础操作。它的参数就是积木上会长出来的那些字段。 */
+/**
+ * 一个基础操作。
+ * `returns` 缺省表示它不返回值（只能当语句用）；给了就说明它能出现在表达式里。
+ */
 export const primitiveSpecSchema = z
 	.object({
 		primitiveRef: stableReferenceSchema,
 		label: z.string().trim().min(1).max(64),
 		parameters: z.array(catalogParameterSchema),
+		returns: expressionValueTypeSchema.optional(),
 	})
 	.strict();
 export type PrimitiveSpec = z.infer<typeof primitiveSpecSchema>;
 
+// ---------------------------------------------------------------------------
+// 实现：语句树
+// ---------------------------------------------------------------------------
+
 /**
- * 实现里的一步：调用某个原语。
- *
- * 实参写成字符串时，`$name` 表示「取本能力的同名参数」——这样同一份实现能被不同参数复用，
- * 也是渲染层把 `linear=0.2` 填进代码行与积木字段的唯一依据。
+ * 实参的取值：字面量，或者一个表达式（引用某参数/局部变量、嵌套调用、算术……）。
+ * 字面量允许匿名数组，是为了 `sensors: ["/scan0"]` 这种写法读起来干净。
  */
-export const argumentValueSchema = z.union([
-	z.string(),
+export const implArgumentSchema: z.ZodType<ImplArgument> = z.union([
 	z.number(),
+	z.string(),
 	z.boolean(),
 	z.array(z.string()),
+	z.lazy(() => implExpressionSchema),
 ]);
-export type ArgumentValue = z.infer<typeof argumentValueSchema>;
+export type ImplArgument = number | string | boolean | string[] | ImplExpression;
 
-export const implementationStepSchema = z
-	.object({
-		step: stableReferenceSchema,
-		arguments: z.record(z.string(), argumentValueSchema),
-	})
-	.strict();
-export type ImplementationStep = z.infer<typeof implementationStepSchema>;
+/** 表达式：有值的东西。 */
+export const implExpressionSchema: z.ZodType<ImplExpression> = z.lazy(() =>
+	z.discriminatedUnion('kind', [
+		z.object({ kind: z.literal('literal'), value: z.union([z.number(), z.string(), z.boolean()]) }).strict(),
+		/** 按名字取：先找本能力实现里 `set` 过的局部变量，再找本能力的参数。 */
+		z.object({ kind: z.literal('param'), name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/) }).strict(),
+		/** 有返回值的原语调用，例如 `read_scan("/scan0")`。 */
+		z
+			.object({
+				kind: z.literal('call'),
+				primitiveRef: stableReferenceSchema,
+				arguments: z.record(z.string(), implArgumentSchema),
+			})
+			.strict(),
+		z
+			.object({
+				kind: z.literal('binary'),
+				operator: z.enum([
+					'lt',
+					'lte',
+					'gt',
+					'gte',
+					'eq',
+					'neq',
+					'add',
+					'subtract',
+					'multiply',
+					'divide',
+					'and',
+					'or',
+				]),
+				left: z.lazy(() => implExpressionSchema),
+				right: z.lazy(() => implExpressionSchema),
+			})
+			.strict(),
+		z
+			.object({
+				kind: z.literal('unary'),
+				operator: z.enum(['not', 'negate']),
+				value: z.lazy(() => implExpressionSchema),
+			})
+			.strict(),
+	]),
+);
+export type ImplExpression =
+	| { kind: 'literal'; value: number | string | boolean }
+	| { kind: 'param'; name: string }
+	| { kind: 'call'; primitiveRef: string; arguments: Record<string, ImplArgument> }
+	| { kind: 'binary'; operator: BinaryOperator; left: ImplExpression; right: ImplExpression }
+	| { kind: 'unary'; operator: 'not' | 'negate'; value: ImplExpression };
+
+export type BinaryOperator =
+	| 'lt'
+	| 'lte'
+	| 'gt'
+	| 'gte'
+	| 'eq'
+	| 'neq'
+	| 'add'
+	| 'subtract'
+	| 'multiply'
+	| 'divide'
+	| 'and'
+	| 'or';
+
+/** 语句：做事的东西。 */
+export const implStatementSchema: z.ZodType<ImplStatement> = z.lazy(() =>
+	z.discriminatedUnion('kind', [
+		/** 调一个不返回值的原语。 */
+		z
+			.object({
+				kind: z.literal('call'),
+				primitiveRef: stableReferenceSchema,
+				arguments: z.record(z.string(), implArgumentSchema),
+			})
+			.strict(),
+		/** 给一个局部变量赋值。 */
+		z
+			.object({
+				kind: z.literal('set'),
+				target: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]*$/),
+				value: z.lazy(() => implExpressionSchema),
+			})
+			.strict(),
+		/** 条件分支；`else` 缺省表示没有否则那半边。 */
+		z
+			.object({
+				kind: z.literal('if'),
+				condition: z.lazy(() => implExpressionSchema),
+				then: z.array(z.lazy(() => implStatementSchema)).min(1),
+				else: z.array(z.lazy(() => implStatementSchema)).min(1).optional(),
+			})
+			.strict(),
+	]),
+);
+export type ImplStatement =
+	| { kind: 'call'; primitiveRef: string; arguments: Record<string, ImplArgument> }
+	| { kind: 'set'; target: string; value: ImplExpression }
+	| { kind: 'if'; condition: ImplExpression; then: ImplStatement[]; else?: ImplStatement[] };
 
 /** 一个对外可见的动作：流程画布上的一个模块。 */
 export const capabilitySpecSchema = z
@@ -71,10 +180,10 @@ export const capabilitySpecSchema = z
 		capabilityRef: stableReferenceSchema,
 		label: z.string().trim().min(1).max(64),
 		kind: z.enum(['skill', 'primitive']),
-		/** 这个能力接收的参数；实现里的 `$name` 引用它们。 */
+		/** 这个能力接收的参数；实现里用 `{kind:'param', name}` 引用它们。 */
 		parameters: z.array(catalogParameterSchema),
-		/** **缺的那一层**：这个动作内部由哪些原语步骤组成。至少一步。 */
-		implementation: z.array(implementationStepSchema).min(1),
+		/** **函数体**：这个动作内部做了什么。至少一条语句。 */
+		implementation: z.array(implStatementSchema).min(1),
 	})
 	.strict();
 export type CapabilitySpec = z.infer<typeof capabilitySpecSchema>;

@@ -102,7 +102,10 @@ describe('主题', () => {
 		expect(theme.getComponentStyle('workspaceBackgroundColour')).toBe(palette['--cc-surface-sunken']);
 		expect(theme.getComponentStyle('toolboxBackgroundColour')).toBe(palette['--cc-surface']);
 		expect(theme.getComponentStyle('flyoutBackgroundColour')).toBe(palette['--cc-surface-raised']);
+		// 选中辉光与另外两栏同一根线：`--cc-highlight`（它派生自强调色，但取的是那个变量）。
+		expect(theme.getComponentStyle('selectedGlowColour')).toBe(palette['--cc-highlight']);
 		expect(theme.getComponentStyle('selectedGlowColour')).toBe(palette['--cc-accent']);
+		expect(palette['--cc-highlight']).toBe('#2ee6d6');
 	});
 
 	it('注入选项用 zelos 渲染器，且**不带工具箱**：实现来自目录，结构只读', () => {
@@ -114,7 +117,8 @@ describe('主题', () => {
 		expect(options.toolbox).toBeUndefined();
 		// 同理不给垃圾桶：块删不掉（结构只读由渲染侧再钉一道，见 roundtrip.test.ts）。
 		expect(options.trashcan).toBe(false);
-		// 目录里每个「能力 × 原语」都注册成了积木类型——这才是画布能画出实现的前提。
+		// 目录里实现的每个节点都注册成了积木类型——这才是画布能画出实现的前提。
+		// （`move` 之类的能力名不在本目录时也照样注册，因为类型名里带着 catalogRef。）
 		expect(describeCatalogImplementations(FIXTURE_CATALOG).length).toBeGreaterThan(0);
 	});
 });
