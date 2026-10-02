@@ -104,8 +104,13 @@ export interface RenderedImplementation {
 export interface ImplementationRenderInput {
 	/** 当前选中的模块；null = 什么都没选（面板给空状态）。 */
 	readonly node: WorkflowNode | null;
-	/** 设备（插件）提供的能力目录：原语定义与能力实现都从它来。 */
-	readonly catalog: CapabilityCatalog;
+	/**
+	 * 设备（插件）提供的能力目录：原语定义与能力实现都从它来。
+	 *
+	 * 允许 null：目录是设备属性，界面有可能还没定下来（没导入过、也没选中设备）。
+	 * 那时不给一份「就近挑的」目录——挑错了会渲染出另一台机器的实现，那比空着坏得多。
+	 */
+	readonly catalog: CapabilityCatalog | null;
 	/** 声明本身，只为了取任务级限值；null 时退到协议安全上限。 */
 	readonly declaration: WorkflowDeclaration | null;
 }
@@ -180,7 +185,42 @@ export const renderImplementation = (input: ImplementationRenderInput): Rendered
 	if (node === null) return emptyProgram(limits, collector.diagnostics);
 
 	const lines: RenderedLine[] = [];
+
 	const steps: RenderedStepSpan[] = [];
+
+	if (catalog === null) {
+		// 没有目录就查不到能力，也就没有实现可渲染。**照实说**，不去猜一份。
+		collector.error({
+			code: 'code_render.catalog.missing',
+			message: `没有目录，渲染不出「${singleLine(node.name)}」的实现`,
+			path: `nodes.${node.id}.parameters.action`,
+			ref: node.id,
+		});
+		// 这里还不能用 `push`（它下面才定义）——直接压一行，内容和推出来的完全一样。
+		lines.push({
+			line: 1,
+			text: `# 没有目录，渲染不出「${singleLine(node.name)}」的实现`,
+			indent: 0,
+			kind: 'unsupported',
+			stepIndex: null,
+			stepPath: null,
+			primitiveRef: null,
+			known: false,
+		});
+		return {
+			nodeId: node.id,
+			nodeName: node.name,
+			title: `${singleLine(node.name)} · 实现`,
+			capabilityRef: null,
+			capabilityLabel: null,
+			text: joinLines(lines),
+			lines,
+			steps,
+			limits,
+			diagnostics: collector.diagnostics,
+			callCount: 0,
+		};
+	}
 
 	const push: PushLine = (text, kind, depth, stepIndex, stepPath, primitiveRef, known) => {
 		lines.push({

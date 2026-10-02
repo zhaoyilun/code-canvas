@@ -1,24 +1,24 @@
 /**
- * 任务 JSON 视图的**数据**一侧：从声明还原出一份可读的任务 JSON，并算出每一行「指向谁」。
+ * 任务 JSON 视图的**数据**一侧：把声明按它出生时的格式还原成任务 JSON，并算出每一行「指向谁」。
  *
  * 两条规矩：
  *
- * 1. **只从声明还原，不猜原始输入。** spec §1.2 把节点的 `parameters` 定为**不透明载荷**，
- *    而导入器（`@codecanvas/task-import`）往里放的就是那个原始 step
- *    （`{step_id, action, ...}`）。所以这里把 `parameters` 摊回 step——`step_id` 还原成协议里的
- *    `id`——再把 `meta` 里的 `task_id` / `description` / `limits` 拼回任务级字段。
- *    这与编辑写回通道（`state/document.ts` 的 `declarationToTask`）是同一套还原口径：
- *    两边不一致的话，「面板上看到的」和「写回时验的」就是两份不同的东西。
- * 2. **每一行都记下它指向哪一步。** step 里的每一行都挂着那个节点的 id，参数行还挂一个
+ * 1. **还原归格式，这里不拼键。** 同一份声明在不同设备下还原出来的原文长得完全不一样
+ *    （一期是 `steps` + 七个固定动作，RoboFrame 是一串 `plan` 里的技能调用），所以
+ *    「声明 → 原文」只由 `findTaskFormat(formatRef).fromDeclaration` 给——这与写回时
+ *    第二道闸用的**是同一个函数**。视图自己拼一份平行定义，迟早会跟写回通道对不上。
+ *    本文件只做一件事：把那份 JSON 摊成一行行，并记住每一行的出处。
+ * 2. **每一行都记下它指向哪一步。** 属于某个 step 的每一行都挂着那个节点的 id，参数行还挂一个
  *    「这个参数在实现里的第几步被用到」——那个下标是从**目录的实现树**里扫出来的
  *    （`implementation` 里哪条顶层语句引用了 `{kind:'param', name}`），不是猜的、不是写死的。
  *    界面据此复用 `store.select(nodeId)` 与 `store.selectStep(index)`，与既有联动同一套。
  *
  * 行是**自己生成的**（不是把 `JSON.stringify` 的结果切开来数），所以「这一行属于哪一步」
- * 是构造时就知道的事实，不靠事后正则去认缩进。
+ * 是构造时就知道的事实，不靠事后正则去认缩进。格式各异（`steps` / `plan`、`action` / `skill`、
+ * 参数平铺 / 收在 `params` 里），所以归属是**按数认的**：找那个条目数与声明里动作节点一一对应的
+ * 顶层数组（见 `stepArrayKey`），而不是把某一种格式的键名写死在这里。
  */
 import {
-	canonicalizeJson,
 	findCapability,
 	isJsonObject,
 	type CapabilityCatalog,
@@ -31,7 +31,7 @@ import {
 	type WorkflowDeclaration,
 	type WorkflowNode,
 } from '@codecanvas/contracts';
-import { TASK_ACTION_NODE_TYPE } from '@codecanvas/task-import';
+import { TASK_ACTION_NODE_TYPE, findTaskFormat, type TaskFormatRef } from '@codecanvas/task-import';
 
 /** 这一行在整份任务 JSON 里属于哪一段。 */
 export type TaskJsonSection = 'meta' | 'step' | 'limits';
@@ -48,13 +48,15 @@ export interface TaskJsonLine {
 	readonly nodeId: string | null;
 	/** 这一行属于第几个 step（1 基）；任务级那几行是 null。 */
 	readonly stepOrdinal: number | null;
-	/** 参数行才有：协议字段名（`linear`、`distance`……）；`id` / `action` 与结构行是 null。 */
+	/** 参数行才有：格式里的字段名（`linear`、`distance`……）；身份行与结构行是 null。 */
 	readonly parameter: string | null;
 	/** 该参数在实现里的顶层语句下标（目录里扫出来的）；扫不到或不是参数行就是 null。 */
 	readonly implStepIndex: number | null;
 }
 
 export interface TaskJsonView {
+	/** 还原时用的是哪个格式——标题上写的「这是哪种原文」就是它，不另外问一次。 */
+	readonly formatRef: TaskFormatRef;
 	/** 还原出来的任务 JSON。 */
 	readonly task: JsonObject;
 	readonly lines: readonly TaskJsonLine[];
@@ -70,49 +72,19 @@ const INDENT = '  ';
 const pad = (depth: number): string => INDENT.repeat(depth);
 
 /**
- * 一个节点 → 一个 step。
+ * 声明 → 该格式的任务 JSON。**只转发**，不自己拼键。
  *
- * `step_id` 是节点侧的语义身份，还原成协议里那个 `id`，并放在第一个键上
- * （spec §1.1 的例子就是这么写的，`id` 在前比压在末尾好读）。`undefined` 的键丢掉——
- * 它不可表示，写进 JSON 就是假的。
+ * `formatRef` 必须显式给：猜一个格式就是把「这份声明出生时是什么样」换成「我现在想看什么」，
+ * 而这两者恰恰是这个视图要区分开的东西。
  */
-export const stepFromNode = (node: WorkflowNode): JsonObject => {
-	const parameters = node.parameters;
-	const step: JsonObject = {};
-	const stepId = parameters['step_id'];
-	if (stepId !== undefined) step['id'] = stepId;
-	for (const [key, value] of Object.entries(parameters)) {
-		if (key === 'step_id') continue;
-		const canonical = canonicalizeJson(value);
-		if (canonical === undefined) continue;
-		step[key] = canonical;
-	}
-	return step;
-};
-
-/**
- * 声明 → 任务 JSON（任务级字段 + steps + limits）。
- *
- * 键序按协议读：`schema_version`、`task_id`、`description`、`steps`、`limits`。
- */
-export const buildTaskJson = (declaration: WorkflowDeclaration): JsonObject => {
-	const meta = declaration.meta;
-	const task: JsonObject = {};
-	task['schema_version'] = meta['schema_version'] ?? '1.0';
-	task['task_id'] = meta['task_id'] ?? declaration.id;
-	const description = meta['description'];
-	if (description !== undefined) task['description'] = description;
-	task['steps'] = actionNodes(declaration).map((node) => stepFromNode(node));
-	const limits = meta['limits'];
-	task['limits'] = limits === undefined ? {} : limits;
-	return task;
-};
+export const buildTaskJson = (declaration: WorkflowDeclaration, formatRef: TaskFormatRef): JsonObject =>
+	findTaskFormat(formatRef).fromDeclaration(declaration);
 
 /** 声明里承载任务的节点（顺序就是步骤顺序）。 */
 export const actionNodes = (declaration: WorkflowDeclaration): readonly WorkflowNode[] =>
 	declaration.nodes.filter((node) => node.type === TASK_ACTION_NODE_TYPE);
 
-/** 这个节点的 `action` 指向哪个能力。 */
+/** 这个节点的 `action` 指向哪个能力（技能计划里它装的是技能名，接缝是同一个键）。 */
 export const capabilityRefOf = (node: WorkflowNode): string | null => {
 	const action = node.parameters['action'];
 	return typeof action === 'string' && action.length > 0 ? action : null;
@@ -186,106 +158,234 @@ export const referencedStepIndex = (
 };
 
 // ---------------------------------------------------------------------------
-// 渲染成一行行
+// 摊成一行行：先建一棵带出处的树，再按 JSON 的逗号规矩吐出来
 // ---------------------------------------------------------------------------
 
-const renderValue = (value: JsonValue): string => JSON.stringify(value) ?? 'null';
+/** 渲染项的形状：标量一行，容器多行（下面还有子项）。 */
+type ItemKind = 'scalar' | 'object' | 'array';
 
-interface StepEntry {
-	readonly node: WorkflowNode;
-	readonly step: JsonObject;
-	readonly ordinal: number;
+interface LineContext {
+	readonly section: TaskJsonSection;
+	readonly nodeId: string | null;
+	readonly stepOrdinal: number | null;
 }
+
+/** 一行的出处：属于哪一段、哪个节点、哪个参数，以及参数在实现里的第几步。 */
+interface LineOwner extends LineContext {
+	readonly parameter: string | null;
+	readonly implStepIndex: number | null;
+}
+
+interface RenderItem extends LineOwner {
+	/** 这一项在对象里的键；数组元素没有键（null）。 */
+	readonly key: string | null;
+	readonly kind: ItemKind;
+	readonly value: JsonValue;
+	readonly children: readonly RenderItem[];
+}
+
+const kindOf = (value: JsonValue): ItemKind => {
+	if (Array.isArray(value)) return 'array';
+	return isJsonObject(value) ? 'object' : 'scalar';
+};
+
+const NO_OWNER: LineContext = { section: 'meta', nodeId: null, stepOrdinal: null };
+
+/** 最外那对花括号的出处：不属于任何一段、也不属于任何一步。 */
+const OUTSIDE: LineOwner = { ...NO_OWNER, parameter: null, implStepIndex: null };
+
+/**
+ * 格式里的**身份与判别字段**，不是参数：`id` / `step_id` 是步骤身份，`action` / `skill` 是能力引用，
+ * `step` 是格式自己的判别键（技能计划里恒为 `'skill'`）。
+ *
+ * 参数名**不写死**：其余键一律当参数（技能计划把它们收在 `params` 里，那就取它的子键），
+ * 而「这个参数在实现里第几步」仍然从目录扫（`referencedStepIndex`）——
+ * 目录里没有的（比如 `timeoutSec`，它不是技能参数）就不点亮，不编一个下标出来。
+ */
+const IDENTITY_KEYS: ReadonlySet<string> = new Set(['id', 'step_id', 'action', 'step', 'skill']);
+
+/**
+ * 建一项。`childrenAreParams` 只在容器是「参数匣子」（技能计划的 `params`）时为 true——
+ * 那时它的子键才是参数名；再深一层不继续当参数认（两种格式的参数都是一层标量）。
+ */
+const buildItem = (
+	key: string | null,
+	value: JsonValue,
+	context: LineContext,
+	parameter: string | null,
+	implStepIndex: number | null,
+	childrenAreParams: boolean,
+	capability: CapabilitySpec | null,
+): RenderItem => {
+	const kind = kindOf(value);
+	return {
+		key,
+		kind,
+		value,
+		...context,
+		parameter,
+		implStepIndex,
+		children: buildChildren(value, context, childrenAreParams, capability),
+	};
+};
+
+const buildChildren = (
+	value: JsonValue,
+	context: LineContext,
+	childrenAreParams: boolean,
+	capability: CapabilitySpec | null,
+): readonly RenderItem[] => {
+	if (Array.isArray(value)) {
+		return value.map((child) => buildItem(null, child, context, null, null, false, capability));
+	}
+	if (isJsonObject(value)) {
+		return Object.entries(value).map(([childKey, childValue]) =>
+			buildItem(
+				childKey,
+				childValue,
+				context,
+				childrenAreParams ? childKey : null,
+				childrenAreParams ? referencedStepIndex(capability, childKey) : null,
+				false,
+				capability,
+			),
+		);
+	}
+	return [];
+};
+
+/** 一个 step 的字段 → 渲染项。身份字段不带参数标记，容器取子键当参数名，其余键本身就是参数名。 */
+const stepFields = (
+	step: JsonObject,
+	node: WorkflowNode | undefined,
+	resolveCatalog: CatalogResolver,
+	context: LineContext,
+): readonly RenderItem[] => {
+	const capability = node === undefined ? null : capabilityOf(node, resolveCatalog);
+	return Object.entries(step).map(([key, value]) => {
+		if (IDENTITY_KEYS.has(key)) return buildItem(key, value, context, null, null, false, capability);
+		if (isJsonObject(value)) return buildItem(key, value, context, null, null, true, capability);
+		return buildItem(key, value, context, key, referencedStepIndex(capability, key), false, capability);
+	});
+};
+
+/**
+ * 哪一项是「步骤数组」。
+ *
+ * 键名各格式不同（一期叫 `steps`，技能计划叫 `plan`），所以不写死：找那个**条目数与声明里的
+ * 动作节点一一对应**的顶层数组。对不上就不认——宁可不点亮任何一段，也不把别的东西错认成步骤。
+ */
+const stepArrayKey = (task: JsonObject, count: number): string | null => {
+	for (const [key, value] of Object.entries(task)) {
+		if (!Array.isArray(value)) continue;
+		if (value.length === count && value.every((item) => isJsonObject(item))) return key;
+	}
+	return null;
+};
+
+/** 任务级安全上限那一段（一期协议有；技能计划没有，那就不会有这一段）。 */
+const LIMITS_KEY = 'limits';
 
 /** 声明 → 可渲染的行（带行号、缩进，以及每行指向谁）。 */
 export const renderTaskJson = (
 	declaration: WorkflowDeclaration,
 	resolveCatalog: CatalogResolver,
+	formatRef: TaskFormatRef,
 ): TaskJsonView => {
-	const task = buildTaskJson(declaration);
-	const entries: StepEntry[] = actionNodes(declaration).map((node, index) => ({
-		node,
-		step: stepFromNode(node),
-		ordinal: index + 1,
-	}));
+	const task = buildTaskJson(declaration, formatRef);
+	const nodes = actionNodes(declaration);
+	const stepsKey = stepArrayKey(task, nodes.length);
+
+	const items: readonly RenderItem[] = Object.entries(task).map(([key, value]) => {
+		const section: TaskJsonSection =
+			key === stepsKey ? 'step' : key === LIMITS_KEY ? 'limits' : 'meta';
+		const context: LineContext = { section, nodeId: null, stepOrdinal: null };
+
+		// 步骤数组：第 n 项就属于声明里第 n 个动作节点——还原时就是这个顺序。
+		if (key === stepsKey && Array.isArray(value)) {
+			return {
+				key,
+				kind: 'array',
+				value,
+				...context,
+				parameter: null,
+				implStepIndex: null,
+				children: value.map((step, index) => {
+					const node = nodes[index];
+					const owned: LineContext = {
+						section,
+						nodeId: node?.id ?? null,
+						stepOrdinal: node === undefined ? null : index + 1,
+					};
+					const fields = isJsonObject(step) ? step : {};
+					return {
+						key: null,
+						kind: 'object' as const,
+						value: fields,
+						...owned,
+						parameter: null,
+						implStepIndex: null,
+						children: stepFields(fields, node, resolveCatalog, owned),
+					};
+				}),
+			};
+		}
+
+		return buildItem(key, value, context, null, null, false, null);
+	});
 
 	const lines: TaskJsonLine[] = [];
 	let counter = 0;
 
-	const push = (
-		text: string,
-		depth: number,
-		rest: Partial<Omit<TaskJsonLine, 'line' | 'text' | 'depth'>> = {},
-	): void => {
+	const push = (text: string, depth: number, owner: LineOwner): void => {
 		counter += 1;
 		lines.push({
 			line: counter,
 			text,
 			depth,
-			section: rest.section ?? 'meta',
-			nodeId: rest.nodeId ?? null,
-			stepOrdinal: rest.stepOrdinal ?? null,
-			parameter: rest.parameter ?? null,
-			implStepIndex: rest.implStepIndex ?? null,
+			section: owner.section,
+			nodeId: owner.nodeId,
+			stepOrdinal: owner.stepOrdinal,
+			parameter: owner.parameter,
+			implStepIndex: owner.implStepIndex,
 		});
 	};
 
-	push('{', 0);
+	/**
+	 * 一项 → 一行或多行。
+	 *
+	 * 缩进与逗号都在文本里：`last` 决定这一项后面跟不跟逗号，所以 JSON 的语法是这里生成的，
+	 * 不靠事后拼接。`JSON.stringify` 只用来把值写出来（字符串加引号、数字原样）。
+	 */
+	const emit = (item: RenderItem, depth: number, last: boolean): void => {
+		const label = item.key === null ? '' : `${JSON.stringify(item.key)}: `;
+		const comma = last ? '' : ',';
 
-	// 任务级字段：`steps` / `limits` 之外的那几个（schema_version / task_id / description）。
-	for (const key of ['schema_version', 'task_id', 'description']) {
-		const value = task[key];
-		if (value === undefined) continue;
-		push(`${pad(1)}${JSON.stringify(key)}: ${renderValue(value)},`, 1, { section: 'meta' });
-	}
+		if (item.kind === 'scalar') {
+			push(`${pad(depth)}${label}${JSON.stringify(item.value) ?? 'null'}${comma}`, depth, item);
+			return;
+		}
 
-	// steps：一个 step 一段，段内每一行都挂着那个节点的 id。
-	if (entries.length === 0) {
-		push(`${pad(1)}"steps": [],`, 1, { section: 'step' });
-	} else {
-		push(`${pad(1)}"steps": [`, 1, { section: 'step' });
-		entries.forEach((entry, position) => {
-			const lastStep = position === entries.length - 1;
-			const capability = capabilityOf(entry.node, resolveCatalog);
-			const owned = {
-				section: 'step' as const,
-				nodeId: entry.node.id,
-				stepOrdinal: entry.ordinal,
-			};
+		const [open, close] = item.kind === 'object' ? ['{', '}'] : ['[', ']'];
+		// 空的容器写成一行：`{}` / `[]` 比拆成两行更像 JSON 原文。
+		if (item.children.length === 0) {
+			push(`${pad(depth)}${label}${open}${close}${comma}`, depth, item);
+			return;
+		}
 
-			push(`${pad(2)}{`, 2, owned);
-			const fields = Object.entries(entry.step);
-			fields.forEach(([field, value], fieldPosition) => {
-				const lastField = fieldPosition === fields.length - 1;
-				const isParameter = field !== 'id' && field !== 'action';
-				push(`${pad(3)}${JSON.stringify(field)}: ${renderValue(value)}${lastField ? '' : ','}`, 3, {
-					...owned,
-					parameter: isParameter ? field : null,
-					implStepIndex: isParameter ? referencedStepIndex(capability, field) : null,
-				});
-			});
-			push(`${pad(2)}}${lastStep ? '' : ','}`, 2, owned);
+		push(`${pad(depth)}${label}${open}`, depth, item);
+		item.children.forEach((child, index) => {
+			emit(child, depth + 1, index === item.children.length - 1);
 		});
-		push(`${pad(1)}],`, 1, { section: 'step' });
-	}
+		push(`${pad(depth)}${close}${comma}`, depth, item);
+	};
 
-	// limits：任务级安全上限。整个任务一个数，不属于任何一步。
-	const limits = isJsonObject(task['limits']) ? task['limits'] : {};
-	const limitEntries = Object.entries(limits);
-	if (limitEntries.length === 0) {
-		push(`${pad(1)}"limits": {}`, 1, { section: 'limits' });
-	} else {
-		push(`${pad(1)}"limits": {`, 1, { section: 'limits' });
-		limitEntries.forEach(([name, value], position) => {
-			const lastLimit = position === limitEntries.length - 1;
-			push(`${pad(2)}${JSON.stringify(name)}: ${renderValue(value)}${lastLimit ? '' : ','}`, 2, {
-				section: 'limits',
-			});
-		});
-		push(`${pad(1)}}`, 1, { section: 'limits' });
-	}
+	push('{', 0, OUTSIDE);
+	items.forEach((item, index) => {
+		emit(item, 1, index === items.length - 1);
+	});
+	push('}', 0, OUTSIDE);
 
-	push('}', 0);
-
-	return { task, lines, stepCount: entries.length };
+	// 认不出步骤数组时就是 0：宁可不报数，也不报一个没画出来的数。
+	return { formatRef, task, lines, stepCount: stepsKey === null ? 0 : nodes.length };
 };

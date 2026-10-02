@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { loadSampleTask, useStudioDocument } from '../state/document';
 import StudioShell from './StudioShell.vue';
 import TaskInputBand from './TaskInputBand.vue';
+import { setSelectedDevice } from './devices';
 
 const doc = useStudioDocument();
 
@@ -21,6 +22,9 @@ const doc = useStudioDocument();
 const before = (a: Element, b: Element): boolean => (a.compareDocumentPosition(b) & 4) !== 0;
 
 beforeEach(() => {
+	// 样例跟着**设备格式**走（默认那台说的是技能计划），而这一组量的是这份一期样例，
+	// 所以先站到一期那台设备上。
+	setSelectedDevice('phase1_robot');
 	expect(loadSampleTask()).toBe(true);
 	window.localStorage.clear();
 });

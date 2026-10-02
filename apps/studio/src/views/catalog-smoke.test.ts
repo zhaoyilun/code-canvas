@@ -25,6 +25,7 @@ import {
 	type WorkflowDeclarationDraft,
 	type WorkflowNode,
 } from '@codecanvas/contracts';
+import { setSelectedDevice } from '../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../state/document';
 import { FIXTURE_CATALOG } from './__fixtures__/catalog';
 import CodePanel from './code-panel/CodePanel.vue';
@@ -32,6 +33,9 @@ import CodePanel from './code-panel/CodePanel.vue';
 const doc = useStudioDocument();
 
 beforeEach(() => {
+	// 样例跟着**设备格式**走（默认那台说的是技能计划），而这里量的是这份一期样例，
+	// 所以先站到一期那台设备上。
+	setSelectedDevice('phase1_robot');
 	expect(loadSampleTask()).toBe(true);
 	doc.select(null);
 	doc.selectStep(null);

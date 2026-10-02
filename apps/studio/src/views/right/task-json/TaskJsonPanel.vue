@@ -1,20 +1,27 @@
 <script setup lang="ts">
 /**
- * 右栏的「任务 JSON」视图：**当前声明还原出来的那份任务**，格式化、带行号、等宽、只读。
+ * 右栏的「任务 JSON」视图：**当前声明按它出生时的格式还原出来的那份任务**，格式化、带行号、等宽、只读。
  *
  * 它存在的意义是**指向**：点 JSON 里的某一段，对应的流程卡片、积木、代码行一起跳出来
  * （复用 `store.select(nodeId)` 与 `store.selectStep(index)`，与既有三向联动同一套状态、
  * 同一条 `--cc-highlight`）；反过来，在流程画布或积木里选中某个模块，JSON 里那一段也带标记。
  *
+ * **按出生时的格式还原，不是按当前选中的设备。** 同一份声明在两种设备下还原出来的原文完全不一样
+ * （一期是 `steps` + 七个固定动作，RoboFrame 是 `plan` + 一串技能调用），而声明只有一个。
+ * 所以格式取自 `document.ts` 的 `declarationFormatRef`（导入时就记下了），换设备不会改写它；
+ * 只有在还没导入过（`null`）时才退到当前设备的格式——那种情况下视图是空状态，不会凭空还原一份。
+ *
  * 三种点击粒度，都是**推出来的**、不是猜的：
  * - 点结构行（`{`、`"steps"`、`}`）→ 只选中那个模块（卡片 + 积木 + 代码面板跟着换）；
- * - 点 `"action"`/`"id"` 行 → 同上，不带「第几步」；
- * - 点**参数行**（`"linear": 0.2`）→ 除选中模块外，还点亮实现里用到这个参数的那条顶层语句
+ * - 点 `"action"`/`"id"`/`"skill"` 行 → 同上，不带「第几步」；
+ * - 点**参数行**（`"linear": 0.2`、技能计划 `"params"` 里的 `"motion_distance": 0.1`）→
+ *   除选中模块外，还点亮实现里用到这个参数的那条顶层语句
  *   （下标从目录的实现树扫出来，见 `task-json.ts` 的 `referencedStepIndex`）。
  *
  * 只读：这里没有一条写回路径。要改参数去积木画布（spec §4.1）。
  */
 import { computed, nextTick, ref, watch } from 'vue';
+import { findTaskFormat, type TaskFormatRef } from '@codecanvas/task-import';
 import IconBase from '../../../shell/IconBase.vue';
 import { findCatalogWithCapability, useStudioDevices } from '../../../shell/devices';
 import { useStudioDocument } from '../../../state/document';
@@ -24,14 +31,26 @@ const doc = useStudioDocument();
 const devices = useStudioDevices();
 
 /**
+ * 还原用的格式：**声明出生时那台设备的**。没导入过时退到当前设备的格式——
+ * 那时面板是空状态，退到的这个格式只用来在标题上说清「将要看的是哪一种原文」。
+ */
+const formatRef = computed<TaskFormatRef | null>(
+	() => doc.declarationFormatRef.value ?? devices.selectedDevice.value?.formatRef ?? null,
+);
+const format = computed(() => (formatRef.value === null ? null : findTaskFormat(formatRef.value)));
+
+/**
  * 参数 → 实现里第几步，靠的是**给出实现的目录**：先看当前选中的设备目录，
  * 再按登记顺序找（生成之后换了设备时，声明还是上一台产出的，这时不该硬套新目录）。
  */
 const view = computed(() => {
 	const declaration = doc.declaration.value;
-	if (declaration === null) return null;
-	return renderTaskJson(declaration, (capabilityRef) =>
-		findCatalogWithCapability(capabilityRef, devices.selectedCatalog.value),
+	const currentFormat = formatRef.value;
+	if (declaration === null || currentFormat === null) return null;
+	return renderTaskJson(
+		declaration,
+		(capabilityRef) => findCatalogWithCapability(capabilityRef, devices.selectedCatalog.value),
+		currentFormat,
 	);
 });
 
@@ -109,12 +128,18 @@ watch(selectedNodeId, async (nodeId) => {
 			<div class="tj-head-row">
 				<IconBase name="json" :size="16" />
 				<span class="tj-title">任务 JSON</span>
-				<span class="tj-tag">声明还原</span>
+				<!-- 这是哪种格式的原文：同一份声明在两种设备下长得完全不一样，标题必须说清。 -->
+				<span v-if="format !== null" class="tj-tag" data-testid="task-json-format">
+					{{ format.label }}
+				</span>
 				<span class="tj-tag tj-tag-readonly">只读</span>
 				<span v-if="doc.hasDeclaration.value" class="tj-count" data-testid="task-json-step-count">
 					{{ stepCount }} 步
 				</span>
 			</div>
+			<span v-if="format !== null" class="tj-format-note" data-testid="task-json-format-note">
+				{{ format.describe }}
+			</span>
 			<span v-if="taskId !== ''" class="tj-task" data-testid="task-json-task-id">{{ taskId }}</span>
 		</header>
 
@@ -228,6 +253,13 @@ watch(selectedNodeId, async (nodeId) => {
 .tj-task {
 	font-family: var(--cc-font-mono);
 	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-faint);
+}
+
+/* 格式说明：一行小字，说清这份原文是什么格式、为什么长这样。 */
+.tj-format-note {
+	font-size: var(--cc-fs-xs);
+	line-height: 1.5;
 	color: var(--cc-text-faint);
 }
 

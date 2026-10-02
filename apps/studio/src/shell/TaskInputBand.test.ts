@@ -7,9 +7,10 @@
  * 要么从折起来的兜底入口塞进来。这里守住五件事：
  *
  * 1. 形态：常态只有设备下拉 + 一句话 + 生成按钮，JSON 文本框与接口地址都折起来；
- * 2. 设备：下拉列出目录里的设备，生成请求里带的是选中那台的 `catalogRef`；
- * 3. 生成：`POST { catalogRef, instruction, ... }` → 拿回任务 JSON（信封或裸任务都认）→
- *    走**现有的** `loadTaskJson`；模型偶尔给坏东西时重试一次；
+ * 2. 设备：下拉列出**登记在册的每一台**（值是 `deviceRef`），生成请求里带的是选中那台的
+ *    `deviceRef` / `formatRef` / `catalogRef`——发给谁、按哪把尺子编、词汇表是哪一份；
+ * 3. 生成：`POST { deviceRef, formatRef, catalogRef, instruction, ... }` → 拿回任务 JSON
+ *    （信封或裸任务都认）→ 走**现有的** `loadTaskJson`；模型偶尔给坏东西时重试一次；
  * 4. 失败：网络 / HTTP 非 2xx / 响应非 JSON / JSON 不合协议，四类都出诊断、真相不动、不弹窗；
  * 5. 兜底：接口还没就绪时，折起来的那条粘贴路照样能把任务灌进来（拖入文件同一条路）。
  *
@@ -19,10 +20,12 @@
 import { flushPromises, mount } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
+import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import { loadSampleTask, useStudioDocument } from '../state/document';
+import { SAMPLE_SKILL_PLAN_JSON } from '../state/sample-skill-plan';
 import { SAMPLE_TASK_JSON } from '../state/sample-task';
 import TaskInputBand from './TaskInputBand.vue';
-import { DEVICE_CATALOGS, setSelectedCatalog } from './devices';
+import { DEVICES, findDevice, setSelectedDevice } from './devices';
 import { DEFAULT_LLM_ENDPOINT } from './llm-json';
 
 const doc = useStudioDocument();
@@ -86,8 +89,9 @@ const dropFile = async (wrapper: Wrapper, name: string, text: string): Promise<v
 };
 
 beforeEach(() => {
+	// 示例样例跟当前设备的格式走，所以先把设备切到一期那台，再灌一期那份。
+	setSelectedDevice('phase1_robot');
 	expect(loadSampleTask()).toBe(true);
-	setSelectedCatalog('phase1_robot');
 	window.localStorage.clear();
 });
 
@@ -147,27 +151,58 @@ describe('入口带 · 形态', () => {
 });
 
 describe('入口带 · 设备下拉', () => {
-	it('列出目录里的设备（一期只有一台），值是它的 catalogRef', () => {
+	it('列出登记在册的每一台设备：值是 deviceRef，显示的是设备名', () => {
 		const wrapper = mount(TaskInputBand);
 		const select = deviceSelect(wrapper);
 		const options = wrapper.findAll('[data-testid="device-select"] option');
 
-		expect(options).toHaveLength(DEVICE_CATALOGS.length);
-		expect(options[0]?.attributes('value')).toBe('phase1_robot');
-		expect(options[0]?.text()).toContain('一期设备（差速底盘 + 六轴臂）');
-		// 默认选中第一条：入口一上来就是可选可生成的
+		expect(options).toHaveLength(DEVICES.length);
+		// 顺序就是登记顺序，值与名一一对上（值与显示名不是同一个东西）
+		expect(options.map((option) => option.attributes('value'))).toEqual(
+			DEVICES.map((device) => device.deviceRef),
+		);
+		expect(options.map((option) => option.text())).toEqual(DEVICES.map((device) => device.label));
+		// 下拉绑的是共享的选中设备：beforeEach 选了一期那台，这里就该是它
 		expect(select.element.value).toBe('phase1_robot');
+	});
+
+	it('虚拟设备那条带仿真标记，真机那几条没有', () => {
+		const wrapper = mount(TaskInputBand);
+		const options = wrapper.findAll('[data-testid="device-select"] option');
+
+		const virtual = DEVICES.filter((device) => device.virtual);
+		expect(virtual.length).toBeGreaterThan(0);
+		// 标记挂在**那一条**上，不是随手给所有选项都盖上
+		const marked = options.filter((option) => option.attributes('data-virtual') === 'true');
+		expect(marked.map((option) => option.attributes('value'))).toEqual(
+			virtual.map((device) => device.deviceRef),
+		);
+		expect(options.filter((option) => option.attributes('data-virtual') === 'false')).toHaveLength(
+			DEVICES.length - virtual.length,
+		);
+	});
+
+	it('下拉旁边单独说清当前设备是真机还是仿真（不靠设备名里那对括号）', async () => {
+		const wrapper = mount(TaskInputBand);
+
+		setSelectedDevice('phase1_robot');
+		await nextTick();
+		expect(wrapper.get('[data-testid="device-note"]').text()).toBe('真机');
+
+		setSelectedDevice('so101_sim');
+		await nextTick();
+		expect(wrapper.get('[data-testid="device-note"]').text()).toBe('虚拟设备 · 仿真');
 	});
 
 	it('不在册的设备不认：换成一个查不到的 ref，选中的还是原来那台', async () => {
 		const wrapper = mount(TaskInputBand);
 
-		// 目录外的 ref 是空操作——不许选中一个查不到的目录（那会让生成请求带上假 ref）
-		setSelectedCatalog('nonexistent_device');
+		// 设备表外的 ref 是空操作——不许选中一个查不到的设备（那会让生成请求带上假 ref）
+		setSelectedDevice('nonexistent_device');
 		await nextTick();
 
 		expect(deviceSelect(wrapper).element.value).toBe('phase1_robot');
-		expect(wrapper.findAll('[data-testid="device-select"] option')).toHaveLength(DEVICE_CATALOGS.length);
+		expect(wrapper.findAll('[data-testid="device-select"] option')).toHaveLength(DEVICES.length);
 	});
 });
 
@@ -286,7 +321,7 @@ describe('入口带 · 生成', () => {
 		vi.useRealTimers();
 	});
 
-	it('生成请求打到 <地址>/chat/completions，体里带选中设备的 catalogRef 与那一句话', async () => {
+	it('生成请求打到 <地址>/chat/completions，体里带选中设备的 deviceRef / formatRef 与那一句话', async () => {
 		stubFetch(async () => envelope(editedJson()));
 		const wrapper = mount(TaskInputBand);
 		const before = doc.declaration.value;
@@ -301,8 +336,11 @@ describe('入口带 · 生成', () => {
 		expect(call?.init?.method).toBe('POST');
 
 		const body = sentBody(call as FetchCall);
-		expect(body['catalogRef']).toBe(deviceSelect(wrapper).element.value);
-		expect(body['catalogRef']).toBe('phase1_robot');
+		// 设备那三件：发给谁、按哪把尺子编、词汇表是哪一份
+		expect(body['deviceRef']).toBe(deviceSelect(wrapper).element.value);
+		expect(body['deviceRef']).toBe('phase1_robot');
+		expect(body['formatRef']).toBe('phase1_task');
+		expect(body['catalogRef']).toBe(findDevice('phase1_robot')?.catalog.catalogRef);
 		expect(body['instruction']).toBe('前进1米，避障后停止');
 		// 与通用通话层同一份请求体：模型、温度、上限、要 JSON
 		expect(body['model']).toBe('deepseek-flash');
@@ -322,6 +360,28 @@ describe('入口带 · 生成', () => {
 		expect(chainState(wrapper).text()).toContain('3 个节点');
 		expect(statusText(wrapper)).toContain('已生成');
 		expect(wrapper.find('[data-testid="task-input-feedback"]').exists()).toBe(false);
+	});
+
+	it('切到虚拟设备后，请求体里的 deviceRef / formatRef 跟着换（发给谁、按哪把尺子编）', async () => {
+		// 这台设备说的是技能话：回的也是技能计划的样例，才是能收下的东西（同一份目录的技能名）
+		stubFetch(async () => envelope(SAMPLE_SKILL_PLAN_JSON));
+		setSelectedDevice('so101_sim');
+		const wrapper = mount(TaskInputBand);
+
+		await say(wrapper, '看一眼桌面再往前挪一点');
+		await clickGenerate(wrapper);
+		await runReveal();
+
+		const body = sentBody(calls[0] as FetchCall);
+		expect(body['deviceRef']).toBe('so101_sim');
+		expect(body['formatRef']).toBe('skill_plan');
+		expect(body['catalogRef']).toBe(ROBOFRAME_SO101_CATALOG.catalogRef);
+		// 技能计划要写明编给哪台机器人（目录里的原名）
+		expect(body['robot']).toBe(ROBOFRAME_SO101_CATALOG.robotName);
+
+		// 同一份目录的技能名收得下：这一趟真的换掉了真相
+		expect(statusText(wrapper)).toContain('已生成');
+		expect(doc.declaration.value?.nodes.length).toBeGreaterThan(0);
 	});
 
 	it('设备组那条路也认：响应直接给任务 JSON（没有信封）', async () => {

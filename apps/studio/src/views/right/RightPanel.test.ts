@@ -4,7 +4,8 @@
  *
  * 三件事：
  * 1. 虚拟设备那块是固定的、占比更大（`flex` 5:4，去掉 tab 条后约 52%）——将来要放真的 3D
- *    或状态图，那一块得先有地方；它如实说明「设备层未接入」，只列**目录**里的事实（那是真的）；
+ *    或状态图，那一块得先有地方；它如实说明「设备层未接入」，事实表里列的是**设备**那一行行真东西
+ *    （名字、真机还是仿真、目录、能力与原语数，以及真实上游数据的出处）；
  * 2. 下半块是 tab：代码面板是其中一个（内容一个字没改，仍是声明的编译产物），
  *    另一个是任务 JSON 视图；切到 JSON 时面板里就是它，切换是纯界面状态；
  * 3. 两个 tab 的键位是常规的（点击 + 左右方向键）。
@@ -13,9 +14,10 @@
  */
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { ROBOFRAME_SO101_CATALOG, ROBOFRAME_SO101_PROVENANCE } from '@codecanvas/capabilities';
 import { computeWorkflowDigest, type WorkflowNode } from '@codecanvas/contracts';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
-import { setSelectedCatalog } from '../../shell/devices';
+import { setSelectedDevice } from '../../shell/devices';
 import RightPanel from './RightPanel.vue';
 
 const doc = useStudioDocument();
@@ -34,8 +36,9 @@ const applyParam = (nodeId: string, name: string, value: number): boolean => {
 };
 
 beforeEach(() => {
+	// 示例样例跟当前设备的格式走，所以先把设备切到一期那台，再灌一期那份。
+	setSelectedDevice('phase1_robot');
 	expect(loadSampleTask()).toBe(true);
-	setSelectedCatalog('phase1_robot');
 });
 
 describe('右栏 · 虚拟设备（固定常驻，放大）', () => {
@@ -76,6 +79,38 @@ describe('右栏 · 虚拟设备（固定常驻，放大）', () => {
 		// 目录是真的：入口带上选的那台就是它
 		expect(wrapper.get('[data-testid="virtual-device-name"]').text()).toContain('一期设备');
 		expect(wrapper.get('[data-testid="virtual-device-catalog-ref"]').text()).toContain('phase1_robot');
+	});
+
+	it('选虚拟设备时如实写「仿真」：不靠设备名里的括号让人自己猜', async () => {
+		const wrapper = panel();
+		// 默认那台是真机，先把这个基线立住，免得「出现仿真」是别处的字凑出来的
+		expect(wrapper.get('[data-testid="virtual-device-sim"]').text()).toBe('真机');
+
+		setSelectedDevice('so101_sim');
+		await wrapper.vm.$nextTick();
+
+		expect(wrapper.get('[data-testid="virtual-device-sim"]').text()).toBe('仿真');
+		// 仿真是同一份技能库的另一个去处：目录与真机那台一样
+		expect(wrapper.get('[data-testid="virtual-device-catalog-ref"]').text()).toContain(
+			ROBOFRAME_SO101_CATALOG.catalogRef,
+		);
+	});
+
+	it('真实上游数据的出处照实标：SO-101 那份目录写着上游分支与 commit 前 8 位；一期那份不写', async () => {
+		const wrapper = panel();
+		// 一期那份是示意（一期协议没有「怎么做」的信息），没有出处可报——不许编一个出来
+		expect(wrapper.find('[data-testid="virtual-device-provenance"]').exists()).toBe(false);
+
+		setSelectedDevice('so101_robot');
+		await wrapper.vm.$nextTick();
+
+		const row = wrapper.get('[data-testid="virtual-device-provenance"]').text();
+		expect(row).toContain('上游');
+		expect(row).toContain(ROBOFRAME_SO101_PROVENANCE.branch);
+		// commit 现取，不写死：上游换了 commit，这条断言跟着换
+		expect(row).toContain(ROBOFRAME_SO101_PROVENANCE.commit.slice(0, 8));
+		// 只给短号，不是整串
+		expect(row).not.toContain(ROBOFRAME_SO101_PROVENANCE.commit);
 	});
 
 	it('虚拟设备**在**下半块上方（原图右栏的排法：上设备、下代码/JSON）', () => {

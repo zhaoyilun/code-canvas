@@ -11,10 +11,12 @@
  * 代码面板的内容一个字没改，只是从「固定常驻」变成 tab 里的一个（spec §4.1 的编译产物）。
  *
  * 上面那块现在**如实为空**：虚拟表示要显示一台真实设备的状态，设备没连上就没有可显示的东西。
- * 唯一能显示的是**已经登记在册的设备目录**（那是真的：目录就在 `@codecanvas/capabilities` 里），
- * 以及入口带当前选的是哪一台。不画占位假数据，也不写「即将上线」。
+ * 唯一能显示的是**已经登记在册的设备**（名字、是真机还是仿真、它的目录、以及那份目录的出处——
+ * 这些都在 `shell/devices.ts` 与 `@codecanvas/capabilities` 里，是真的），以及入口带当前选的是哪一台。
+ * 不画占位假数据，也不写「即将上线」。
  */
 import { computed, ref } from 'vue';
+import { ROBOFRAME_SO101_CATALOG, ROBOFRAME_SO101_PROVENANCE } from '@codecanvas/capabilities';
 import IconBase from '../../shell/IconBase.vue';
 import { useStudioDevices } from '../../shell/devices';
 import { CodePanel } from '../code-panel';
@@ -30,9 +32,28 @@ const TABS = [
 const activeTab = ref<RightTab>('code');
 
 const devices = useStudioDevices();
+/** 选中的是**设备**（名字 + 真机/仿真 + 目录 + 任务格式），不再只是一个目录。 */
+const selectedDevice = computed(() => devices.selectedDevice.value);
 const selectedCatalog = computed(() => devices.selectedCatalog.value);
 const capabilityCount = computed(() => selectedCatalog.value?.capabilities.length ?? 0);
 const primitiveCount = computed(() => selectedCatalog.value?.primitives.length ?? 0);
+/** 仿真还是真机：设备表里写着的事实，界面上照实说，不靠设备名里的括号让人自己猜。 */
+const deviceKind = computed(() => (selectedDevice.value === null ? '' : selectedDevice.value.virtual ? '仿真' : '真机'));
+
+/**
+ * 目录的出处**只在拿到真实上游数据时才说**。
+ *
+ * SO-101 那份是 `tools/import-roboframe/import.mjs` 从上游仓库机械转出来的，`provenance` 里记着
+ * 是哪一次 commit——这是「真实数据」四个字的凭据。一期那份是示意（一期协议没有「怎么做」的信息），
+ * 没有出处可报。按 `catalogRef` 认，认不着就不显示：编一个出处比不显示更坏。
+ */
+const provenance = computed(() =>
+	selectedCatalog.value?.catalogRef === ROBOFRAME_SO101_CATALOG.catalogRef
+		? ROBOFRAME_SO101_PROVENANCE
+		: null,
+);
+/** commit 全串太长，界面上取前 8 位（与 git 的短号一致，能对上就是能对上）。 */
+const shortCommit = computed(() => (provenance.value === null ? '' : provenance.value.commit.slice(0, 8)));
 
 /** 左右方向键在 tab 之间走——tablist 的常规键位，不额外造一套。 */
 function moveTab(event: KeyboardEvent, step: number): void {
@@ -54,18 +75,22 @@ function moveTab(event: KeyboardEvent, step: number): void {
 			</header>
 
 			<div class="device-body" data-testid="virtual-device-note">
-				<!-- 这段是真的：目录确实存在，且入口带上选的就是它。 -->
-				<dl v-if="selectedCatalog !== null" class="device-facts" data-testid="virtual-device-facts">
+				<!-- 这几行是真的：设备在册、目录存在，且入口带上选的就是它。 -->
+				<dl v-if="selectedDevice !== null" class="device-facts" data-testid="virtual-device-facts">
 					<div class="fact-row">
 						<dt class="fact-name">当前设备</dt>
 						<dd class="fact-value" data-testid="virtual-device-name">
-							{{ selectedCatalog.displayName }}
+							{{ selectedDevice.label }}
 						</dd>
+					</div>
+					<div class="fact-row">
+						<dt class="fact-name">真机 / 仿真</dt>
+						<dd class="fact-value" data-testid="virtual-device-sim">{{ deviceKind }}</dd>
 					</div>
 					<div class="fact-row">
 						<dt class="fact-name">目录</dt>
 						<dd class="fact-value fact-mono" data-testid="virtual-device-catalog-ref">
-							{{ selectedCatalog.catalogRef }} · {{ selectedCatalog.revisionRef }}
+							{{ selectedCatalog?.catalogRef }} · {{ selectedCatalog?.revisionRef }}
 						</dd>
 					</div>
 					<div class="fact-row">
@@ -74,10 +99,20 @@ function moveTab(event: KeyboardEvent, step: number): void {
 							{{ capabilityCount }} 个能力 · {{ primitiveCount }} 个原语
 						</dd>
 					</div>
+					<!-- 出处只在拿到真实上游数据时才有一行（一期那份是示意，没有出处可报）。 -->
+					<div v-if="provenance !== null" class="fact-row">
+						<dt class="fact-name">出处</dt>
+						<dd
+							class="fact-value fact-mono fact-quiet"
+							data-testid="virtual-device-provenance"
+						>
+							上游 {{ provenance.branch }}@{{ shortCommit }}
+						</dd>
+					</div>
 				</dl>
 
 				<p class="panel-text">
-					上面三行是目录里的事实（能力目录由设备侧提供）。这里将来放的是同一台设备的
+					上面几行是设备与目录里的事实（能力目录由设备侧提供）。这里将来放的是同一台设备的
 					虚拟表示——它当前的状态，以及它报出来的能力。设备层还没接上，没有设备可表示，
 					所以除了目录之外这块是空着的：不画占位图，也不给假状态。
 				</p>
@@ -216,6 +251,11 @@ function moveTab(event: KeyboardEvent, step: number): void {
 	font-family: var(--cc-font-mono);
 	font-size: var(--cc-fs-xs);
 	color: var(--cc-accent);
+}
+
+/* 出处是一行小字：它是凭据，不是读数——说清「数据从哪来」就够了，不必抢目录那几行的注意力。 */
+.fact-quiet {
+	color: var(--cc-text-faint);
 }
 
 .panel-text {

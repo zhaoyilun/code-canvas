@@ -61,20 +61,33 @@ export const gridColour = (palette: ThemePalette): string =>
 	mix(palette['--cc-line'], palette['--cc-surface-sunken'], 0.5, palette['--cc-surface-sunken']);
 
 /** 目录里每个能力一个 blockStyle（能力实现里的每一步都长这个色）。 */
+/**
+ * 块色：**所有可能上画的目录**都要覆盖到。
+ *
+ * 为什么收一串目录而不是一份：主题是在**建画布那一刻**定下来的，而画布上会出现的块
+ * 随着「当前声明是哪台设备的」变。只按建画布那一刻的目录推，换设备之后再画另一种块，
+ * 那些块在主题里找不到样式——Blockly 不报错，直接画成黑的。
+ * 所以这里按登记表里的全部目录推一遍，块色与「现在选的是谁」解耦。
+ */
 export const buildBlockStyles = (
 	palette: ThemePalette,
-	catalog: CapabilityCatalog,
+	catalogs: readonly CapabilityCatalog[],
 ): Record<string, Partial<Blockly.Theme.BlockStyle>> => {
 	const shade = palette['--cc-surface-sunken'];
 	const styles: Record<string, Partial<Blockly.Theme.BlockStyle>> = {};
-	for (const capability of catalog.capabilities) {
-		const primary = palette[capabilityColourVariable(capability.capabilityRef)];
-		styles[blockStyleName(capability.capabilityRef)] = { colourPrimary: primary, ...shadeOf(primary, shade) };
+	for (const catalog of catalogs) {
+		for (const capability of catalog.capabilities) {
+			const primary = palette[capabilityColourVariable(capability.capabilityRef)];
+			styles[blockStyleName(capability.capabilityRef)] = { colourPrimary: primary, ...shadeOf(primary, shade) };
+		}
 	}
 	return styles;
 };
 
-export const createCodeCanvasTheme = (palette: ThemePalette, catalog: CapabilityCatalog): Blockly.Theme => {
+export const createCodeCanvasTheme = (
+	palette: ThemePalette,
+	catalogs: readonly CapabilityCatalog[],
+): Blockly.Theme => {
 	const complete = requireCompletePalette(palette);
 	const size = fontSizeFromVariable(complete);
 
@@ -82,7 +95,7 @@ export const createCodeCanvasTheme = (palette: ThemePalette, catalog: Capability
 		name: CODE_CANVAS_THEME_NAME,
 		base: Blockly.Themes.Zelos,
 		startHats: true,
-		blockStyles: buildBlockStyles(complete, catalog),
+		blockStyles: buildBlockStyles(complete, catalogs),
 		componentStyles: {
 			workspaceBackgroundColour: complete['--cc-surface-sunken'],
 			toolboxBackgroundColour: complete['--cc-surface'],
@@ -115,13 +128,13 @@ export const createCodeCanvasTheme = (palette: ThemePalette, catalog: Capability
  */
 export const buildInjectOptions = (
 	palette: ThemePalette,
-	catalog: CapabilityCatalog,
+	catalogs: readonly CapabilityCatalog[],
 	readOnly = false,
 ): Blockly.BlocklyOptions => {
 	const complete = requireCompletePalette(palette);
 	return {
 		renderer: CODE_CANVAS_RENDERER,
-		theme: createCodeCanvasTheme(complete, catalog),
+		theme: createCodeCanvasTheme(complete, catalogs),
 		trashcan: false,
 		sounds: false,
 		readOnly,
@@ -134,13 +147,13 @@ export const buildInjectOptions = (
 	};
 };
 
-/** 建一块可用的画布：先按目录注册实现积木，再注入工作区。 */
+/** 建一块可用的画布：先按目录注册实现积木（可能有多份），再注入工作区。 */
 export const createCanvasWorkspace = (
 	host: Element,
 	palette: ThemePalette,
-	catalog: CapabilityCatalog,
+	catalogs: readonly CapabilityCatalog[],
 	readOnly = false,
 ): Blockly.WorkspaceSvg => {
-	registerImplementationBlocks(catalog);
-	return Blockly.inject(host, buildInjectOptions(palette, catalog, readOnly));
+	for (const catalog of catalogs) registerImplementationBlocks(catalog);
+	return Blockly.inject(host, buildInjectOptions(palette, catalogs, readOnly));
 };

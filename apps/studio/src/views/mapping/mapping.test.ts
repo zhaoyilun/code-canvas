@@ -13,6 +13,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { anchorFrom, curveOf, toLocal } from './geometry';
 import { BLOCK_SELECTOR, CARD_SELECTOR, CODE_LINE_SELECTOR, measureLinks } from './measure';
+import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 
 /**
@@ -92,6 +93,9 @@ describe('连线 · 折线形状', () => {
 
 describe('连线 · 锚点范围', () => {
 	beforeEach(() => {
+		// 样例跟着**设备格式**走（默认那台说的是技能计划），而这里量的是这份一期样例的连线，
+		// 所以先站到一期那台设备上。
+		setSelectedDevice('phase1_robot');
 		expect(loadSampleTask()).toBe(true);
 		// 每个用例一份干净的 DOM：上一轮挂的假锚点留着会互相干扰。
 		document.body.replaceChildren();

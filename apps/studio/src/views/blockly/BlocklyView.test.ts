@@ -17,6 +17,7 @@ import { mount } from '@vue/test-utils';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import BlocklyView from './BlocklyView.vue';
 
@@ -42,6 +43,9 @@ const stubComputedStyle = (variables: ReadonlyMap<string, string>): void => {
 };
 
 beforeEach(() => {
+	// 样例跟着**设备格式**走（默认那台说的是技能计划），而这里量的是这份一期样例的积木，
+	// 所以先站到一期那台设备上。
+	setSelectedDevice('phase1_robot');
 	expect(loadSampleTask()).toBe(true);
 });
 

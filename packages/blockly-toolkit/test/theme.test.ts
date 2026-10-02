@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { readFileSync, readdirSync } from 'node:fs';
-import { ALLOWED_ACTIONS } from '@codecanvas/contracts';
+import { ALLOWED_ACTIONS, type CapabilityCatalog } from '@codecanvas/contracts';
 import {
 	THEME_VARIABLES,
 	ThemePaletteError,
@@ -25,6 +25,7 @@ import {
 	gridColour,
 } from '../src/theme';
 import { blockStyleName, describeCatalogImplementations } from '../src/blocks';
+import { buildBlockStyles } from '../src/theme';
 import { MIN_READABLE_SCALE } from '../src/viewport';
 import { FIXTURE_CATALOG, fixturePalette, fixtureSource, themeCssText } from './fixtures';
 
@@ -66,7 +67,7 @@ describe('调色板', () => {
 describe('主题', () => {
 	it('目录里每个能力一个 blockStyle，主色就是对应变量的值', () => {
 		const palette = fixturePalette();
-		const theme = createCodeCanvasTheme(palette, FIXTURE_CATALOG);
+		const theme = createCodeCanvasTheme(palette, [FIXTURE_CATALOG]);
 		expect(theme.name).toBe(CODE_CANVAS_THEME_NAME);
 		for (const capability of FIXTURE_CATALOG.capabilities) {
 			const ref = capability.capabilityRef;
@@ -88,17 +89,17 @@ describe('主题', () => {
 
 	it('副色/第三色是从变量值混出来的，不是另写的色值', () => {
 		const palette = fixturePalette();
-		const style = createCodeCanvasTheme(palette, FIXTURE_CATALOG).blockStyles[blockStyleName('move')];
+		const style = createCodeCanvasTheme(palette, [FIXTURE_CATALOG]).blockStyles[blockStyleName('move')];
 		expect(style?.colourSecondary).not.toBe(palette['--cc-accent']);
 		expect(style?.colourTertiary).not.toBe(style?.colourSecondary);
 		// 混色用的是调色板里的底色：把底色换成别的，副色必须跟着变。
-		const shifted = createCodeCanvasTheme({ ...palette, '--cc-surface-sunken': '#101010' }, FIXTURE_CATALOG);
+		const shifted = createCodeCanvasTheme({ ...palette, '--cc-surface-sunken': '#101010' }, [FIXTURE_CATALOG]);
 		expect(shifted.blockStyles[blockStyleName('move')]?.colourSecondary).not.toBe(style?.colourSecondary);
 	});
 
 	it('工作区与工具箱的底色取自调色板', () => {
 		const palette = fixturePalette();
-		const theme = createCodeCanvasTheme(palette, FIXTURE_CATALOG);
+		const theme = createCodeCanvasTheme(palette, [FIXTURE_CATALOG]);
 		expect(theme.getComponentStyle('workspaceBackgroundColour')).toBe(palette['--cc-surface-sunken']);
 		expect(theme.getComponentStyle('toolboxBackgroundColour')).toBe(palette['--cc-surface']);
 		expect(theme.getComponentStyle('flyoutBackgroundColour')).toBe(palette['--cc-surface-raised']);
@@ -109,7 +110,7 @@ describe('主题', () => {
 	});
 
 	it('注入选项用 zelos 渲染器，且**不带工具箱**：实现来自目录，结构只读', () => {
-		const options = buildInjectOptions(fixturePalette(), FIXTURE_CATALOG);
+		const options = buildInjectOptions(fixturePalette(), [FIXTURE_CATALOG]);
 		expect(options.renderer).toBe(CODE_CANVAS_RENDERER);
 		expect(options.renderer).toBe('zelos');
 		expect(options.theme).toBeInstanceOf(Object);
@@ -166,11 +167,11 @@ describe('配色对比与网格', () => {
 
 	it('注入选项里的网格色就是混出来的那个，不另写色值', () => {
 		const palette = fixturePalette();
-		expect(buildInjectOptions(palette, FIXTURE_CATALOG).grid?.colour).toBe(gridColour(palette));
+		expect(buildInjectOptions(palette, [FIXTURE_CATALOG]).grid?.colour).toBe(gridColour(palette));
 	});
 
 	it('初始缩放的下限留在可读范围，不靠 startScale 硬撑', () => {
-		const options = buildInjectOptions(fixturePalette(), FIXTURE_CATALOG);
+		const options = buildInjectOptions(fixturePalette(), [FIXTURE_CATALOG]);
 		expect(options.zoom?.startScale).toBeGreaterThanOrEqual(MIN_READABLE_SCALE);
 		expect(options.zoom?.minScale ?? 0).toBeLessThanOrEqual(MIN_READABLE_SCALE);
 	});
@@ -188,5 +189,41 @@ describe('色值纪律', () => {
 			});
 		}
 		expect(offenders).toEqual([]);
+	});
+});
+
+/** 第二份目录：只为了证明块色是「按所有目录」推的，内容是什么无所谓。 */
+const OTHER_CATALOG: CapabilityCatalog = {
+	...FIXTURE_CATALOG,
+	catalogRef: 'other_catalog',
+	displayName: '另一台设备',
+	capabilities: [
+		{
+			capabilityRef: 'wave_hello',
+			label: '打招呼',
+			kind: 'skill',
+			parameters: [],
+			implementation: [{ kind: 'call', primitiveRef: 'stop_motion', arguments: {} }],
+		},
+	],
+};
+
+describe('块色覆盖所有登记目录，不只建画布那一刻那一份', () => {
+	it('两份目录的块色都在（换设备之后再画另一种块，不该找不到样式被画成黑的）', () => {
+		const styles = buildBlockStyles(fixturePalette(), [FIXTURE_CATALOG, OTHER_CATALOG]);
+		for (const capability of [...FIXTURE_CATALOG.capabilities, ...OTHER_CATALOG.capabilities]) {
+			expect(styles[blockStyleName(capability.capabilityRef)], capability.capabilityRef).toBeDefined();
+		}
+	});
+
+	it('同一份目录给两次也不会互相覆盖（去重由调用方做，这里只保证结果对）', () => {
+		const once = buildBlockStyles(fixturePalette(), [FIXTURE_CATALOG]);
+		const twice = buildBlockStyles(fixturePalette(), [FIXTURE_CATALOG, FIXTURE_CATALOG]);
+		expect(twice).toEqual(once);
+	});
+
+	it('目录里没有的能力不会凭空长出块色', () => {
+		const styles = buildBlockStyles(fixturePalette(), [FIXTURE_CATALOG]);
+		expect(styles[blockStyleName('nope_not_a_capability')]).toBeUndefined();
 	});
 });

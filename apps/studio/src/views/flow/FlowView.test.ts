@@ -7,6 +7,7 @@ import { mount } from '@vue/test-utils';
 import { defineComponent, h } from 'vue';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { computeWorkflowDigest, describeActionFields, verifyWorkflowDigest, type WorkflowDeclaration } from '@codecanvas/contracts';
+import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import FlowView from './FlowView.vue';
 
@@ -33,6 +34,9 @@ const currentDeclaration = (): WorkflowDeclaration => {
 };
 
 beforeEach(() => {
+	// 样例跟着**设备格式**走（默认那台说的是技能计划），而这里量的是这份一期样例的四步，
+	// 所以先站到一期那台设备上。
+	setSelectedDevice('phase1_robot');
 	expect(loadSampleTask()).toBe(true);
 });
 

@@ -1,27 +1,31 @@
 // @vitest-environment happy-dom
 /**
- * 任务 JSON 视图的验收：**声明还原** + **指向**。
+ * 任务 JSON 视图的验收：**按出生时的格式还原** + **指向**。
  *
- * 两组断言，分别对着这件的两半：
- * 1. 数据（`task-json.ts`，纯函数）：从声明还原任务 JSON（任务级字段 + steps + limits），
- *    并且**参数 → 实现里第几步**那条映射是从目录的实现树扫出来的——用一份合成目录来测，
+ * 三组断言，对着这件东西的三半：
+ * 1. 数据（`task-json.ts`，纯函数）：从声明还原出**那个格式**的任务 JSON，并且
+ *    **参数 → 实现里第几步**那条映射是从目录的实现树扫出来的——用一份合成目录来测，
  *    不依赖 `PHASE1_ROBOT_CATALOG` 的具体内容（那边正在改，映射的口径不该跟着抖）。
  * 2. 界面（组件）：点 JSON 里的一段 → `store.select(nodeId)`（流程卡片 / 积木 / 代码面板一起跳），
  *    点参数行再叠一个 `store.selectStep(index)`；反过来选中模块时那一段也带标记。
+ * 3. 格式（组件）：还原用的是**声明出生时那台设备的格式**（`declarationFormatRef`），
+ *    不是当前选中的设备——同一份声明换设备后，原文不许被硬套成另一种格式。
+ *    技能计划那条也不手写技能名：技能与参数都从 `ROBOFRAME_SO101_CATALOG` 里挑。
  */
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { CapabilityCatalog, WorkflowDeclaration, WorkflowNode } from '@codecanvas/contracts';
-import { computeWorkflowDigest } from '@codecanvas/contracts';
-import { TASK_ACTION_NODE_TYPE } from '@codecanvas/task-import';
+import type { CapabilityCatalog, CapabilitySpec, WorkflowDeclaration, WorkflowNode } from '@codecanvas/contracts';
+import { SKILL_PLAN_SCHEMA_VERSION, computeWorkflowDigest } from '@codecanvas/contracts';
+import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
+import { TASK_ACTION_NODE_TYPE, findTaskFormat } from '@codecanvas/task-import';
 import { loadSampleTask, useStudioDocument } from '../../../state/document';
+import { setSelectedDevice } from '../../../shell/devices';
 import TaskJsonPanel from './TaskJsonPanel.vue';
 import {
 	buildTaskJson,
 	capabilityOf,
 	referencedStepIndex,
 	renderTaskJson,
-	stepFromNode,
 } from './task-json';
 
 const doc = useStudioDocument();
@@ -91,19 +95,105 @@ const declaration = (nodes: readonly WorkflowNode[]): WorkflowDeclaration => {
 };
 
 beforeEach(() => {
+	// 示例任务是**一期协议**的样例，所以先把设备切到那台再灌：
+	// 还原用的是「声明出生时那台设备的格式」，测试也得从那个出生点开始。
+	setSelectedDevice('phase1_robot');
 	expect(loadSampleTask()).toBe(true);
 });
 
-describe('任务 JSON · 从声明还原（纯函数）', () => {
-	it('step 从节点参数还原：`step_id` 变回协议里的 `id`，且排在第一个键', () => {
-		const step = stepFromNode(node('nd_1', { step_id: 's1', action: 'move', linear: 0.2, angular: 0 }));
+// ---------------------------------------------------------------------------
+// 技能计划那条路的用具：**不手写技能名与参数名**，全部从 SO-101 目录里挑
+// ---------------------------------------------------------------------------
 
-		expect(step).toEqual({ id: 's1', action: 'move', linear: 0.2, angular: 0 });
-		expect(Object.keys(step)[0]).toBe('id');
+interface SkillPlanFixture {
+	readonly capability: CapabilitySpec;
+	/** 目录里声明的参数名——「点参数行点亮实现某一步」这条测试要的就是它。 */
+	readonly parameterName: string;
+	/** 这个参数在实现里第一次被用的顶层语句下标（从目录扫出来的，不是写死的）。 */
+	readonly implStepIndex: number;
+}
+
+/**
+ * 挑一个「参数真的用在实现里」的技能。随便挑的技能可能压根没用参数，
+ * 那样这条测试就只能验证 null，验证不了联动。
+ */
+const skillPlanFixture = (): SkillPlanFixture => {
+	for (const capability of ROBOFRAME_SO101_CATALOG.capabilities) {
+		for (const parameter of capability.parameters) {
+			const index = referencedStepIndex(capability, parameter.name);
+			if (index !== null) return { capability, parameterName: parameter.name, implStepIndex: index };
+		}
+	}
+	throw new Error('SO-101 目录里得有一个「参数用在实现里」的技能，这条测试才有意义');
+};
+
+/** 参数值按目录声明的类型给（整数用整数，别让校验器的 type 判据替我兜底）。 */
+const paramValue = (parameter: CapabilitySpec['parameters'][number]): unknown => {
+	switch (parameter.type) {
+		case 'number':
+			return 1;
+		case 'boolean':
+			return true;
+		case 'sensor':
+			return ['/scan0'];
+		case 'json':
+			return {};
+		default:
+			return 'demo';
+	}
+};
+
+const skillPlanText = (fixture: SkillPlanFixture): string => {
+	const params: Record<string, unknown> = {};
+	for (const parameter of fixture.capability.parameters) params[parameter.name] = paramValue(parameter);
+	return JSON.stringify({
+		schemaVersion: SKILL_PLAN_SCHEMA_VERSION,
+		robot: ROBOFRAME_SO101_CATALOG.robotName ?? '',
+		description: '演示技能计划',
+		plan: [{ step: 'skill', skill: fixture.capability.capabilityRef, params }],
+	});
+};
+
+interface LoadedSkillPlan extends SkillPlanFixture {
+	readonly nodeId: string;
+}
+
+/**
+ * 把一份技能计划灌进真相。**设备得先切到 SO-101 那台**——格式是设备属性，
+ * 用一期设备去收技能计划是收不下的；声明则记住自己是技能计划产出的。
+ */
+const loadSkillPlan = (): LoadedSkillPlan => {
+	const fixture = skillPlanFixture();
+	setSelectedDevice('so101_robot');
+	expect(doc.loadTaskJson(skillPlanText(fixture))).toBe(true);
+
+	const node = doc.declaration.value?.nodes.find(
+		(item) => item.parameters['action'] === fixture.capability.capabilityRef,
+	);
+	if (node === undefined) throw new Error('技能计划里的技能应该落成一个节点');
+	return { ...fixture, nodeId: node.id };
+};
+
+describe('任务 JSON · 从声明还原（纯函数）', () => {
+	it('step 从节点参数还原：`step_id` 变回协议里的 `id`', () => {
+		/*
+		 * 还原这件事现在**归格式管**（`findTaskFormat('phase1_task').fromDeclaration`），
+		 * 所以从这里进——视图不再自己拼一遍协议键，否则它和写回通道迟早是两份东西。
+		 * 键序也归格式定（`id` 落在末尾），所以断言的是内容，不再是「`id` 排第一个」。
+		 */
+		const task = buildTaskJson(
+			declaration([node('nd_1', { step_id: 's1', action: 'move', linear: 0.2, angular: 0 })]),
+			'phase1_task',
+		);
+
+		expect(task['steps']).toEqual([{ id: 's1', action: 'move', linear: 0.2, angular: 0 }]);
 	});
 
 	it('整份任务：schema_version / task_id / description / steps / limits 都来自声明', () => {
-		const task = buildTaskJson(declaration([node('nd_1', { step_id: 's1', action: 'move', linear: 0.2 })]));
+		const task = buildTaskJson(
+			declaration([node('nd_1', { step_id: 's1', action: 'move', linear: 0.2 })]),
+			'phase1_task',
+		);
 
 		expect(task['schema_version']).toBe('1.0');
 		expect(task['task_id']).toBe('task-demo-9');
@@ -132,6 +222,7 @@ describe('任务 JSON · 从声明还原（纯函数）', () => {
 				node('nd_2', { step_id: 's2', action: 'stop' }),
 			]),
 			resolveDemo,
+			'phase1_task',
 		);
 
 		expect(view.stepCount).toBe(2);
@@ -273,6 +364,21 @@ describe('任务 JSON · 点一段就跟着跳（组件）', () => {
 		expect(doc.selectedStepIndex.value).toBe(Number(line.attributes('data-tj-impl-step')));
 	});
 
+	it('技能计划里点一个参数行 → 同样选出对应的实现步骤（两种格式共用同一条联动）', async () => {
+		// 技能与参数都从目录里挑（见 `skillPlanFixture`），这里不写死名字。
+		const plan = loadSkillPlan();
+		const wrapper = mount(TaskJsonPanel);
+
+		const line = paramLine(wrapper, plan.nodeId, plan.parameterName);
+		await line.trigger('click');
+
+		expect(doc.selectedNodeId.value).toBe(plan.nodeId);
+		// 下标是从目录的实现树扫出来的：拿它与独立扫出来的那个数对账
+		expect(line.attributes('data-tj-impl-step')).toBe(String(plan.implStepIndex));
+		expect(doc.selectedStepIndex.value).toBe(plan.implStepIndex);
+		expect(line.attributes('data-selected-step')).toBe('true');
+	});
+
 	it('任务级那几行不可点（「第几步」对它们没有意义）', () => {
 		const wrapper = mount(TaskJsonPanel);
 		const meta = wrapper.findAll('[data-section="meta"]');
@@ -292,5 +398,58 @@ describe('任务 JSON · 点一段就跟着跳（组件）', () => {
 		const wrapper = mount(freshPanel.default);
 		expect(wrapper.find('[data-testid="task-json-empty"]').exists()).toBe(true);
 		expect(wrapper.findAll('.tj-line')).toHaveLength(0);
+	});
+});
+
+describe('任务 JSON · 按出生时的格式还原', () => {
+	it('技能计划格式下还原出来的是技能计划的原文（schemaVersion / step: "skill"）', () => {
+		const plan = loadSkillPlan();
+		const wrapper = mount(TaskJsonPanel);
+		const text = wrapper.get('[data-testid="task-json-scroll"]').text();
+
+		expect(text).toContain(`"schemaVersion": ${String(SKILL_PLAN_SCHEMA_VERSION)}`);
+		expect(text).toContain('"step": "skill"');
+		// 技能名来自目录（这条测试没有一处手写的技能名），参数收在 `params` 里
+		expect(text).toContain(`"skill": "${plan.capability.capabilityRef}"`);
+		expect(text).toContain('"params": {');
+		expect(text).toContain(`"${plan.parameterName}"`);
+
+		// 标题必须说清这是哪种格式：同一份声明在两种设备下还原出来的原文完全不一样
+		const expected = findTaskFormat('skill_plan');
+		expect(wrapper.get('[data-testid="task-json-format"]').text()).toContain(expected.label);
+		expect(wrapper.get('[data-testid="task-json-format-note"]').text()).toContain(expected.describe);
+	});
+
+	it('切到一期设备后，同一份声明不会被硬套成技能计划（给的是它出生时那种格式）', async () => {
+		loadSkillPlan();
+		const wrapper = mount(TaskJsonPanel);
+		const before = wrapper.get('[data-testid="task-json-scroll"]').text();
+
+		setSelectedDevice('phase1_robot');
+		await wrapper.vm.$nextTick();
+
+		// 换设备只改「下一条指令发给谁」，不改写已经产出的声明——原文一个字节都不动
+		expect(wrapper.get('[data-testid="task-json-scroll"]').text()).toBe(before);
+		expect(wrapper.get('[data-testid="task-json-format"]').text()).toContain(
+			findTaskFormat('skill_plan').label,
+		);
+		expect(wrapper.get('[data-testid="task-json-scroll"]').text()).not.toContain('"schema_version"');
+	});
+
+	it('反过来也一样：一期声明在 SO-101 设备下仍是它出生时那份一期原文', async () => {
+		const wrapper = mount(TaskJsonPanel);
+		const before = wrapper.get('[data-testid="task-json-scroll"]').text();
+		expect(before).toContain('"schema_version": "1.0"');
+
+		setSelectedDevice('so101_robot');
+		await wrapper.vm.$nextTick();
+
+		const text = wrapper.get('[data-testid="task-json-scroll"]').text();
+		expect(text).toBe(before);
+		expect(text).toContain('"schema_version": "1.0"');
+		expect(text).not.toContain('"step": "skill"');
+		expect(wrapper.get('[data-testid="task-json-format"]').text()).toContain(
+			findTaskFormat('phase1_task').label,
+		);
 	});
 });

@@ -14,6 +14,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { WorkflowNode } from '@codecanvas/contracts';
+import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import {
 	BADGE_ACTIVE_CLASS,
@@ -86,6 +87,9 @@ const textOf = (badge: SVGGElement): SVGTextElement | null => {
 };
 
 beforeEach(() => {
+	// 样例跟着**设备格式**走（默认那台说的是技能计划），而这里量的是这份一期样例的步号，
+	// 所以先站到一期那台设备上。
+	setSelectedDevice('phase1_robot');
 	expect(loadSampleTask()).toBe(true);
 });
 

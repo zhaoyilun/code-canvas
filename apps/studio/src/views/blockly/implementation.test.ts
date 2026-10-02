@@ -28,6 +28,7 @@ import {
 	resolveSelection,
 	type RenderResult,
 } from '@codecanvas/blockly-toolkit';
+import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import { summarizeNodeParameters, nodeAction } from '../flow/summary';
 import { FIXTURE_CATALOG } from '../__fixtures__/catalog';
@@ -37,6 +38,9 @@ const store = useStudioDocument();
 let workspace: Blockly.Workspace;
 
 beforeEach(() => {
+	// 样例跟着**设备格式**走（默认那台说的是技能计划），而这里量的是一期那套动作的实现，
+	// 所以先站到一期那台设备上，`loadSampleTask` 给的才是这份样例。
+	setSelectedDevice('phase1_robot');
 	expect(loadSampleTask()).toBe(true);
 	registerImplementationBlocks(FIXTURE_CATALOG);
 	workspace = new Blockly.Workspace();

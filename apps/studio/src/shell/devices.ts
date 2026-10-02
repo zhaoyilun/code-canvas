@@ -1,39 +1,79 @@
 /**
- * 设备目录登记处 + 当前选中的那台设备。
+ * 设备登记处 + 当前选中的那台设备。
  *
  * 入口带要回答的第一个问题是「给谁下指令」，所以它得知道**有哪些设备**；
  * 右栏的虚拟设备那块要知道**选的是哪一台**。两处问的是同一个数，所以只有一个地方存它。
  *
- * 目录本身由设备侧（插件）提供：形状定义在 `@codecanvas/contracts` 的 `capability.ts`，
- * 具体的目录在 `@codecanvas/capabilities` 里。一期只有一台设备——差速底盘 + 六轴臂——
- * 将来 RoboFrame 接入时把它的目录加进 `DEVICE_CATALOGS` 就行，这个文件不用改结构。
+ * 「设备」不是「目录」：目录说的是**会做什么**，设备说的是**往哪儿发**。
+ * 同一份 SO-101 技能库既可以发给真机，也可以发给仿真——这正是 RoboFrame 自己的分法
+ * （它的 launch 参数就分 `sim` / `hardware`）。所以一台设备 = 一份目录 + 一套任务格式 + 一个去处。
+ *
+ * 任务格式也是**设备属性**：一期设备听的是那七个固定动作，RoboFrame 的设备听的是一串技能调用。
+ * 选哪台设备，入口就收哪种 JSON，写回时也拿对应那把尺子量（见 `@codecanvas/task-import` 的 `format.ts`）。
  *
  * 这里**不碰真相**：选中哪台设备不改变已导入的声明，它只影响「下一条指令发给谁」。
  * 所以它跟 `state/document.ts` 是两件事，不混进那份 store。
  */
 import { computed, ref } from 'vue';
-import { PHASE1_ROBOT_CATALOG } from '@codecanvas/capabilities';
+import { PHASE1_ROBOT_CATALOG, ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import { findCapability, type CapabilityCatalog } from '@codecanvas/contracts';
+import type { TaskFormatRef } from '@codecanvas/task-import';
 
-/** 登记在册的设备目录。顺序就是下拉里的顺序，第一条是默认选中。 */
-export const DEVICE_CATALOGS: readonly CapabilityCatalog[] = [PHASE1_ROBOT_CATALOG];
+export interface StudioDevice {
+	/** 稳定引用。请求里带的是它，日志与追溯也认它。 */
+	readonly deviceRef: string;
+	readonly label: string;
+	/** 仿真（没有实机也能跑通整条链）。界面上要如实标出来。 */
+	readonly virtual: boolean;
+	readonly catalog: CapabilityCatalog;
+	readonly formatRef: TaskFormatRef;
+}
 
-/** 按 `catalogRef` 查一台设备；不在册的就是 null（不认没登记的设备）。 */
-export const findDeviceCatalog = (catalogRef: string): CapabilityCatalog | null =>
-	DEVICE_CATALOGS.find((catalog) => catalog.catalogRef === catalogRef) ?? null;
+/** 登记在册的设备。顺序就是下拉里的顺序，第一条是默认选中。 */
+export const DEVICES: readonly StudioDevice[] = [
+	{
+		deviceRef: 'so101_robot',
+		label: 'SO-101 单臂（真机）',
+		virtual: false,
+		catalog: ROBOFRAME_SO101_CATALOG,
+		formatRef: 'skill_plan',
+	},
+	{
+		deviceRef: 'so101_sim',
+		label: '虚拟设备（SO-101 仿真）',
+		virtual: true,
+		// 同一份技能库：仿真与真机跑的是同一串技能调用，换的只是去处。
+		catalog: ROBOFRAME_SO101_CATALOG,
+		formatRef: 'skill_plan',
+	},
+	{
+		deviceRef: 'phase1_robot',
+		label: '一期设备（差速底盘 + 六轴臂）',
+		virtual: false,
+		catalog: PHASE1_ROBOT_CATALOG,
+		formatRef: 'phase1_task',
+	},
+];
 
-const firstCatalog = DEVICE_CATALOGS[0];
-/** 默认选中在册的第一台。目录空着时是空串——调用方要当「没有设备」处理，别当成一台叫空串的设备。 */
-const DEFAULT_CATALOG_REF = firstCatalog === undefined ? '' : firstCatalog.catalogRef;
+/** 按 `deviceRef` 查一台设备；不在册的就是 null（不认没登记的设备）。 */
+export const findDevice = (deviceRef: string): StudioDevice | null =>
+	DEVICES.find((device) => device.deviceRef === deviceRef) ?? null;
 
-const activeCatalogRef = ref<string>(DEFAULT_CATALOG_REF);
+const firstDevice = DEVICES[0];
+/** 默认选中在册的第一台。设备表空着时是空串——调用方要当「没有设备」处理。 */
+const DEFAULT_DEVICE_REF = firstDevice === undefined ? '' : firstDevice.deviceRef;
 
-const selectedCatalog = computed<CapabilityCatalog | null>(() => findDeviceCatalog(activeCatalogRef.value));
+const selectedDeviceRef = ref<string>(DEFAULT_DEVICE_REF);
 
-/** 换设备。不在册的直接忽略——不许选中一个查不到的目录（那会让生成请求带上假 ref）。 */
-export function setSelectedCatalog(catalogRef: string): void {
-	if (findDeviceCatalog(catalogRef) === null) return;
-	activeCatalogRef.value = catalogRef;
+const selectedDevice = computed<StudioDevice | null>(() => findDevice(selectedDeviceRef.value));
+
+/** 当前设备的目录。没有设备时是 null——调用方不许把它当成一份空目录。 */
+const selectedCatalog = computed<CapabilityCatalog | null>(() => selectedDevice.value?.catalog ?? null);
+
+/** 换设备。不在册的直接忽略——不许选中一个查不到的设备（那会让生成请求带上假 ref）。 */
+export function setSelectedDevice(deviceRef: string): void {
+	if (findDevice(deviceRef) === null) return;
+	selectedDeviceRef.value = deviceRef;
 }
 
 /**
@@ -48,14 +88,15 @@ export const findCatalogWithCapability = (
 	preferred: CapabilityCatalog | null,
 ): CapabilityCatalog | null => {
 	if (preferred !== null && findCapability(preferred, capabilityRef) !== undefined) return preferred;
-	return DEVICE_CATALOGS.find((catalog) => findCapability(catalog, capabilityRef) !== undefined) ?? null;
+	return DEVICES.find((device) => findCapability(device.catalog, capabilityRef) !== undefined)?.catalog ?? null;
 };
 
 export function useStudioDevices() {
 	return {
-		catalogs: DEVICE_CATALOGS,
-		selectedCatalogRef: computed<string>(() => activeCatalogRef.value),
+		devices: DEVICES,
+		selectedDeviceRef: computed<string>(() => selectedDeviceRef.value),
+		selectedDevice,
 		selectedCatalog,
-		setSelectedCatalog,
+		setSelectedDevice,
 	};
 }

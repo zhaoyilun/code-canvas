@@ -2,15 +2,31 @@
 /**
  * 「一句话 → 任务 JSON」这一层的验收（`task-generation.ts`）。
  *
- * 最重要的一条：**系统提示词必须与 `docs/reference/llm_client.py` 逐字一致**。
+ * 最重要的一条：**一期那份系统提示词必须与 `docs/reference/llm_client.py` 逐字一致**。
  * 那边已经把七种动作、参数范围、`sensors` 取值、默认 `limits` 全写死了；两处一漂移，
  * 模型就会开始产出「过不了校验器」的任务。所以这里直接把那个文件读进来对账，
  * 而不是再抄一份字符串当期望值（抄一份等于把漂移合法化）。
+ *
+ * 另一半守的是「提示词按设备格式切」：技能计划那份**由目录生成**，所以这里遍历目录断言
+ * 每个技能都在提示词里——不写死清单，目录改了测试跟着改（写死清单等于把漂移合法化，同上）。
  */
 import { describe, expect, it } from 'vitest';
 // 参考实现是那份「已经在用」的脚本；`?raw` 把它当文本读进来对账（不去解析 Python）。
 import referenceClient from '../../../../docs/reference/llm_client.py?raw';
-import { SYSTEM_PROMPT, generateTask, taskMessages } from './task-generation';
+import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
+import { SKILL_PLAN_SCHEMA_VERSION } from '@codecanvas/contracts';
+import { findDevice, type StudioDevice } from './devices';
+import { SYSTEM_PROMPT, generateTask, skillPlanSystemPrompt, taskMessages } from './task-generation';
+
+/** 按 ref 取一台在册设备。测试里写死的是「哪台」，不是它的字段——字段归 `devices.ts` 管。 */
+const deviceOf = (deviceRef: string): StudioDevice => {
+	const device = findDevice(deviceRef);
+	if (device === null) throw new Error(`devices.ts 里没有设备 ${deviceRef}`);
+	return device;
+};
+
+const PHASE1_DEVICE = deviceOf('phase1_robot');
+const SO101_DEVICE = deviceOf('so101_robot');
 
 /**
  * 从参考实现里抠出 SYSTEM_PROMPT 的**值**。
@@ -54,6 +70,18 @@ const envelope = (content: string): Response =>
 
 const noWait = async (): Promise<void> => {};
 
+/**
+ * 这一台设备在请求里要带的那三样。写成一个函数而不是手抄三遍：
+ * 「请求里带的是哪台」正是几条测试的重点，抄错了会静默变成另一件事。
+ */
+const deviceFields = (
+	device: StudioDevice,
+): { deviceRef: string; formatRef: StudioDevice['formatRef']; catalog: StudioDevice['catalog'] } => ({
+	deviceRef: device.deviceRef,
+	formatRef: device.formatRef,
+	catalog: device.catalog,
+});
+
 const VALID_TASK = JSON.stringify({
 	schema_version: '1.0',
 	task_id: 'task-llm-1',
@@ -84,13 +112,53 @@ describe('任务生成 · 提示词', () => {
 	});
 });
 
+/*
+ * 技能计划那份提示词**由目录生成**——所以这里遍历目录断言，不写死技能清单：
+ * 写死清单等于把「提示词与目录漂移」合法化，而漂移的后果是模型照着过期清单编、
+ * 校验器拿真目录一条条拒。目录改了，这几条应该照样绿。
+ */
+describe('任务生成 · 技能计划的提示词', () => {
+	it('目录里每个技能都列出来了：名字、中文名、以及它声明的参数（名字 + 类型）', () => {
+		const prompt = skillPlanSystemPrompt(ROBOFRAME_SO101_CATALOG);
+
+		expect(ROBOFRAME_SO101_CATALOG.capabilities.length).toBeGreaterThan(0);
+		for (const capability of ROBOFRAME_SO101_CATALOG.capabilities) {
+			expect(prompt).toContain(capability.capabilityRef);
+			expect(prompt).toContain(capability.label);
+			for (const parameter of capability.parameters) {
+				expect(prompt).toContain(parameter.name);
+				expect(prompt).toContain(parameter.type);
+			}
+		}
+	});
+
+	it('规矩齐了：只给 JSON、版本是 1、robot 是目录里那个名字、plan 步的形状写清楚', () => {
+		const prompt = skillPlanSystemPrompt(ROBOFRAME_SO101_CATALOG);
+
+		expect(prompt).toContain('JSON');
+		expect(prompt).toContain('Markdown');
+		expect(prompt).toContain(`schemaVersion=${String(SKILL_PLAN_SCHEMA_VERSION)}`);
+		expect(prompt).toContain(String(ROBOFRAME_SO101_CATALOG.robotName));
+		expect(prompt).toContain('"step":"skill"');
+		expect(prompt).toContain('"params"');
+		expect(prompt).toContain('timeoutSec');
+		expect(prompt).toContain('description');
+	});
+
+	it('两台设备的提示词不是同一份：技能计划那份不出现一期写死的动作', () => {
+		// 反证：词汇表不一样，一份提示词盖不了两种格式
+		expect(skillPlanSystemPrompt(ROBOFRAME_SO101_CATALOG)).not.toContain('arm6_joints');
+		expect(SYSTEM_PROMPT).not.toContain('inspect_scene');
+	});
+});
+
 describe('任务生成 · 请求与结果', () => {
 	it('请求打到 <地址>/chat/completions，体里既有 messages 也有设备组要的那两个字段', async () => {
 		const { impl, calls } = fetchRecorder(async () => envelope(VALID_TASK));
 
 		const result = await generateTask({
 			endpoint: '/llm',
-			catalogRef: 'phase1_robot',
+			...deviceFields(PHASE1_DEVICE),
 			instruction: '前进1米，避障后停止',
 			accept: () => true,
 			fetchImpl: impl,
@@ -101,6 +169,10 @@ describe('任务生成 · 请求与结果', () => {
 		expect(calls[0]?.url).toBe('/llm/chat/completions');
 		const body = bodyOf(calls[0]);
 		expect(body['catalogRef']).toBe('phase1_robot');
+		expect(body['deviceRef']).toBe('phase1_robot');
+		expect(body['formatRef']).toBe('phase1_task');
+		// 一期协议里没有「机器人名」这一栏，不编一个空字符串糊上去
+		expect(body['robot']).toBeUndefined();
 		expect(body['instruction']).toBe('前进1米，避障后停止');
 		expect((body['messages'] as unknown[])[0]).toEqual({ role: 'system', content: SYSTEM_PROMPT });
 		expect(body['model']).toBe('deepseek-flash');
@@ -112,7 +184,7 @@ describe('任务生成 · 请求与结果', () => {
 
 		const result = await generateTask({
 			endpoint: '/llm',
-			catalogRef: 'phase1_robot',
+			...deviceFields(PHASE1_DEVICE),
 			instruction: '一句话',
 			accept: (text) => {
 				seen.push(text);
@@ -137,7 +209,7 @@ describe('任务生成 · 请求与结果', () => {
 
 		const result = await generateTask({
 			endpoint: '/llm',
-			catalogRef: 'phase1_robot',
+			...deviceFields(PHASE1_DEVICE),
 			instruction: '一句话',
 			accept,
 			fetchImpl: impl,
@@ -157,7 +229,7 @@ describe('任务生成 · 请求与结果', () => {
 
 		const result = await generateTask({
 			endpoint: '/llm',
-			catalogRef: 'phase1_robot',
+			...deviceFields(PHASE1_DEVICE),
 			instruction: '一句话',
 			accept: () => true,
 			fetchImpl: impl,
@@ -170,5 +242,33 @@ describe('任务生成 · 请求与结果', () => {
 		expect(result.message).toContain('Failed to fetch');
 		expect(result.attempts).toBe(2);
 		expect(result.text).toBeNull();
+	});
+
+	it('技能计划那次请求：extras 带的是那把尺子（formatRef / deviceRef），并且写明 robot', async () => {
+		const { impl, calls } = fetchRecorder(async () => envelope(VALID_TASK));
+
+		const result = await generateTask({
+			endpoint: '/llm',
+			...deviceFields(SO101_DEVICE),
+			instruction: '看一眼桌面，往前挪一点',
+			accept: () => true,
+			fetchImpl: impl,
+			wait: noWait,
+		});
+
+		expect(result.ok).toBe(true);
+		const body = bodyOf(calls[0]);
+		expect(body['formatRef']).toBe('skill_plan');
+		expect(body['deviceRef']).toBe('so101_robot');
+		expect(body['robot']).toBe(ROBOFRAME_SO101_CATALOG.robotName);
+		// catalogRef 从目录里推，不另开入参：设备与它的目录必须对得上
+		expect(body['catalogRef']).toBe(ROBOFRAME_SO101_CATALOG.catalogRef);
+		expect(body['instruction']).toBe('看一眼桌面，往前挪一点');
+
+		// system 那段是这份目录现生成的，不是一期那份
+		const messages = body['messages'] as Array<{ role: string; content: string }>;
+		expect(messages[0]?.role).toBe('system');
+		expect(messages[0]?.content).toBe(skillPlanSystemPrompt(ROBOFRAME_SO101_CATALOG));
+		expect(messages[1]?.content).toBe('看一眼桌面，往前挪一点');
 	});
 });

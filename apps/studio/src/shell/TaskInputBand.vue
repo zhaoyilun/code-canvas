@@ -21,6 +21,7 @@
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue';
 import type { Diagnostic } from '@codecanvas/contracts';
+import { findTaskFormat, type TaskFormatRef } from '@codecanvas/task-import';
 import { useStudioDocument } from '../state/document';
 import { useStudioDevices } from './devices';
 import { DEFAULT_LLM_ENDPOINT, DEFAULT_LLM_MODEL } from './llm-json';
@@ -30,11 +31,29 @@ const doc = useStudioDocument();
 const devices = useStudioDevices();
 
 /** 设备下拉绑的就是共享的选中设备——右栏的虚拟设备那块读的是同一个数。 */
-const catalogRef = computed<string>({
-	get: () => devices.selectedCatalogRef.value,
+const deviceRef = computed<string>({
+	get: () => devices.selectedDeviceRef.value,
 	set: (value) => {
-		devices.setSelectedCatalog(value);
+		devices.setSelectedDevice(value);
 	},
+});
+
+/**
+ * 当前设备与它的格式。**任务格式是设备属性**（见 `shell/devices.ts`）：
+ * 选哪台设备就决定了这一句话要收成什么形状、按哪把尺子校验，所以要显示出来。
+ */
+const selectedDevice = computed(() => devices.selectedDevice.value);
+const formatRef = computed<TaskFormatRef | null>(() => selectedDevice.value?.formatRef ?? null);
+const formatLabel = computed(() => (formatRef.value === null ? '' : findTaskFormat(formatRef.value).label));
+
+/**
+ * 真机还是仿真：设备名里也有括号说明，但那是一串长文字里的一部分，容易被略过。
+ * 这一行是**单独说的**——发给仿真还是发给真机，是这条链上最要紧的一个区别。
+ */
+const deviceNote = computed(() => {
+	const device = selectedDevice.value;
+	if (device === null) return '没有可用设备';
+	return device.virtual ? '虚拟设备 · 仿真' : '真机';
 });
 
 /**
@@ -90,8 +109,10 @@ const diagnostics = computed<readonly Diagnostic[]>(
 const nodeCount = computed(() => doc.nodes.value.length);
 /** 成功时的终态字：生成接口给的 vs 手工灌的，不能混着说。 */
 const okLabel = computed(() => (lastPath.value === 'generate' ? '已生成' : '已导入'));
-/** 不能生成：没写指令，或没有设备可选。 */
-const generateDisabled = computed(() => busy.value || instruction.value.trim() === '' || catalogRef.value === '');
+/** 不能生成：没写指令，或没有设备可选（没有设备就没有「发给谁」和「按哪把尺子编」）。 */
+const generateDisabled = computed(
+	() => busy.value || instruction.value.trim() === '' || selectedDevice.value === null,
+);
 
 /** 链路四段：任务 JSON → 积木 / 流程 / 代码。 */
 const CHAIN_STEPS = 4;
@@ -218,7 +239,11 @@ function clear(): void {
 }
 
 /**
- * 生成：把 `{ catalogRef, instruction }`（连同 LLM 那几个字段）POST 给生成接口，拿回任务 JSON。
+ * 生成：把 `{ deviceRef, formatRef, catalogRef, instruction }`（连同 LLM 那几个字段）POST 给生成接口，
+ * 拿回任务 JSON。
+ *
+ * 设备那三件缺一不可：`deviceRef` 说发给谁，`formatRef` 说按哪把尺子编（提示词也跟着它切），
+ * `catalogRef` 说词汇表是哪一份——技能计划那条路的技能名与参数全靠目录，写死一份就错一份。
  *
  * 只有这一条路真正花时间，链路就在这段时间里亮着。**校验不在这一层**：
  * `generateTask` 拿到文本后交给 `accept`，而 `accept` 就是 `doc.loadTaskJson`——
@@ -227,7 +252,8 @@ function clear(): void {
 async function generate(): Promise<void> {
 	const url = endpoint.value.trim();
 	const text = instruction.value.trim();
-	if (url === '' || text === '' || busy.value) return;
+	const device = selectedDevice.value;
+	if (url === '' || text === '' || device === null || busy.value) return;
 
 	const mine = (runId += 1);
 	busy.value = true;
@@ -249,7 +275,9 @@ async function generate(): Promise<void> {
 	try {
 		const result = await generateTask({
 			endpoint: url,
-			catalogRef: catalogRef.value,
+			deviceRef: device.deviceRef,
+			formatRef: device.formatRef,
+			catalog: device.catalog,
 			instruction: text,
 			/*
 			 * 唯一那条导入路：成功才换真相，失败只留诊断。
@@ -383,15 +411,23 @@ const location = (diagnostic: Diagnostic): string => {
 					<label class="field field-device">
 						<span class="field-label">设备</span>
 						<select
-							v-model="catalogRef"
+							v-model="deviceRef"
 							class="field-select"
 							data-testid="device-select"
-							aria-label="设备目录"
+							aria-label="设备"
 						>
-							<option v-for="catalog in devices.catalogs" :key="catalog.catalogRef" :value="catalog.catalogRef">
-								{{ catalog.displayName }}
+							<!-- 值用 deviceRef（请求里带的就是它），显示用 label；仿真那条额外带个标记。 -->
+							<option
+								v-for="device in devices.devices"
+								:key="device.deviceRef"
+								:value="device.deviceRef"
+								:data-virtual="device.virtual ? 'true' : 'false'"
+							>
+								{{ device.label }}
 							</option>
 						</select>
+						<!-- 真机 / 仿真单独说一行：label 里的括号在一串字里，太容易略过 -->
+						<span class="field-note" data-testid="device-note">{{ deviceNote }}</span>
 					</label>
 
 					<label class="field field-instruction">
@@ -459,6 +495,16 @@ const location = (diagnostic: Diagnostic): string => {
 					<span class="settings-note">
 						POST {{ endpoint.trim() || DEFAULT_ENDPOINT }}/chat/completions · model {{ DEFAULT_LLM_MODEL }}
 					</span>
+				</div>
+
+				<!--
+					这一请求发给谁、按哪把尺子编：设备名 + 任务格式名（格式决定收什么形状的 JSON），
+					目录名放在最后——技能名与参数都照它判，联调时对不上账最先要看的就是它。
+				-->
+				<div v-if="showEndpoint" class="settings-facts" data-testid="task-endpoint-device">
+					<span>设备 {{ selectedDevice?.label ?? '（没有可用设备）' }}</span>
+					<span>格式 {{ formatLabel === '' ? '（未知）' : formatLabel }}</span>
+					<span class="settings-note">目录 {{ selectedDevice?.catalog.catalogRef ?? '—' }}</span>
 				</div>
 
 				<div v-if="showPaste" class="paste-row" data-testid="task-paste-row">
@@ -670,6 +716,17 @@ const location = (diagnostic: Diagnostic): string => {
 	min-width: 0;
 }
 
+/*
+ * 真机 / 仿真那一行小字：紧挨着下拉，**不参与收缩**——它一共就几个字，
+ * 让位的结果是把「仿真」这两个字截掉，那这一行就白放了。要挤先挤下拉（原生下拉截断不影响选）。
+ */
+.field-note {
+	flex: 0 0 auto;
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-faint);
+	white-space: nowrap;
+}
+
 .field-select,
 .field-text {
 	width: 100%;
@@ -758,6 +815,17 @@ const location = (diagnostic: Diagnostic): string => {
 	font-size: var(--cc-fs-xs);
 	color: var(--cc-text-faint);
 	white-space: nowrap;
+}
+
+/* 这一请求发给谁、按哪把尺子编：小字一行，折得下就折，不占主位。 */
+.settings-facts {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--cc-space-1) var(--cc-space-3);
+	flex: 0 0 auto;
+	min-width: 0;
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-dim);
 }
 
 /*

@@ -15,6 +15,7 @@
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeWorkflowDigest, type WorkflowDeclaration, type WorkflowNode } from '@codecanvas/contracts';
+import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import FlowView from '../flow/FlowView.vue';
 import RightPanel from '../right/RightPanel.vue';
@@ -84,6 +85,9 @@ const clickFlowCard = async (flow: ReturnType<typeof mount>, label: string): Pro
 };
 
 beforeEach(() => {
+	// 样例跟着**设备格式**走（默认那台说的是技能计划），而这里量的是这份一期样例的代码行，
+	// 所以先站到一期那台设备上。
+	setSelectedDevice('phase1_robot');
 	loadSampleTask();
 	// 顺带清掉步选中：`select(null)` 只在**节点真的变了**时才清（它自己的守卫），
 	// 上一个用例可能刚好把节点留在 null 上。这里把两件事都摆平，用例之间才互不干扰。

@@ -4,7 +4,7 @@
  *
  * 粒度是「工作流上的一个模块 = 一个函数」：面板显示**当前选中模块的实现**——
  * 那个能力在目录里的 `implementation`（一棵**语句树**），也就是机器为了执行它具体做了什么。
- * 文本一个字都不在这里拼：`renderImplementation()` 从 `PHASE1_ROBOT_CATALOG` 的原语定义递归推导，
+ * 文本一个字都不在这里拼：`renderImplementation()` 从**当前设备目录**的原语定义递归推导，
  * 连缩进、「第几行是哪一步」也是它给的（`lines[].stepPath` / `lines[].stepIndex`），这里只渲染，不重算。
  *
  * - 选中项从 `useStudioDocument()` 读（流程卡片、积木、都一样）；还没选时退到第一个模块，
@@ -18,7 +18,6 @@
  * - 安全限值常驻底部——它属于**整个任务**（`meta.limits`），不随选中哪个模块变。
  */
 import { computed, nextTick, ref, watch } from 'vue';
-import { PHASE1_ROBOT_CATALOG } from '@codecanvas/capabilities';
 import { renderImplementation, type RenderedLine } from '@codecanvas/code-render';
 import { useStudioDocument } from '../../state/document';
 import { stepNumbersOf } from '../shared/sequence-badge';
@@ -32,10 +31,17 @@ const activeNode = computed(() => doc.selectedNode.value ?? doc.nodes.value[0] ?
 /** 退档显示：面板显示的不是「选中的」模块，页脚要如实说出来。 */
 const isFallback = computed(() => doc.selectedNodeId.value === null && activeNode.value !== null);
 
+/*
+ * 目录从 store 取（`declarationCatalog`），**不在这里写死哪一份**：
+ * 面板显示的是「机器为了执行它具体做了什么」，而那句话只有在**给出这份实现的那份目录**里才成立。
+ * 写死一份常量，换设备之后就会拿另一份目录去查同一个能力名——查不到时看起来像目录缺了东西，
+ * 其实是面板拿错了尺子（真机上「技能计划」四个字也永远显示不出来）。
+ * 目录还没定下来（没导入过、也没选中设备）时按「没有模块」渲染，不编一份实现出来。
+ */
 const program = computed(() =>
 	renderImplementation({
 		node: activeNode.value,
-		catalog: PHASE1_ROBOT_CATALOG,
+		catalog: doc.declarationCatalog.value,
 		declaration: doc.declaration.value,
 	}),
 );
@@ -242,7 +248,9 @@ watch(selectedStep, async (index) => {
 					选中 {{ program.nodeName }} · 实现 {{ program.lines.length }} 行
 				</span>
 				<span v-else class="cp-footer-hint">在流程画布或积木里点一个模块，这里显示它的实现</span>
-				<span class="cp-footer-source">实现来自目录：{{ PHASE1_ROBOT_CATALOG.displayName }}</span>
+				<span v-if="doc.declarationCatalog.value !== null" class="cp-footer-source" data-testid="code-footer-catalog">
+					实现来自目录：{{ doc.declarationCatalog.value.displayName }}
+				</span>
 			</footer>
 		</template>
 	</section>

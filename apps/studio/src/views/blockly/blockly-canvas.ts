@@ -24,9 +24,8 @@
  */
 import * as Blockly from 'blockly';
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef, watch, type ComputedRef, type Ref } from 'vue';
-import type { Diagnostic, WorkflowDeclaration } from '@codecanvas/contracts';
+import type { CapabilityCatalog, Diagnostic, WorkflowDeclaration } from '@codecanvas/contracts';
 import { findCapability } from '@codecanvas/contracts';
-import { PHASE1_ROBOT_CATALOG } from '@codecanvas/capabilities';
 import {
 	PARAMETER_EVENT_TYPES,
 	activeNodeOf,
@@ -42,6 +41,7 @@ import {
 	type BlockIndex,
 	type ThemePalette,
 } from '@codecanvas/blockly-toolkit';
+import { DEVICES } from '../../shell/devices';
 import { useStudioDocument } from '../../state/document';
 import {
 	NODE_ID_ATTRIBUTE,
@@ -102,6 +102,13 @@ export interface DecoratedBlock {
 	readonly topLevel: boolean;
 	readonly nodeTag: string;
 	readonly badge: SVGGElement | null;
+}
+
+/** 登记表里的全部目录，按 `catalogRef` 去重（真机与仿真共用同一份技能库）。 */
+function deviceCatalogs(): readonly CapabilityCatalog[] {
+	const byRef = new Map<string, CapabilityCatalog>();
+	for (const device of DEVICES) byRef.set(device.catalog.catalogRef, device.catalog);
+	return [...byRef.values()];
 }
 
 export function useBlocklyCanvas(): UseBlocklyCanvasResult {
@@ -189,7 +196,8 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 	const activeCapability = computed(() => {
 		const parameters = activeNode.value?.parameters;
 		const ref = parameters === undefined ? null : capabilityRefFromParameters(parameters);
-		return ref === null ? null : (findCapability(PHASE1_ROBOT_CATALOG, ref) ?? null);
+		const catalog = store.declarationCatalog.value;
+		return ref === null || catalog === null ? null : (findCapability(catalog, ref) ?? null);
 	});
 
 	/**
@@ -308,12 +316,19 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 	function render(declaration: WorkflowDeclaration): void {
 		const current = workspace.value;
 		if (current === null) return;
+		// 目录是设备属性：这份实现该用哪份目录查，由**声明出生时那台设备**决定（见 state/document.ts）。
+		// 画布上不写死任何一份常量——写死了换设备之后就会拿另一份尺子去查同一个能力名。
+		const catalog = store.declarationCatalog.value;
+		if (catalog === null) {
+			status.value = 'idle';
+			return;
+		}
 		rendering = true;
 		try {
 			const result = renderDeclaration({
 				workspace: current,
 				declaration,
-				catalog: PHASE1_ROBOT_CATALOG,
+				catalog,
 				selectedNodeId: store.selectedNodeId.value,
 				blockIds,
 			});
@@ -359,7 +374,9 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 		const base = store.declaration.value;
 		if (current === null || base === null || writeSuspended.value) return;
 
-		const result = compileWorkspace({ workspace: current, base, catalog: PHASE1_ROBOT_CATALOG });
+		const catalog = store.declarationCatalog.value;
+		if (catalog === null) return;
+		const result = compileWorkspace({ workspace: current, base, catalog });
 		blockIndex.value = result.index;
 		compileDiagnostics.value = [...result.diagnostics];
 
@@ -454,7 +471,10 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 			// 主题色从 theme.css 的 --cc-* 变量读；缺变量就抛，画布不画。
 			const palette: ThemePalette = paletteFromDocument();
 			badgeColors = badgePalette(palette);
-			const current = createCanvasWorkspace(host, palette, PHASE1_ROBOT_CATALOG);
+			// 建画布时把**登记表里的全部目录**都给上：注册积木类型要全覆盖（换设备之后会画另一种块），
+			// 主题的块色也是按这一串推的——只给一份，另一种块在主题里找不到样式就会被画成黑的。
+			// 声明该用哪份目录去查，仍然由每次 render 时的 `store.declarationCatalog` 决定。
+			const current = createCanvasWorkspace(host, palette, deviceCatalogs());
 			workspace.value = current;
 			stopObserving = observe(current);
 			resizeObserver = new ResizeObserver(() => {
