@@ -52,6 +52,8 @@ flowchart LR
 
 ### 1.1 输入：机器人任务协议（一期）
 
+> **这一节描述的是一台设备的任务格式，不是全局格式。** 见 §1.4。
+
 输入是一份任务 JSON。
 
 ```jsonc
@@ -166,6 +168,33 @@ flowchart LR
 
 所以验收口径是：**除身份字段（`id`、`digest`）外，同一输入两次产出的规范化产物字节相同**。
 测试与重放注入确定性 ID 工厂（带种子），生产走随机。
+
+### 1.4 任务格式由设备决定
+
+一期协议的七个动作是**一台设备的词汇表**，不是全局词汇表。RoboFrame 的设备听的不是那七个动作，
+而是一串技能调用，技能写在它的 `robot_config` SSOT 里，随时可以增删。
+把词汇表写死在核心，等于「设备决定了目录，却决定不了任务长什么样」——那条链是断的。
+
+所以任务格式是**设备属性**：
+
+| 格式 | 谁用 | 长什么样 | 判据 |
+| --- | --- | --- | --- |
+| `phase1_task` | 一期设备（差速底盘 + 六轴臂） | §1.1 那份，七个固定动作 | `validateTask`（逐条对照 `task_protocol.py`） |
+| `skill_plan` | RoboFrame SO-101（真机 / 虚拟设备） | `{schemaVersion, robot, description?, plan:[{step:'skill', skill, params?, timeoutSec?}]}` | `validateSkillPlan`：**技能与参数照设备目录判** |
+
+三条规矩：
+
+- **两条路汇进同一份声明。** 三个视图（流程 / 积木 / 代码）完全不知道任务原来是哪种格式——
+  分叉点只有一处，见 `packages/task-import/src/format.ts`。
+- **尺子跟着声明走。** 第二道闸用「这份声明出生时那台设备的格式」量，不是用当前选中的设备。
+  生成之后换设备，声明还是上一台产出的；这时拿新尺子量，改一个数字都会被莫名其妙拒掉。
+- **`skill_plan` 的形状沿用前作集成设计稿 §7.3 的 `RobotTaskPlan`**，两处偏离写在
+  `packages/contracts/src/skill-plan.ts` 头上：参数名照抄上游（`motion_direction` 而不是示例里的
+  `motionDirection`），`step` 这一版只认 `'skill'`（`primitive` / `wait` / `skipIf` 还没做，
+  遇到就明确报错，不静默当技能）。
+
+设备这一层因此是「一份目录 + 一套任务格式 + 一个去处」。同一份 SO-101 技能库发给真机还是发给仿真，
+换的只是去处——这也是 RoboFrame 自己的分法。
 
 ---
 

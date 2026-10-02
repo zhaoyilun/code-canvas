@@ -8,6 +8,7 @@
 	},
 	"catalog": {
 		"catalogRef": "roboframe_so101_single_arm",
+		"robotName": "so101_single_arm",
 		"displayName": "SO-101 单臂（RoboFrame 技能库）",
 		"revisionRef": "roboframe-so101_single_arm-8f364c3f",
 		"namedPoses": [

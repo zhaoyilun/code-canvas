@@ -210,6 +210,11 @@ export const capabilityCatalogSchema = z
 		catalogRef: stableReferenceSchema,
 		/** 面向人的一句话说明，例如「差速底盘」或「SO-101 单臂」。 */
 		displayName: z.string().trim().min(1).max(64),
+		/**
+		 * 设备自己认的名字（上游 `robot_config` 里的 `robot.name`，如 `so101_single_arm`）。
+		 * 设备自己的任务格式要写这个名字，校验时拿它对照——对不上就说明计划编给了别的机器。
+		 */
+		robotName: z.string().trim().min(1).max(64).optional(),
 		revisionRef: stableReferenceSchema,
 		primitives: z.array(primitiveSpecSchema).min(1),
 		capabilities: z.array(capabilitySpecSchema).min(1),

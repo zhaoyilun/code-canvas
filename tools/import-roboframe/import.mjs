@@ -227,6 +227,7 @@ const output = {
 	},
 	catalog: {
 		catalogRef: `roboframe_${robotName}`,
+		robotName,
 		displayName:
 			robotName === 'so101_single_arm' ? 'SO-101 单臂（RoboFrame 技能库）' : `${robotName}（RoboFrame 技能库）`,
 		revisionRef: `roboframe-${robotName}-${commit.slice(0, 8)}`,

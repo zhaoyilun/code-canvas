@@ -16,6 +16,7 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@codecanvas/capabilities": "workspace:*",
     "vitest": "^5.0.3"
   }
 }
