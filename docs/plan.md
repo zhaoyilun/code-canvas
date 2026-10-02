@@ -9,8 +9,9 @@
 
 | 图面区域 | 模块 | 本阶段 |
 | --- | --- | --- |
-| 左图标栏 + 顶部五 tab | `studio/shell` | 做（后三个 tab 先空着） |
-| 顶部自然语言条 + GENERATE PLAN + 转译链 | —— | **不做**（上游那一步不归我们） |
+| 品牌条 + 固定分区（**无 tab**） | `studio/shell` | **做**（切换机制已拆除） |
+| 任务 JSON 输入带 + 转译链指示 | `studio/shell` | **做**（本阶段唯一真实输入口） |
+| 右栏上方：虚拟设备 | `studio/views/right` | **做**（常驻；如实说明设备层未接入） |
 | 左栏 Blockly 画布 | `studio/views/blockly` + `packages/blockly-toolkit` | **做**（唯一可写） |
 | 中栏 Workflow 画布 | `studio/views/flow` | **做** |
 | 两栏之间的虚线 | 生成期映射表 + `studio/views/mapping` | **做** |

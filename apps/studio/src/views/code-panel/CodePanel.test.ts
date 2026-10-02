@@ -5,7 +5,7 @@
  * 2. 安全限值看得见；
  * 3. **改一个参数 → 面板那行的数字跟着变**（这条联动是 M2 的核心）；
  * 4. `selectedNodeId` 变化 → 对应行高亮；
- * 5. 它在 blockly / workflow 两个 tab 下真的被挂上了（接线测试）。
+ * 5. 它在右栏里常驻——右栏是固定分区，它总被挂上（接线测试）。
  */
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -151,22 +151,19 @@ describe('CodePanel', () => {
 	});
 });
 
-describe('接线：代码面板在 blockly / workflow 两个 tab 下都在', () => {
-	it.each(['blockly', 'workflow'] as const)('%s tab 下挂的是代码面板', (tab) => {
-		const wrapper = mount(RightPanel, { props: { tab } });
+// 右栏改成固定分区（上虚拟设备、下代码面板）之后，这条接线断言随之反过来：它总在。
+// 右栏自身的布局与顺序另见 `views/right/RightPanel.test.ts`。
+describe('接线：代码面板在右栏常驻（固定布局，不挑状态）', () => {
+	it('右栏里挂的就是代码面板', () => {
+		const wrapper = mount(RightPanel);
 		expect(wrapper.find('.code-panel').exists()).toBe(true);
 		expect(wrapper.text()).toContain('move(linear=0.2, angular=0.0, duration=5.0)');
 	});
 
-	it.each(['plan', 'simulation', 'hardware'] as const)('%s tab 下不是代码面板', (tab) => {
-		const wrapper = mount(RightPanel, { props: { tab } });
-		expect(wrapper.find('.code-panel').exists()).toBe(false);
-	});
-
-	it('右栏仍是右栏：代码面板接住了 right-panel 的测试 id、类与宽度约束', () => {
-		const wrapper = mount(RightPanel, { props: { tab: 'workflow' } });
+	it('右栏仍是右栏：测试 id 在容器上，代码面板在它里面', () => {
+		const wrapper = mount(RightPanel);
 		const root = wrapper.get('[data-testid="right-panel"]');
-		expect(root.classes()).toContain('code-panel');
 		expect(root.classes()).toContain('right-panel');
+		expect(root.find('.code-panel').exists()).toBe(true);
 	});
 });

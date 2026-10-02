@@ -8,6 +8,8 @@ import { ALLOWED_ACTIONS } from '@codecanvas/contracts';
 import {
 	THEME_VARIABLES,
 	ThemePaletteError,
+	colourDistance,
+	contrastRatio,
 	fontSizeFromVariable,
 	missingThemeVariables,
 	paletteFromCssVariables,
@@ -19,8 +21,10 @@ import {
 	CODE_CANVAS_THEME_NAME,
 	buildInjectOptions,
 	createCodeCanvasTheme,
+	gridColour,
 } from '../src/theme';
 import { actionBlockType, blockStyleName } from '../src/blocks';
+import { MIN_READABLE_SCALE } from '../src/viewport';
 import { fixturePalette, fixtureSource, themeCssText, toolboxBlockTypes } from './fixtures';
 
 const SOURCE_DIR = new URL('../src/', import.meta.url);
@@ -103,6 +107,59 @@ describe('主题', () => {
 			throw new Error('工具箱应当是个对象');
 		}
 		expect(toolboxBlockTypes(toolbox)).toEqual(ALLOWED_ACTIONS.map(actionBlockType));
+	});
+});
+
+describe('配色对比与网格', () => {
+	/** 七个动作的主色：一眼要能认出不同动作，且在深色底上看得清。 */
+	const primaries = (): readonly { action: string; colour: string }[] => {
+		const palette = fixturePalette();
+		return ALLOWED_ACTIONS.map((action) => ({ action, colour: palette[ACTION_COLOUR_VARIABLE[action]] }));
+	};
+
+	it('每个动作色与工作区底色的对比度都过 4.5', () => {
+		const background = fixturePalette()['--cc-surface-sunken'];
+		for (const { action, colour } of primaries()) {
+			const ratio = contrastRatio(colour, background);
+			expect(ratio, `${action} 的对比度算不出来`).not.toBeNull();
+			expect(ratio ?? 0, `${action} (${colour}) 与底色的对比度`).toBeGreaterThanOrEqual(4.5);
+		}
+	});
+
+	it('七个动作色两两分得开（不是一片青）', () => {
+		const colours = primaries();
+		for (const first of colours) {
+			for (const second of colours) {
+				if (first.action === second.action) continue;
+				const distance = colourDistance(first.colour, second.colour);
+				expect(distance, `${first.action} vs ${second.action}`).not.toBeNull();
+				// 换标签、换变量名都骗不过它：只有真换了色值距离才动。
+				expect(distance ?? 0, `${first.action} 与 ${second.action} 太像了`).toBeGreaterThanOrEqual(32);
+			}
+		}
+	});
+
+	it('点阵网格往底色方向压暗：比原来淡，但还看得见', () => {
+		const palette = fixturePalette();
+		const background = palette['--cc-surface-sunken'];
+		const grid = gridColour(palette);
+		// 还在——网格是坐标参考，不能抹掉。
+		expect(grid).not.toBe(background);
+		const dimmed = contrastRatio(grid, background) ?? 0;
+		const before = contrastRatio(palette['--cc-line-strong'], background) ?? 0;
+		expect(dimmed).toBeLessThan(before);
+		expect(dimmed).toBeLessThan(1.6);
+	});
+
+	it('注入选项里的网格色就是混出来的那个，不另写色值', () => {
+		const palette = fixturePalette();
+		expect(buildInjectOptions(palette).grid?.colour).toBe(gridColour(palette));
+	});
+
+	it('初始缩放的下限留在可读范围，不靠 startScale 硬撑', () => {
+		const options = buildInjectOptions(fixturePalette());
+		expect(options.zoom?.startScale).toBeGreaterThanOrEqual(MIN_READABLE_SCALE);
+		expect(options.zoom?.minScale ?? 0).toBeLessThanOrEqual(MIN_READABLE_SCALE);
 	});
 });
 

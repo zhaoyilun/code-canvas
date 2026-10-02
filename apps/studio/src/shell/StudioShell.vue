@@ -1,34 +1,31 @@
 <script setup lang="ts">
-// 左栏：积木画布 / 流程画布 / 右栏检查器。三块都自管内容，此处只摆放。
-import { computed, ref } from 'vue';
-import IconRail from './IconRail.vue';
+/**
+ * 固定分区外壳：顶部品牌条 + 输入带 → 三栏（积木 / 流程 / 右栏）→ 底部状态条。
+ *
+ * 这里**没有 tab**：三栏是同时可见的固定布局，不存在「切下面显示什么」这回事，
+ * 所以既没有 tab 条也没有图标栏——不摆点了没用的控件。
+ *
+ * 右栏（虚拟设备 + 代码面板）自管内容，此处只摆放。
+ */
+import { ref } from 'vue';
 import StatusBar from './StatusBar.vue';
-import TopTabBar from './TopTabBar.vue';
-import { DEFAULT_TAB, isTabId, labelOf, type TabId } from './tabs';
+import TaskInputBand from './TaskInputBand.vue';
 import { FIRST_REACHABLE_STAGE } from './stages';
 import BlocklyView from '../views/blockly/BlocklyView.vue';
 import FlowView from '../views/flow/FlowView.vue';
 import RightPanel from '../views/right/RightPanel.vue';
 
-const activeTab = ref<TabId>(DEFAULT_TAB);
 const currentStage = ref<string>(FIRST_REACHABLE_STAGE);
-
-// 当前工作区名交给底部状态条，RUN/STOP 的日志里带上它，便于确认 tab 生效。
-const activeLabel = computed(() => labelOf(activeTab.value));
-
-// 子组件只抛字符串，在这里收窄一次，非法值忽略。
-function selectTab(id: string): void {
-	if (isTabId(id)) {
-		activeTab.value = id;
-	}
-}
 </script>
 
 <template>
 	<div class="shell">
-		<TopTabBar :active="activeTab" @select="selectTab" />
+		<header class="topbar">
+			<span class="brand">CodeCanvas</span>
+			<span class="brand-sub">STUDIO</span>
+		</header>
+		<TaskInputBand />
 		<div class="studio-body">
-			<IconRail :active="activeTab" @select="selectTab" />
 			<main class="workspace">
 				<section class="pane pane-canvas">
 					<BlocklyView />
@@ -37,15 +34,11 @@ function selectTab(id: string): void {
 					<FlowView />
 				</section>
 				<aside class="pane pane-inspector">
-					<RightPanel :tab="activeTab" />
+					<RightPanel />
 				</aside>
 			</main>
 		</div>
-		<StatusBar
-			:current-stage="currentStage"
-			:context="activeLabel"
-			@select-stage="currentStage = $event"
-		/>
+		<StatusBar :current-stage="currentStage" @select-stage="currentStage = $event" />
 	</div>
 </template>
 
@@ -56,6 +49,30 @@ function selectTab(id: string): void {
 	height: 100%;
 	min-height: 0;
 	background: var(--cc-bg);
+}
+
+.topbar {
+	display: flex;
+	align-items: center;
+	gap: var(--cc-space-2);
+	flex: 0 0 auto;
+	height: var(--cc-topbar-h);
+	padding: 0 var(--cc-space-4) 0 var(--cc-space-3);
+	background: var(--cc-surface);
+	border-bottom: 1px solid var(--cc-line);
+}
+
+.brand {
+	font-size: var(--cc-fs-lg);
+	font-weight: 650;
+	letter-spacing: 0.01em;
+	color: var(--cc-text);
+}
+
+.brand-sub {
+	font-size: var(--cc-fs-xs);
+	letter-spacing: 0.18em;
+	color: var(--cc-accent-dim);
 }
 
 .studio-body {
@@ -92,7 +109,7 @@ function selectTab(id: string): void {
 
 /*
  * 窄窗退化：三栏不再挤成一团。给工作区一个下限宽度并允许横向滚动，
- * 外壳本身不塌（页面仍可见左栏 + 顶部 + 底部）。
+ * 外壳本身不塌（页面仍可见顶部 + 底部）。
  */
 @media (max-width: 1100px) {
 	.workspace {

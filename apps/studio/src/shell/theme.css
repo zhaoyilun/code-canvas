@@ -64,6 +64,18 @@
 	--cc-right-w: 360px;
 	--cc-topbar-h: 48px;
 	--cc-statusbar-h: 44px;
+	/* 上层输入带：粘贴 / 拖入任务 JSON 的那条。诊断出来时它会自己长高。 */
+	--cc-inputband-h: 88px;
+
+	/*
+	 * 积木动作色（**仅追加**，上面已有的变量一个没动；只给积木画布用）。
+	 * 原先是清一色的青，跟深色底对比弱，七种动作也分不出来；这里按动作语义铺开色相，
+	 * 明度与 --cc-accent 同族，深色底上每一块都看得清（对比度由 blockly-toolkit 的测试钉住）。
+	 */
+	--cc-block-turn: #4fb8ff;
+	--cc-block-guard: #ffb648;
+	--cc-block-arm: #56d97f;
+	--cc-block-arm6: #a98bff;
 }
 
 * {

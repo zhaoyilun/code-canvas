@@ -13,6 +13,7 @@ import type { Diagnostic, WorkflowDeclaration } from '@codecanvas/contracts';
 import {
 	compileWorkspace,
 	createCanvasWorkspace,
+	fitWorkspaceToContent,
 	highlightBlock,
 	observeWorkspace,
 	paletteFromDocument,
@@ -66,6 +67,9 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 	let timer: ReturnType<typeof setTimeout> | null = null;
 	let stopObserving: (() => void) | null = null;
 	let resizeObserver: ResizeObserver | null = null;
+	/** 自适应还没量成（容器当时没尺寸）——留给 ResizeObserver 补一次。 */
+	let needsFit = false;
+	let fitFrame: number | null = null;
 
 	const writeSuspended = computed(() => renderDiagnostics.value.some((item) => item.severity === 'error'));
 
@@ -116,12 +120,28 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 			blockCount.value = result.index.order.length;
 			syncedDigest = declaration.digest;
 			status.value = writeSuspended.value ? 'broken' : 'synced';
-			// 不 zoomToFit：它会把宽积木压到最小比例，字就看不清了。
-			// 视口固定比例起步，缩放与滚动条由用户自己来（zoom/move 选项已开）。
 			Blockly.svgResize(current);
+			// 重画之后把整条链量一遍：按内容定一个装得下、又不会小到看不清的比例，并居中。
+			// 只在这里（以及第一次量到容器尺寸时）做——用户自己缩放/拖动过的视图不会被抢回去。
+			requestFit(current);
 		} finally {
 			rendering = false;
 		}
+	}
+
+	/**
+	 * 自适应要等排版落定：`onMounted` 那一刻容器可能还是零尺寸，积木也还没算出几何，
+	 * 这时候量出来是 0，比例就定不下来。所以放到下一帧再量，并留一个「还没量成」的标记，
+	 * 由 ResizeObserver 在第一次真正拿到尺寸时补一次。量成之后就不再动视口。
+	 */
+	function requestFit(current: Blockly.WorkspaceSvg): void {
+		needsFit = true;
+		if (fitFrame !== null) cancelAnimationFrame(fitFrame);
+		fitFrame = requestAnimationFrame(() => {
+			fitFrame = null;
+			Blockly.svgResize(current);
+			if (fitWorkspaceToContent(current) !== null) needsFit = false;
+		});
 	}
 
 	/** 工作区 → 声明（唯一写路径）。 */
@@ -203,6 +223,8 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 			});
 			resizeObserver = new ResizeObserver(() => {
 				Blockly.svgResize(current);
+				// 第一次真正量到尺寸时补一次自适应（挂载那一刻容器还没排版）。
+				if (needsFit && fitWorkspaceToContent(current) !== null) needsFit = false;
 			});
 			resizeObserver.observe(host);
 
@@ -219,6 +241,7 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 
 	onBeforeUnmount(() => {
 		if (timer !== null) clearTimeout(timer);
+		if (fitFrame !== null) cancelAnimationFrame(fitFrame);
 		stopObserving?.();
 		resizeObserver?.disconnect();
 		workspace.value?.dispose();

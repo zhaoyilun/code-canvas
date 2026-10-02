@@ -14,6 +14,7 @@
 export * from './palette';
 export * from './blocks';
 export * from './theme';
+export * from './viewport';
 export * from './identity';
 export * from './render';
 export * from './compile';

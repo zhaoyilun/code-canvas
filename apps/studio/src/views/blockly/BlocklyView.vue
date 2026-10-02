@@ -113,6 +113,18 @@ const taskName = computed(() => store.declaration.value?.name ?? '');
 	height: 100%;
 }
 
+/*
+ * 单位标签：`@codecanvas/blockly-toolkit` 的 BLOCK_UNIT_CLASS 挂在块内那个只读小标签上。
+ * Blockly 块内文字共用一个字号，这里按 class 单独压到 --cc-fs-xs——
+ * 单位因此不占主行宽度，`angular (rad/s)` 那种截断不会再发生（单位也留在 tooltip 里）。
+ */
+.canvas-host :deep(.cc-block-unit) {
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-xs);
+	fill: var(--cc-text);
+	opacity: 0.85;
+}
+
 .canvas-failure {
 	position: absolute;
 	inset: auto var(--cc-space-3) var(--cc-space-3) var(--cc-space-3);

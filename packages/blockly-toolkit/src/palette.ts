@@ -11,6 +11,7 @@ export const THEME_VARIABLES = [
 	'--cc-surface',
 	'--cc-surface-raised',
 	'--cc-surface-sunken',
+	'--cc-line',
 	'--cc-line-strong',
 	'--cc-text',
 	'--cc-text-dim',
@@ -19,6 +20,11 @@ export const THEME_VARIABLES = [
 	'--cc-accent-strong',
 	'--cc-accent-dim',
 	'--cc-danger',
+	/* 动作色：turn / stop_if_obstacle / arm_joint / arm6_joints 用（见 theme.css 末尾）。 */
+	'--cc-block-turn',
+	'--cc-block-guard',
+	'--cc-block-arm',
+	'--cc-block-arm6',
 	'--cc-font-mono',
 	'--cc-fs-md',
 ] as const;
@@ -70,4 +76,57 @@ export const paletteFromDocument = (
 export const fontSizeFromVariable = (palette: ThemePalette): number | null => {
 	const parsed = Number.parseFloat(palette['--cc-fs-md'] ?? '');
 	return Number.isFinite(parsed) ? parsed : null;
+};
+
+/** 十六进制色值（三位或六位，带不带井号都行）→ 0-255 三通道；解析不出返回 null（不猜一个颜色）。 */
+const rgbOf = (colour: string): readonly [number, number, number] | null => {
+	const hex = colour.trim().replace(/^#/, '');
+	const full =
+		hex.length === 3
+			? hex
+					.split('')
+					.map((char) => `${char}${char}`)
+					.join('')
+			: hex;
+	if (!/^[0-9a-fA-F]{6}$/.test(full)) return null;
+	return [
+		Number.parseInt(full.slice(0, 2), 16),
+		Number.parseInt(full.slice(2, 4), 16),
+		Number.parseInt(full.slice(4, 6), 16),
+	];
+};
+
+/** WCAG 口径的相对亮度。 */
+const relativeLuminance = (colour: string): number | null => {
+	const rgb = rgbOf(colour);
+	if (rgb === null) return null;
+	const [r, g, b] = rgb.map((channel) => {
+		const value = channel / 255;
+		return value <= 0.03928 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4;
+	}) as [number, number, number];
+	return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+};
+
+/**
+ * 两个色值的对比度（WCAG，1..21）。用来把「积木在底色上看得清」变成可核对的数：
+ * 光靠眼睛看截图说「更清楚了」不算证据。
+ */
+export const contrastRatio = (foreground: string, background: string): number | null => {
+	const front = relativeLuminance(foreground);
+	const back = relativeLuminance(background);
+	if (front === null || back === null) return null;
+	const lighter = Math.max(front, back);
+	const darker = Math.min(front, back);
+	return (lighter + 0.05) / (darker + 0.05);
+};
+
+/**
+ * 两个色值在 RGB 空间里差多远（0..约 441）。给「七个动作色两两分得开」当机械口径：
+ * 换标签、换变量名都骗不过它，只有真换了色值距离才动。
+ */
+export const colourDistance = (first: string, second: string): number | null => {
+	const a = rgbOf(first);
+	const b = rgbOf(second);
+	if (a === null || b === null) return null;
+	return Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]);
 };

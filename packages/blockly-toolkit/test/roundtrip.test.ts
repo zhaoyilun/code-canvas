@@ -74,6 +74,20 @@ describe('声明 → 工作区', () => {
 		expect(blockOfStep('s7').getFieldValue('joint6')).toBe(50);
 	});
 
+	it('单位小标签与数值字段并存，且不参与序列化（写回只认协议字段）', () => {
+		const move = blockOfStep('s1');
+		// 单位是紧跟输入框的只读小标签，数值字段照旧。
+		expect(move.getField('unit_linear')?.getText()).toBe('m/s');
+		expect(move.getField('linear')?.getText()).toBe('0.2');
+		const state = Blockly.serialization.blocks.save(move);
+		if (state === null) throw new Error('积木应当能序列化出状态');
+		expect(Object.keys(state.fields ?? {}).sort()).toEqual(['angular', 'duration', 'linear']);
+
+		const compiled = compileWorkspace({ workspace, base, idFactory: ID_FACTORY });
+		const parameters = compiled.declaration?.nodes[0]?.parameters ?? {};
+		expect(Object.keys(parameters).some((key) => key.startsWith('unit_'))).toBe(false);
+	});
+
 	it('blockId ↔ nodeId ↔ stepId 三个 id 都对得上，块 id 由工厂分配', () => {
 		const identity = rendered.index.byNodeId.get(base.nodes[0]?.id ?? '');
 		expect(identity?.nodeId).toBe(base.nodes[0]?.id);
