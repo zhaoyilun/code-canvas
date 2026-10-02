@@ -1,0 +1,23 @@
+{
+  "name": "@codecanvas/blockly-toolkit",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@codecanvas/contracts": "workspace:*",
+    "@codecanvas/task-import": "workspace:*",
+    "blockly": "^12.5.1"
+  },
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "vitest": "^5.0.3"
+  }
+}
