@@ -272,3 +272,30 @@ describe('任务生成 · 请求与结果', () => {
 		expect(messages[1]?.content).toBe('看一眼桌面，往前挪一点');
 	});
 });
+
+describe('技能计划的提示词要说清怎么分叉', () => {
+	const prompt = skillPlanSystemPrompt(ROBOFRAME_SO101_CATALOG);
+
+	it('写出了 if 步的形状与条件的三段取值', () => {
+		expect(prompt).toContain('"step":"if"');
+		expect(prompt).toContain('"then"');
+		expect(prompt).toContain('"else"');
+		// 条件只有一种：上一步成没成。模型不许自己发明别的字段。
+		expect(prompt).toContain('"field":"last.success"');
+		expect(prompt).toContain('"op"');
+		expect(prompt).toContain('"value"');
+	});
+
+	it('说了两臂的约束（then 非空、else 可无但给了不能空、能嵌套）', () => {
+		expect(prompt).toMatch(/then[^。\n]*至少一步/);
+		expect(prompt).toMatch(/else[^。\n]*可以不给/);
+		expect(prompt).toMatch(/嵌套|再套|八层/);
+	});
+
+	it('没有为分叉手写任何技能名——技能清单照旧只有目录那一份', () => {
+		// 提示词里出现过的技能名，必须每一个都在目录里；反过来目录里的每一个也都要出现。
+		for (const capability of ROBOFRAME_SO101_CATALOG.capabilities) {
+			expect(prompt).toContain(capability.capabilityRef);
+		}
+	});
+});

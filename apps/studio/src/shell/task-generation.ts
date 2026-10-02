@@ -83,9 +83,15 @@ ${
 		? 'robot必须是这台机器人自己认的名字。'
 		: `robot必须是"${robot}"，别的名字一律不行。`
 }
-plan的每一步形如{"step":"skill","skill":"技能名","params":{…}}，skill只能从下面这份清单里选；
+plan的每一步要么是一次技能调用，要么是一次条件分叉。
+技能调用形如{"step":"skill","skill":"技能名","params":{…}}，skill只能从下面这份清单里选；
 这一步要限时就加"timeoutSec"（秒，正数），它跟"params"平级，不要放进params里。
 params里的参数名与类型只能用下面列出的那些；标着「没有参数」的技能不要给params。
+条件分叉形如{"step":"if","condition":{…},"then":[…],"else":[…]}
+——condition 只能是 {"field":"last.success","op":"=="或"!=","value":true或false}，
+说的是「上一步成功了没有」；then 里至少一步，else 可以不给，给了就不能空；
+两臂里放的是同样的步骤，所以分叉还能再套分叉（最多八层）。
+只在「下一步做什么要看上一步成没成」时才用分叉；顺着的动作就直接排下去，不要硬套。
 description可选，给这个任务起一个中文名。
 可用技能：
 ${skills}`;
