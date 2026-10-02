@@ -18,7 +18,7 @@
 import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import type { CapabilityCatalog, CapabilitySpec, SkillPlan } from '@codecanvas/contracts';
 import { RoboFrameExecutor, type RunOutcome, type StepEvent } from './roboframe/executor';
-import { runPlan, type PlanRunner } from './roboframe/plan';
+import { runPlan, type PlanRunner, type PlanStepReport } from './roboframe/plan';
 import { SerialQueue } from './roboframe/queue';
 import { createKit } from './scene/kit';
 import { So101Rig } from './scene/so101';
@@ -30,7 +30,7 @@ import { createStage, disposeStageResources } from './scene/stage';
  * 让另一个应用去 deep import `roboframe/executor`，等于把内部路径写进它的 import 表。
  */
 export type { RunOutcome, StepEvent, StepState } from './roboframe/executor';
-export type { PlanRunOutcome } from './roboframe/plan';
+export type { PlanRunOutcome, PlanStepReport, BranchArm } from './roboframe/plan';
 
 /** 舞台的最小动作面（真身是 `scene/stage.ts` 的 `createStage`；测试注入假的，别让单测去跑真 WebGL） */
 export interface StageHandle {
@@ -92,6 +92,14 @@ export interface VirtualDevice {
 	reset(): void;
 	/** 每走一步回调一次（state 为 'done'/'failed' 时才推，别把 'running' 也推）。 */
 	onStep(listener: (event: StepEvent) => void): () => void;
+	/**
+	 * 计划自己的每一步：技能步与分支步各报一次，`running` 也推。
+	 *
+	 * 为什么和 `onStep` 的纪律不一样（那边只推终态）：分支步**没有原语事件**，
+	 * 而「走了哪条臂」只有它的 `running` 说得清——界面要在这条臂开始跑的时候就把它写出来，
+	 * 等臂跑完再写，那一行就会排在它自己的子步骤后面（读起来像是先有结果后有原因）。
+	 */
+	onPlanStep(listener: (event: PlanStepReport) => void): () => void;
 	/** 卸载：停掉渲染循环、摘掉 DOM、释放 WebGL 资源。 */
 	dispose(): void;
 	/** 当前画面尺寸（面板要显示「多大」时用得上；测试与验收也读它）。 */
@@ -177,6 +185,7 @@ export function mountVirtualDevice(host: HTMLElement, options: VirtualDeviceMoun
 	// 先建步骤账本：执行器的 onStep 要往里记，监听者（面板/日志）照着它渲染
 	const stepEvents: StepEvent[] = [];
 	const stepListeners = new Set<(event: StepEvent) => void>();
+	const planStepListeners = new Set<(event: PlanStepReport) => void>();
 	const queueListeners = new Set<(state: { running: string | null; queued: readonly string[] }) => void>();
 	const queueErrorListeners = new Set<(message: string) => void>();
 	const frameListeners = new Set<FrameListener>();
@@ -275,6 +284,10 @@ export function mountVirtualDevice(host: HTMLElement, options: VirtualDeviceMoun
 			stepListeners.add(listener);
 			return () => stepListeners.delete(listener);
 		},
+		onPlanStep(listener) {
+			planStepListeners.add(listener);
+			return () => planStepListeners.delete(listener);
+		},
 		onFrame(listener) {
 			frameListeners.add(listener);
 			return () => frameListeners.delete(listener);
@@ -301,7 +314,14 @@ export function mountVirtualDevice(host: HTMLElement, options: VirtualDeviceMoun
 			return enqueue(`计划 ${plan.description ?? '(未命名)'}`, async () => {
 				executor.beginRun(); // 同上：连续执行，不回零
 				const runner: PlanRunner = executor;
-				const outcome = await runPlan(plan, { catalog, runner });
+				const outcome = await runPlan(plan, {
+					catalog,
+					runner,
+					// 计划步事件照原样往外推（含 `running`）：界面靠它写「第 N 步 · 分支 · 走 then」那几行
+					onPlanStep: (event) => {
+						for (const listener of planStepListeners) listener(event);
+					},
+				});
 				return {
 					kind: 'plan' as const,
 					// 计划的结局就是「几步成了」：`run` 的门面按它判成败
@@ -326,6 +346,7 @@ export function mountVirtualDevice(host: HTMLElement, options: VirtualDeviceMoun
 			cancelFrame();
 			observer.disconnect();
 			stepListeners.clear();
+			planStepListeners.clear();
 			queueListeners.clear();
 			queueErrorListeners.clear();
 			frameListeners.clear();

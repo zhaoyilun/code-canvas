@@ -13,13 +13,18 @@
  * 3. **校验**：`validateSkillPlan(plan, { catalog })`，判据是**当前设备的目录**；不合法就把诊断原样显示，一步不跑；
  * 4. **执行**：只有合法才 `device.run(plan)`，失败即停（重试与否由技能自己的 `recovery_policy` 决定）。
  *
+ * 步骤行说的是**计划步**（技能步与分支步各一行），不是技能内部的**原语**：
+ * 分支步没有原语事件，而「走了哪条臂」只有计划步事件说得清；顺带也修掉了老毛病——
+ * 一个技能里几条原语会把同一句「第 N 步」连写三遍。行里的缩进与 `path`（`2.then.0` 这种）
+ * 说明它在计划的哪一格，`第 N 步` 说的仍是它所属的**顶层**步。
+ *
  * 3D 那部分的可视尺寸：由右栏宽度与这个面板的 flex 比例决定，
  * 全部走 `--cc-*` 变量（右栏栏宽是 `--cc-right-w`），组件里不写死像素。
  */
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
 import { ROBOFRAME_SO101_CATALOG, ROBOFRAME_SO101_PROVENANCE } from '@codecanvas/capabilities';
 import { validateSkillPlan, type Diagnostic, type SkillPlan } from '@codecanvas/contracts';
-import { mountVirtualDevice, type MountedVirtualDevice, type StepEvent } from '@codecanvas/robot3d';
+import { mountVirtualDevice, type BranchArm, type MountedVirtualDevice, type PlanStepReport } from '@codecanvas/robot3d';
 import { findTaskFormat, type TaskFormatRef } from '@codecanvas/task-import';
 import IconBase from '../../shell/IconBase.vue';
 import type { StudioDevice } from '../../shell/devices';
@@ -39,10 +44,48 @@ const doc = useStudioDocument();
 const host = ref<HTMLElement | null>(null);
 /** 卸载之后不该再有人碰它（重建时先 dispose 旧的） */
 const device3d = shallowRef<MountedVirtualDevice | null>(null);
-const stepLines = ref<{ index: number; skill: string; state: string }[]>([]);
+
+/**
+ * 面板上的一行 = 计划里的一步（技能步或分支步）。
+ * `path` 是它在计划树里的位置（`2.then.0`，与代码/积木两侧同一个口径），
+ * 它同时决定缩进级数——所以行的键、层级、身份都是这一个字段说清的。
+ */
+interface StepRow {
+	readonly path: string;
+	/** 所属的顶层步（1 基）：臂里的步报的也是它，于是「第 N 步」这条主语仍然成立。 */
+	readonly index: number;
+	readonly label: string;
+	readonly depth: number;
+	readonly state: string;
+}
+
+const stepLines = ref<StepRow[]>([]);
 const runDiagnostics = ref<readonly Diagnostic[]>([]);
 const status = ref('未运行');
 const busy = ref(false);
+
+/** 分支走了哪条臂。`null` 是事实不是「不知道」：条件不成立又没给否则，这一步什么也不做。 */
+function armText(arm: BranchArm): string {
+	if (arm === 'then') return '走 then';
+	if (arm === 'else') return '走 else';
+	return '条件不成立，没有否则';
+}
+
+/** 路径里 `.then` / `.else` 的个数就是层级数（`'2'` 是顶层，`'2.then.0'` 在臂里第一层）。 */
+function armDepth(path: string): number {
+	return path.split('.').filter((segment) => segment === 'then' || segment === 'else').length;
+}
+
+/** 一条计划步事件 → 一行。分支行说的是「走了哪条臂」，技能行就是那一步的技能名。 */
+function rowOf(event: PlanStepReport): StepRow {
+	return {
+		path: event.path,
+		index: event.index,
+		label: event.step.step === 'if' ? `分支 · ${armText(event.arm)}` : event.step.skill,
+		depth: armDepth(event.path),
+		state: event.state,
+	};
+}
 
 const isVirtual = computed(() => props.device?.virtual === true);
 const declaration = computed(() => doc.declaration.value);
@@ -110,14 +153,9 @@ async function runPlan(): Promise<void> {
 	busy.value = true;
 	status.value = `执行中：${String(plan.plan.length)} 步`;
 	try {
+		// 步骤行由挂载时订的那个监听器写（计划步事件一路推过来），这里不再照着结果重画一遍：
+		// 两个来源写同一块地方，早晚会有一处忘了更新。
 		const result = await target.run(plan);
-		// 每一步一行：`planIndex` 是这一步在**计划**里的序号（跑计划时执行器会盖上），
-		// 直接跑单个能力时才退到能力内部的原语序号——两种口径不许混着显示。
-		stepLines.value = result.steps.map((event) => ({
-			index: event.planIndex ?? event.index,
-			skill: event.capabilityRef,
-			state: event.state,
-		}));
 		status.value = result.ok
 			? `计划完成：${String(plan.plan.length)} 步都走通了。`
 			: `计划中断：${result.reason ?? '某一步没做成'}（失败即停，不自动重试）`;
@@ -144,13 +182,16 @@ function syncMount(): void {
 	const element = host.value;
 	if (element === null) return;
 	device3d.value = mountVirtualDevice(element);
-	// 每走一步（done / failed）在面板上留一行；`running` 不会被推过来。
-	// 序号取 `planIndex`（计划里的第几步）；单个能力没有计划序号，退到它自己的原语序号。
-	device3d.value.onStep((event: StepEvent) => {
-		stepLines.value = [
-			...stepLines.value,
-			{ index: event.planIndex ?? event.index, skill: event.capabilityRef, state: event.state },
-		];
+	/*
+	 * 每走一步在面板上留一行——**计划步**那种一步（技能步 / 分支步），不是技能内部的原语：
+	 * 分支步没有原语事件，而「走了哪条臂」只有它说得清。
+	 * `running` 也收：`path` 相同就是同一行，起点与终点写同一格（换状态而不是添一行），
+	 * 于是臂一开始跑，那一行就在它自己的子步骤**上面**出现了。
+	 */
+	device3d.value.onPlanStep((event: PlanStepReport) => {
+		const row = rowOf(event);
+		const at = stepLines.value.findIndex((line) => line.path === row.path);
+		stepLines.value = at < 0 ? [...stepLines.value, row] : stepLines.value.map((line, i) => (i === at ? row : line));
 	});
 }
 
@@ -260,10 +301,21 @@ onBeforeUnmount(() => {
 				</li>
 			</ul>
 
-			<!-- 每走一步一行：第 N 步 · 技能名 · 结果 -->
+			<!--
+				每走一步一行：`第 N 步 · 技能名 / 分支 · 走哪条臂 · 结果`。
+				臂里的步靠 `--step-depth` 缩进，行首那个 `2.then.0` 是它的路径（层级凭据）。
+			-->
 			<ol v-if="stepLines.length > 0" class="device-steps" data-testid="virtual-device-steps">
-				<li v-for="(line, i) in stepLines" :key="`${String(i)}-${line.skill}`" :data-state="line.state">
-					第 {{ line.index }} 步 · {{ line.skill }} · {{ line.state }}
+				<li
+					v-for="line in stepLines"
+					:key="line.path"
+					:data-state="line.state"
+					:data-path="line.path"
+					:data-depth="line.depth"
+					:style="{ '--step-depth': line.depth }"
+				>
+					<span v-if="line.depth > 0" class="step-path">{{ line.path }}</span>
+					第 {{ line.index }} 步 · {{ line.label }} · {{ line.state }}
 				</li>
 			</ol>
 		</div>
@@ -468,6 +520,10 @@ onBeforeUnmount(() => {
 	color: var(--cc-danger);
 }
 
+/*
+ * 步骤账本：这块本来就小（右栏最贵的地方是 3D），所以它自己的高度封在上限里、内部滚动——
+ * 计划嵌套深了行会变多，长出去的是**这一块里面**，不是整个面板。
+ */
 .device-steps {
 	margin: 0;
 	padding-left: var(--cc-space-4);
@@ -476,6 +532,17 @@ onBeforeUnmount(() => {
 	overflow-y: auto;
 	font: var(--cc-fs-xs) / 1.5 var(--cc-font-mono);
 	color: var(--cc-text-dim);
+}
+
+/* 缩进按 `--step-depth`（路径里 `.then` / `.else` 的层数）算：臂里的步一眼看得出在第几层 */
+.device-steps li {
+	padding-left: calc(var(--step-depth, 0) * var(--cc-space-3));
+}
+
+/* 路径是层级凭据（`2.then.0`），不是读数：压暗、跟在缩进后面，别抢「第 N 步」那句主语 */
+.step-path {
+	margin-right: var(--cc-space-1);
+	color: var(--cc-text-faint);
 }
 
 .device-steps li[data-state='failed'] {

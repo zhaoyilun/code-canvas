@@ -319,6 +319,43 @@ describe('mountVirtualDevice · 跑一步', () => {
 		device.dispose();
 	});
 
+	it('分支步真的跑：臂里的技能照常下发，计划步事件说清走了哪条臂', async () => {
+		const { device, frames } = mountOn(hostOf());
+		const reported: string[] = [];
+		device.onPlanStep((event) => reported.push(`${event.path} ${event.arm ?? '-'} ${event.state}`));
+
+		const pending = device.run({
+			schemaVersion: 1,
+			robot: 'test_arm',
+			plan: [
+				{ step: 'skill', skill: 'greet' },
+				{
+					step: 'if',
+					condition: { field: 'last.success', op: '==', value: true },
+					then: [{ step: 'skill', skill: 'never_reached' }],
+					else: [{ step: 'skill', skill: 'bad_move' }],
+				},
+			],
+		});
+		await frames.pump(200, pending);
+		const outcome = await pending;
+
+		expect(outcome.ok).toBe(true);
+		// 真执行器那边跑到的是 then 臂里的技能，else 臂一步没动
+		expect(device.stepEvents.map((event) => event.capabilityRef)).toEqual(['greet', 'never_reached']);
+		// 计划步事件：分支那一步（`1`）与它臂里的那一步（`1.then.0`）都在，臂写在事件上
+		expect(reported).toEqual([
+			'0 - running',
+			'0 - done',
+			'1 then running',
+			'1.then.0 - running',
+			'1.then.0 - done',
+			'1 then done',
+		]);
+
+		device.dispose();
+	});
+
 	it('取消订阅之后不再收到事件', async () => {
 		const { device, frames } = mountOn(hostOf());
 		const listener = vi.fn();

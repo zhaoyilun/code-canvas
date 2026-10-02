@@ -15,7 +15,8 @@
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ROBOFRAME_SO101_CATALOG, ROBOFRAME_SO101_PROVENANCE } from '@codecanvas/capabilities';
-import { computeWorkflowDigest, type WorkflowNode } from '@codecanvas/contracts';
+import { computeWorkflowDigest, type SkillPlanStep, type WorkflowNode } from '@codecanvas/contracts';
+import type { BranchArm, PlanStepReport } from '@codecanvas/robot3d';
 import { SAMPLE_SKILL_PLAN_JSON } from '../../state/sample-skill-plan';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import { setSelectedDevice } from '../../shell/devices';
@@ -30,6 +31,7 @@ const mountVirtualDevice = vi.fn((_host: HTMLElement) => ({
 	run: vi.fn().mockResolvedValue({ ok: true, steps: [] }),
 	reset: vi.fn(),
 	onStep: vi.fn(() => () => {}),
+	onPlanStep: vi.fn(() => () => {}),
 	dispose: vi.fn(),
 	size: { width: 0, height: 0 },
 }));
@@ -42,6 +44,7 @@ type FakeDevice = {
 	run: ReturnType<typeof vi.fn>;
 	reset: ReturnType<typeof vi.fn>;
 	onStep: ReturnType<typeof vi.fn>;
+	onPlanStep: ReturnType<typeof vi.fn>;
 	dispose: ReturnType<typeof vi.fn>;
 	size: { width: number; height: number };
 };
@@ -351,8 +354,9 @@ describe('右栏 · 虚拟设备的 3D 与运行按钮', () => {
 		await wrapper.vm.$nextTick();
 
 		const instance = lastMount();
-		// 挂载时就订了「每走一步」——面板上那几行「第 N 步 · 技能 · 结果」靠它
-		expect(instance.onStep).toHaveBeenCalled();
+		// 挂载时就订了「每一步」——面板上那几行「第 N 步 · …」靠它
+		// （计划步那种一步：分支步没有原语事件，只有它说得清走了哪条臂）
+		expect(instance.onPlanStep).toHaveBeenCalled();
 
 		const button = wrapper.get('[data-testid="virtual-device-run"]');
 		expect(button.attributes('disabled')).toBeUndefined();
@@ -363,6 +367,105 @@ describe('右栏 · 虚拟设备的 3D 与运行按钮', () => {
 		const plan = instance.run.mock.calls[0]?.[0] as { robot: string; plan: unknown[] };
 		expect(plan.robot).toBe('so101_single_arm');
 		expect(plan.plan).toHaveLength(3);
+		wrapper.unmount();
+	});
+});
+
+/**
+ * 步骤行：面板说的是**计划步**（技能步与分支步各一行）。
+ *
+ * 事件的来路是挂载时订的那个 `onPlanStep`（真身见 `apps/robot3d/src/mount.ts`：
+ * `runPlan` 的每一步照原样推出来，`running` 也推）。这里直接喂事件，
+ * 钉的是面板怎么把那几条事件画成行——分支说清走了哪条臂、臂里的步带路径与层级。
+ */
+describe('右栏 · 步骤行（分支走哪条臂、臂里的步在第几层）', () => {
+	/** 一步计划步事件。默认是终态，需要时改 `state`（`running` 与 `done` 写的是同一行）。 */
+	const stepEvent = (
+		path: string,
+		index: number,
+		arm: BranchArm,
+		step: SkillPlanStep,
+		state: 'running' | 'done' | 'failed' = 'done',
+	): PlanStepReport => ({ kind: 'plan-step', path, index, total: 3, arm, step, taskId: `t-${path}`, state });
+
+	const IF_STEP: SkillPlanStep = {
+		step: 'if',
+		condition: { field: 'last.success', op: '==', value: true },
+		then: [{ step: 'skill', skill: 'wave_hello' }],
+	};
+
+	/** 面板挂载时订的那个监听器——面板上的步骤行就是它写出来的。 */
+	const pushPlanStep = (instance: FakeDevice, event: PlanStepReport): void => {
+		const listener = instance.onPlanStep.mock.calls.at(-1)?.[0] as ((e: PlanStepReport) => void) | undefined;
+		if (listener === undefined) throw new Error('面板没有订 onPlanStep');
+		listener(event);
+	};
+
+	/** 面板上的步骤行（空白压成一个空格：模板里的换行与缩进不该进断言）。 */
+	const rows = (wrapper: ReturnType<typeof panel>): string[] =>
+		wrapper
+			.findAll('[data-testid="virtual-device-steps"] li')
+			.map((item) => item.text().replace(/\s+/g, ' ').trim());
+
+	const mountedPanel = async (): Promise<{ wrapper: ReturnType<typeof panel>; instance: FakeDevice }> => {
+		const wrapper = panel();
+		setSelectedDevice('so101_sim');
+		await wrapper.vm.$nextTick();
+		const instance = lastMount();
+		// 挂上来的那一刻还没有任何步骤行（行是事件写出来的）
+		expect(wrapper.find('[data-testid="virtual-device-steps"]').exists()).toBe(false);
+		return { wrapper, instance };
+	};
+
+	const stepPathRows = (wrapper: ReturnType<typeof panel>) =>
+		wrapper.findAll('[data-testid="virtual-device-steps"] li');
+
+	it('分支步那一行说清走了哪条臂（then / else / 没有否则各一种说法）', async () => {
+		const { wrapper, instance } = await mountedPanel();
+
+		pushPlanStep(instance, stepEvent('0', 1, 'then', IF_STEP));
+		pushPlanStep(instance, stepEvent('1', 2, 'else', IF_STEP));
+		// 条件不成立又没有 else：`arm` 是 null，面板要把「什么也不做」这句话说出来，不留白
+		pushPlanStep(instance, stepEvent('2', 3, null, IF_STEP));
+		await wrapper.vm.$nextTick();
+
+		expect(rows(wrapper)).toEqual([
+			'第 1 步 · 分支 · 走 then · done',
+			'第 2 步 · 分支 · 走 else · done',
+			'第 3 步 · 分支 · 条件不成立，没有否则 · done',
+		]);
+		wrapper.unmount();
+	});
+
+	it('臂里的步显示层级：缩进按路径的层数、行首带路径，且 running → done 改的是同一行', async () => {
+		const { wrapper, instance } = await mountedPanel();
+
+		// 顶层分支（第 1 层），臂里一步（第 2 层），再嵌一层臂里的一步（第 3 层）
+		pushPlanStep(instance, stepEvent('1', 2, 'then', IF_STEP, 'running'));
+		pushPlanStep(instance, stepEvent('1.then.0', 2, null, { step: 'skill', skill: 'wave_hello' }, 'running'));
+		pushPlanStep(instance, stepEvent('1.then.0', 2, null, { step: 'skill', skill: 'wave_hello' }, 'done'));
+		pushPlanStep(instance, stepEvent('1.then.0.else.1', 2, null, { step: 'skill', skill: 'inspect_scene' }));
+		await wrapper.vm.$nextTick();
+
+		// 同一格的两条事件（running / done）写的是同一行——不是重复两行
+		expect(rows(wrapper)).toEqual([
+			'第 2 步 · 分支 · 走 then · running',
+			'1.then.0 第 2 步 · wave_hello · done',
+			'1.then.0.else.1 第 2 步 · inspect_scene · done',
+		]);
+
+		const items = stepPathRows(wrapper);
+		// 层级：缩进靠这个数算（CSS 里 `calc(var(--step-depth) * var(--cc-space-3))`），深度本身也能读
+		expect(items.map((item) => item.attributes('data-depth'))).toEqual(['0', '1', '2']);
+		// 缩进真的挂在这一行上（CSS 里 `calc(var(--step-depth) * var(--cc-space-3))`），不只是个属性
+		expect(items.map((item) => (item.element as HTMLElement).style.getPropertyValue('--step-depth'))).toEqual([
+			'0',
+			'1',
+			'2',
+		]);
+		// 路径进 `data-path`：面板上的行与代码/积木两侧说的是同一格
+		expect(items.map((item) => item.attributes('data-path'))).toEqual(['1', '1.then.0', '1.then.0.else.1']);
+		expect(items.map((item) => item.attributes('data-state'))).toEqual(['running', 'done', 'done']);
 		wrapper.unmount();
 	});
 });

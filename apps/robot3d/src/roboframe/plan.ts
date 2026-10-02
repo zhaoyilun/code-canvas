@@ -14,6 +14,7 @@ import {
 	DiagnosticCollector,
 	SKILL_PLAN_SCHEMA_VERSION,
 	validateSkillPlan,
+	type BranchCondition,
 	type CapabilityCatalog,
 	type CapabilitySpec,
 	type Diagnostic,
@@ -31,6 +32,8 @@ export interface PlanRunner {
 	 * 换一步：把「计划第几步 + task_id」盖在这一步的每个事件上。
 	 * 界面靠它显示「第 N 步」，不必拿能力内部的**原语**序号去猜计划的进度
 	 * （两者会重号：三个各含一条原语的技能连着跑，会显示成三次「第 1 步」）。
+	 * `planIndex` 是这一步所属的**顶层**步（1 基）：臂里的步也报它所属的那个顶层步——
+	 * 「第 2 步」这条主语因此仍然成立，是臂里的哪一格由计划步事件自己的 `path` 说。
 	 * 可选：只关心动作的替身（测试里的假 runner）可以不管它。
 	 */
 	setPlanContext?(context: { readonly planIndex: number; readonly taskId: string }): void;
@@ -82,76 +85,179 @@ export function intake(text: string, catalog: CapabilityCatalog): IntakeResult {
 	return result.ok ? { ok: true, plan: result.plan } : { ok: false, diagnostics: result.diagnostics };
 }
 
+/**
+ * 分支走了哪条臂。
+ *
+ * `null` 有两种场合，都是事实而不是「不知道」：技能步没有臂；分支步条件不成立又没给 `else`
+ * ——那时这一步**什么也不做**，而它确实走完了（报 `done`）。
+ */
+export type BranchArm = 'then' | 'else' | null;
+
 export type PlanStepEvent =
-	| { readonly kind: 'plan-step'; readonly index: number; readonly total: number; readonly step: SkillPlanStep; readonly taskId: string; readonly state: 'running' | 'done' | 'failed' }
+	| {
+			readonly kind: 'plan-step';
+			/**
+			 * 这一步所属的**顶层**步（1 基）。臂里的步报的是它所属的那个顶层步——
+			 * 「第 2 步」这条主语因此仍然成立，臂里的哪一格由 `path` 说。
+			 */
+			readonly index: number;
+			/** **顶层**步数（计划最外层那几条）。臂里的步不算进来：臂不一定走，把它算进来是个猜数。 */
+			readonly total: number;
+			/**
+			 * 这一步在计划树里的位置：`'2'` / `'2.then.0'` / `'2.then.0.else.1'`。
+			 * 第一段是**顶层下标（0 基）**，与 studio 那边的 `stepPath` 同一套写法
+			 * （所以两个界面说的是同一格）。嵌套的层级数就是路径里 `.then` / `.else` 的个数。
+			 */
+			readonly path: string;
+			/** 分支走了哪条臂；技能步一律 `null`（见 `BranchArm`）。 */
+			readonly arm: BranchArm;
+			readonly step: SkillPlanStep;
+			readonly taskId: string;
+			readonly state: 'running' | 'done' | 'failed';
+	  }
 	| { readonly kind: 'primitive'; readonly index: number; readonly total: number; readonly step: SkillPlanStep; readonly event: unknown };
+
+/**
+ * `plan-step` 那一支：界面（studio 右栏、机器人应用自己的日志）真正消费的形状——
+ * 「第几步、树里哪一格、走了哪条臂、成没成」这四件事都在这一支里。
+ */
+export type PlanStepReport = Extract<PlanStepEvent, { kind: 'plan-step' }>;
 
 export interface PlanRunOutcome {
 	readonly ok: boolean;
+	/** 真正走完的**顶层**步数（0 ~ `total`）。臂里的步不单独记——它们算进所属的那一步。 */
 	readonly completed: number;
+	/** **顶层**步数。与 `completed` 同一个口径：两个数说的是同一件事的两个端，所以「已完成 N / 共 M」不会出现 N > M。 */
 	readonly total: number;
 	readonly reason?: string;
 }
 
-/** 计划号：RoboFrame bridge 的 task_id 口径（1~128 字符、唯一） */
+/** 同一毫秒里多次 `makeTaskId` 时用来分开（进程内单调递增，只为了让 id 唯一）。 */
+let taskSeq = 0;
+
+/**
+ * 计划号：RoboFrame bridge 的 task_id 口径（1~128 字符、唯一）。
+ *
+ * 「唯一」这一条要自己守：`index` 现在说的是**所属的顶层步**，臂里连着几步的 `index` 会重号，
+ * 而同一毫秒里生成的两个 id 只有时间戳可分辨——那正是 `taskSeq` 存在的理由（bridge 那边
+ * 拿 task_id 认任务，重号就是把两次执行记成一次）。
+ */
 export function makeTaskId(index: number): string {
-	const stamp = Date.now().toString(36);
+	const stamp = `${Date.now().toString(36)}-${(taskSeq++).toString(36)}`;
 	return `plan-${String(index)}-${stamp}`.slice(0, 128);
 }
+
+/** 分支条件成立吗。`field` 只有 `last.success`、取值只能是布尔（契约的判据），所以这里就是一次相等比较。 */
+const conditionHolds = (condition: BranchCondition, lastSuccess: boolean): boolean =>
+	condition.op === '==' ? lastSuccess === condition.value : lastSuccess !== condition.value;
+
+/**
+ * 嵌套步的失败原因要点名它是哪一步。
+ *
+ * 顶层步不加前缀：「第 2 步」本来就说得清，理由原样透出更好读。臂里的步不属于任何单独的
+ * 「第 N 步」，路径是唯一说得清位置的东西，所以给它加上 `1.then.0（wave_hello）` 这样一段。
+ */
+const atPath = (path: string, reason: string, skill: string | null = null): string =>
+	path.includes('.') ? `失败在 ${path}${skill === null ? '' : `（${skill}）`}：${reason}` : reason;
+
+/** 一步跑完的结局：成了往下走，没成就把原因带出去（失败即停）。 */
+type StepResult = { readonly ok: true } | { readonly ok: false; readonly reason: string };
 
 /**
  * 逐步执行计划。失败即停——不自动重试（与 bridge 的纪律一致：是否重试由技能自己的
  * `recovery_policy` 决定，不由执行器替它拿主意）。
  *
- * ⚠ **分支步（`step: 'if'`）这一版不执行**：3D 执行器还没有"按上一步的结果选一条臂"这件事
- * （它现在的语义是"照目录逐条下发原语"，加分支要先定清楚"上一步的结果"在 3D 里怎么读）。
- * 但不能静默跳过——跳到这一步就把它当成一次**如实的中断**报出来（`plan.step.branch.unsupported`），
- * 前几步的账照记（`completed` 如实数）。界面与调用方都拿得到这句话，不会以为计划跑完了。
+ * **分支真的跑**：走到 `step: 'if'` 就按 `last.success` 判条件、选一条臂、在臂里继续跑
+ * （臂里还能再有 `if`，深度由契约挡在 8 层）。分支自己也算一步，照报 `running` → `done`/`failed`，
+ * 并在事件里说清走了哪条臂（`arm`）与它在树的哪一格（`path`）。
+ *
+ * **`last.success` 的语义**：最近一次**真正执行过的技能步**成没成。两个要点：
+ * ① 分支步自己不更新它——它不是技能步，没做成的事由臂里的那一步去说；
+ * ② **计划第一步之前没有上一步，那时算 `true`**（什么都还没失败），于是「第一步就是
+ * `if`」的计划按条件成立那条路走。这个初值在 `plan.test.ts` 里钉着。
+ *
+ * 顶层一格 → 臂里一格 → 再嵌套，走的是同一个递归（`runStep` / `runSteps`），
+ * 所以「怎么算一步、怎么报一步」只有一份。
  */
 export async function runPlan(
 	plan: SkillPlan,
 	options: {
 		readonly catalog: CapabilityCatalog;
 		readonly runner: PlanRunner;
-		readonly onPlanStep?: (event: Extract<PlanStepEvent, { kind: 'plan-step' }>) => void;
+		readonly onPlanStep?: (event: PlanStepReport) => void;
 		readonly onPrimitive?: (event: Extract<PlanStepEvent, { kind: 'primitive' }>) => void;
 	},
 ): Promise<PlanRunOutcome> {
 	const { catalog, runner } = options;
 	const total = plan.plan.length;
 	runner.beginRun();
+	/** 见上面「`last.success` 的语义」：初值是 `true`（第一步之前没有任何上一步） */
+	let lastSuccess = true;
 	let completed = 0;
 
+	/** 跑一串步骤（顶层那一串，或某条臂里那一串）。任何一步没成就把原因原样往上带。 */
+	const runSteps = async (steps: readonly SkillPlanStep[], basePath: string, topIndex: number): Promise<StepResult> => {
+		for (const [index, step] of steps.entries()) {
+			// 路径第一段是顶层下标（0 基）；臂里的步在父路径后面接 `.then.0` / `.else.1`
+			const path = basePath === '' ? String(index) : `${basePath}.${String(index)}`;
+			const result = await runStep(step, path, topIndex);
+			if (!result.ok) return result;
+		}
+		return { ok: true };
+	};
+
+	/** 跑一步：技能步下发一次能力调用，分支步判条件选一条臂再往下递归。 */
+	const runStep = async (step: SkillPlanStep, path: string, topIndex: number): Promise<StepResult> => {
+		const taskId = makeTaskId(topIndex);
+		const header = { kind: 'plan-step', index: topIndex, total, path, step, taskId } as const;
+
+		if (step.step === 'skill') {
+			options.onPlanStep?.({ ...header, arm: null, state: 'running' });
+
+			// 判别在前：目录里没有这个技能就不假装调用过
+			const capability = catalog.capabilities.find((c) => c.capabilityRef === step.skill);
+			if (!capability) {
+				options.onPlanStep?.({ ...header, arm: null, state: 'failed' });
+				return { ok: false, reason: atPath(path, `目录里没有技能 ${step.skill}`) };
+			}
+			const params: Record<string, unknown> = step.params ?? {};
+			// 换一步就重设上下文：这一步的原语事件因此带上「所属顶层步」与 task_id
+			runner.setPlanContext?.({ planIndex: topIndex, taskId });
+			const outcome = await runner.run(capability, params);
+			lastSuccess = outcome.ok;
+			options.onPlanStep?.({ ...header, arm: null, state: outcome.ok ? 'done' : 'failed' });
+			if (!outcome.ok) {
+				return { ok: false, reason: atPath(path, outcome.reason ?? `${step.skill} 未完成`, step.skill) };
+			}
+			return { ok: true };
+		}
+
+		/*
+		 * 分支：条件在这一步**开头**就判定了，所以 `running` 事件里已经带着走哪条臂——
+		 * 界面因此能在这一步开始时就把「走 then」写出来，而不是等臂跑完才知道。
+		 * 条件不成立又没有 `else` 时 `arm` 是 `null`：这一步什么也不做，但它确实走完了（报 `done`）。
+		 */
+		const arm: BranchArm = conditionHolds(step.condition, lastSuccess)
+			? 'then'
+			: step.else === undefined
+				? null
+				: 'else';
+		options.onPlanStep?.({ ...header, arm, state: 'running' });
+		if (arm === null) {
+			options.onPlanStep?.({ ...header, arm, state: 'done' });
+			return { ok: true };
+		}
+
+		// 臂里的步照常执行（臂里还能再有 if）：路径接着往下长，顶层步号不变
+		const nested = await runSteps(arm === 'then' ? step.then : (step.else ?? []), `${path}.${arm}`, topIndex);
+		options.onPlanStep?.({ ...header, arm, state: nested.ok ? 'done' : 'failed' });
+		return nested;
+	};
+
 	for (const [index, step] of plan.plan.entries()) {
-		const taskId = makeTaskId(index + 1);
-		const header = { kind: 'plan-step', index: index + 1, total, step, taskId, state: 'running' } as const;
-		options.onPlanStep?.(header);
-
-		// 判别在前：这一版能执行的只有技能步，别的步型都不许当成技能蒙混过去
-		if (step.step !== 'skill') {
-			options.onPlanStep?.({ ...header, state: 'failed' });
-			return {
-				ok: false,
-				completed,
-				total,
-				reason: '计划里有条件分支步（step: "if"），3D 执行器这一版不执行分支——分步执行是下一步的事',
-			};
-		}
-
-		const capability = catalog.capabilities.find((c) => c.capabilityRef === step.skill);
-		if (!capability) {
-			options.onPlanStep?.({ ...header, state: 'failed' });
-			return { ok: false, completed, total, reason: `目录里没有技能 ${step.skill}` };
-		}
-		const params = (step.params ?? {}) as Record<string, unknown>;
-		// 换一步就重设上下文：这一步的原语事件因此带上「计划第几步」与 task_id
-		runner.setPlanContext?.({ planIndex: index + 1, taskId });
-		const outcome = await runner.run(capability, params);
-		const done = { ...header, state: outcome.ok ? ('done' as const) : ('failed' as const) };
-		options.onPlanStep?.(done);
-		if (!outcome.ok) {
-			return { ok: false, completed, total, reason: outcome.reason ?? `${step.skill} 未完成` };
-		}
+		// 顶层步号就是它自己的下标 + 1；臂里的步由 `runSteps` 把同一个号带下去
+		const result = await runStep(step, String(index), index + 1);
+		if (!result.ok) return { ok: false, completed, total, reason: result.reason };
 		completed += 1;
 	}
 	return { ok: true, completed, total };
