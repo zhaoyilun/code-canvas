@@ -4,12 +4,18 @@
  *
  * - 文本由 `@codecanvas/code-render` 从声明渲染而来，规则追到校验器；这里不拼一个字符的调用。
  * - `selectedNodeId` 变化时高亮它渲染出的那几行，并把它滚进视野。
+ * - **点一行就是选那一步**（M3 的三向联动）：行 → `store.select(nodeId)`，积木与流程卡片同时亮。
+ *   行 ↔ nodeId 的映射来自 `renderDeclaration()` 的 `lines[].nodeId`，不在这里重算一遍。
+ * - 每行调用前面挂序号徽标（`SequenceBadge`，与流程卡片同一个组件、与积木同一组 `--cc-seq-*` 变量）；
+ *   首行是任务名注释，不属于任何步骤，所以没有徽标——这也是「徽标只落在调用行上」的判据。
  * - 安全限值常驻底部——限值躺在 JSON 里没人知道，等于没有。
  * - 声明换了（改积木写回 → `applyDeclaration`）这里跟着重算，这就是「改参数 → 数字跟着变」。
  */
 import { computed, nextTick, ref, watch } from 'vue';
 import { renderDeclaration, spanOfNode } from '@codecanvas/code-render';
 import { useStudioDocument } from '../../state/document';
+import { stepNumbersOf } from '../shared/sequence-badge';
+import SequenceBadge from '../shared/SequenceBadge.vue';
 
 const doc = useStudioDocument();
 
@@ -21,7 +27,27 @@ const selectedSpan = computed(() => {
 	return id === null ? null : spanOfNode(program.value, id);
 });
 
+/** 步骤序数：按声明顺序（第 n 个节点是第 n 步），与积木徽标、流程卡片同一个口径。 */
+const stepNumbers = computed(() => stepNumbersOf(doc.declaration.value?.nodes ?? []));
+
 const isHighlighted = (nodeId: string | null): boolean => nodeId !== null && nodeId === activeNodeId.value;
+
+/** 这一行的步骤序数；注释行（nodeId 为 null）返回 null —— 徽标只落在调用行上。 */
+const stepIndexOf = (nodeId: string | null): number | null =>
+	nodeId === null ? null : (stepNumbers.value.get(nodeId) ?? null);
+
+/** 点一行 = 选那一步。只推 nodeId，blockId 由积木那侧按映射表解析（与流程卡片同一条路）。 */
+function selectLine(nodeId: string | null): void {
+	if (nodeId === null) return;
+	doc.select(nodeId);
+}
+
+/** 键盘可达：行是 button 语义，Enter/Space 与点击同义。 */
+function onLineKeydown(event: KeyboardEvent, nodeId: string | null): void {
+	if (event.key !== 'Enter' && event.key !== ' ') return;
+	event.preventDefault();
+	selectLine(nodeId);
+}
 
 const scroller = ref<HTMLElement | null>(null);
 
@@ -67,13 +93,40 @@ const warnings = computed(() => program.value.diagnostics);
 							'is-call': line.kind === 'call',
 							'is-unsupported': line.kind === 'unsupported',
 							'is-active': isHighlighted(line.nodeId),
+							'is-clickable': line.nodeId !== null,
 						}"
 						:data-line="line.line"
 						:data-node-id="line.nodeId ?? undefined"
 						:data-kind="line.kind"
 					>
-						<span class="cp-ln" aria-hidden="true">{{ line.line }}</span>
-						<code class="cp-src">{{ line.text === '' ? ' ' : line.text }}</code>
+						<!--
+							整行是一个按钮（不是给 li 挂 click）：行的命中区就是整行，键盘能 Tab 到、Enter 选中，
+							ol/li 的列表语义也不受影响。注释行没有 nodeId，不是按钮，也就点不动。
+						-->
+						<button
+							v-if="line.nodeId !== null"
+							type="button"
+							class="cp-hit"
+							:data-testid="line.kind === 'call' ? 'code-call-line' : undefined"
+							:data-step="stepIndexOf(line.nodeId) ?? undefined"
+							:aria-current="isHighlighted(line.nodeId) ? 'true' : undefined"
+							@click="selectLine(line.nodeId)"
+							@keydown="onLineKeydown($event, line.nodeId)"
+						>
+							<SequenceBadge
+								v-if="stepIndexOf(line.nodeId) !== null"
+								:index="stepIndexOf(line.nodeId) as number"
+								:active="isHighlighted(line.nodeId)"
+								testid="code-line-index"
+							/>
+							<span class="cp-ln" aria-hidden="true">{{ line.line }}</span>
+							<code class="cp-src">{{ line.text === '' ? ' ' : line.text }}</code>
+						</button>
+
+						<div v-else class="cp-hit is-static">
+							<span class="cp-ln" aria-hidden="true">{{ line.line }}</span>
+							<code class="cp-src">{{ line.text === '' ? ' ' : line.text }}</code>
+						</div>
 					</li>
 				</ol>
 			</div>
@@ -189,17 +242,50 @@ const warnings = computed(() => program.value.diagnostics);
 
 .cp-line {
 	display: flex;
-	align-items: flex-start;
-	gap: var(--cc-space-2);
-	padding: 0 var(--cc-space-3);
-	border-left: 2px solid transparent;
+	align-items: stretch;
 }
 
-/* 高亮：左侧亮条 + 底色，行号与代码一起变亮——`.is-active` 必须排在 `.is-call` 之后，
-   否则同权重下调用行的常态色会盖掉高亮色。 */
+/*
+ * 行内命中区（一个 reset 干净的按钮）：整行可点，键盘也能 Tab 到。注释行用同一个类但带 `.is-static`，
+ * 于是两种行的排版、行号对齐、折行行为完全一致——差别只在「能不能点」，不在长得不一样。
+ */
+.cp-hit {
+	display: flex;
+	align-items: flex-start;
+	gap: var(--cc-space-2);
+	flex: 1 1 auto;
+	min-width: 0;
+	margin: 0;
+	padding: 0 var(--cc-space-3);
+	font: inherit;
+	color: inherit;
+	text-align: left;
+	background: none;
+	border: none;
+	border-left: var(--cc-highlight-border-width) solid transparent;
+}
+
+.cp-hit:not(.is-static) {
+	cursor: pointer;
+}
+
+.cp-hit:focus-visible {
+	outline: var(--cc-highlight-border-width) solid var(--cc-highlight);
+	outline-offset: calc(-1 * var(--cc-highlight-border-width));
+}
+
+/*
+ * 高亮：**与另外两栏同一套**——同一条强调色、同一个描边粗细（都是 `--cc-highlight*`），
+ * 连徽标的选中态都是同一个（`SequenceBadge` 的 active）。`.is-active` 必须排在 `.is-call` 之后，
+ * 否则同权重下调用行的常态色会盖掉高亮色。
+ */
 .cp-line.is-active {
 	background: var(--cc-accent-veil);
-	border-left-color: var(--cc-accent);
+}
+
+.cp-line.is-active .cp-hit {
+	border-left-color: var(--cc-highlight);
+	box-shadow: var(--cc-highlight-glow);
 }
 
 .cp-ln {

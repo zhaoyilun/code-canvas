@@ -8,6 +8,7 @@
 import { computed } from 'vue';
 import { LIMIT_LABELS, type Diagnostic, type NumericLimitName, type WorkflowNode } from '@codecanvas/contracts';
 import { useStudioDocument } from '../../state/document';
+import SequenceBadge from '../shared/SequenceBadge.vue';
 import {
 	actionLabel,
 	declarationLimits,
@@ -97,7 +98,15 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 						@keydown.space.prevent="selectNode(card.node.id)"
 					>
 						<header class="card-head">
-							<span class="card-index" data-testid="flow-node-index">{{ card.index + 1 }}</span>
+							<!--
+								序号徽标（M3）：`card.index + 1` 就是这一步在声明里的序数，
+								与积木上的徽标、代码行的徽标是同一个数（三处同一个组件/同一组变量）。
+							-->
+							<SequenceBadge
+								:index="card.index + 1"
+								:active="isSelected(card.node.id)"
+								testid="flow-node-index"
+							/>
 							<div class="card-headings">
 								<span class="card-action" data-testid="flow-node-action" :data-action="card.actionName">
 									{{ card.action }}
@@ -288,36 +297,24 @@ const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === n
 	outline-offset: 2px;
 }
 
+/*
+ * 卡片高亮（M3）：**与另外两栏同一套**——同一条强调色（`--cc-highlight`）、同一个描边粗细
+ * （`--cc-highlight-border-width`）、同一个辉光，都不写字面值。
+ *
+ * 不直接把 border-color 改掉而是加 box-shadow 内描边：卡片本来就带 1px 边框，
+ * 直接换色只是「变亮了一点」，说不上「选中」；内描边叠上去，边框仍占 1px、观感上多出一圈 2px 强调色。
+ */
 .node-card.selected {
-	border-color: var(--cc-accent);
-	box-shadow: 0 0 0 1px var(--cc-accent), 0 0 16px var(--cc-accent-glow);
+	border-color: var(--cc-highlight);
+	box-shadow:
+		inset 0 0 0 var(--cc-highlight-border-width) var(--cc-highlight),
+		var(--cc-highlight-glow);
 }
 
 .card-head {
 	display: flex;
 	align-items: center;
 	gap: var(--cc-space-2);
-}
-
-.card-index {
-	display: flex;
-	align-items: center;
-	justify-content: center;
-	flex: 0 0 auto;
-	width: 20px;
-	height: 20px;
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-text-dim);
-	background: var(--cc-surface-sunken);
-	border: 1px solid var(--cc-line-strong);
-	border-radius: 50%;
-}
-
-.node-card.selected .card-index {
-	color: var(--cc-surface-sunken);
-	background: var(--cc-accent);
-	border-color: var(--cc-accent-strong);
 }
 
 .card-headings {

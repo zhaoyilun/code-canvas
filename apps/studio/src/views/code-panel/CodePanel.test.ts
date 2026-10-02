@@ -5,7 +5,9 @@
  * 2. 安全限值看得见；
  * 3. **改一个参数 → 面板那行的数字跟着变**（这条联动是 M2 的核心）；
  * 4. `selectedNodeId` 变化 → 对应行高亮；
- * 5. 它在右栏里常驻——右栏是固定分区，它总被挂上（接线测试）。
+ * 5. M3 的第三个入口：**点一行就是选那一步**（推共享状态，另两栏据此高亮），
+ *    且序号徽标只落在调用行上、与流程卡片同一个组件；
+ * 6. 它在右栏里常驻——右栏是固定分区，它总被挂上（接线测试）。
  */
 import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it } from 'vitest';
@@ -68,6 +70,26 @@ describe('CodePanel', () => {
 		]);
 		expect(wrapper.findAll('li.cp-line.is-call')).toHaveLength(4);
 		expect(wrapper.text()).toContain('4 个调用');
+	});
+
+	it('序号徽标只落在调用行上，且按声明顺序是 1/2/3/4（首行注释没有徽标）', () => {
+		const wrapper = mount(CodePanel);
+
+		// 徽标总数 = 调用行数（注释行不属于任何步骤）
+		const badges = wrapper.findAll('[data-testid="code-line-index"]');
+		expect(badges).toHaveLength(4);
+		expect(badges.map((badge) => badge.text())).toEqual(['1', '2', '3', '4']);
+
+		// 每个徽标都落在带 nodeId 的调用行里
+		expect(badges.map((badge) => badge.attributes('data-seq'))).toEqual(['1', '2', '3', '4']);
+		expect(wrapper.find('li.cp-line[data-kind="comment"] [data-testid="code-line-index"]').exists()).toBe(false);
+
+		// 徽标是共享组件：与流程卡片同一个 class，色值来自同一组 --cc-seq-* 变量
+		expect(badges[0]!.classes()).toContain('cc-seq');
+
+		// 行 → 步骤序数：第 2 个调用行是第 2 步
+		const callLines = wrapper.findAll('[data-testid="code-call-line"]');
+		expect(callLines.map((line) => line.attributes('data-step'))).toEqual(['1', '2', '3', '4']);
 	});
 
 	it('行与 nodeId 的对应写在 DOM 上（界面高亮与测试共用同一份映射）', () => {
@@ -148,6 +170,55 @@ describe('CodePanel', () => {
 		await wrapper.vm.$nextTick();
 		expect(activeLines(wrapper)).toEqual([]);
 		expect(wrapper.text()).toContain('在积木那侧改一个参数，这里跟着变');
+	});
+
+	it('选中时那一行的徽标也进选中态（三处同一个徽标状态，不只换个底色）', async () => {
+		const wrapper = mount(CodePanel);
+		expect(wrapper.findAll('[data-testid="code-line-index"][data-active="true"]')).toHaveLength(0);
+
+		doc.select(declaration().nodes[1]!.id);
+		await wrapper.vm.$nextTick();
+
+		const activeBadges = wrapper.findAll('[data-testid="code-line-index"][data-active="true"]');
+		expect(activeBadges).toHaveLength(1);
+		expect(activeBadges[0]!.text()).toBe('2');
+		expect(activeBadges[0]!.classes()).toContain('is-active');
+	});
+
+	it('点第 2 个调用行 → 选中推给共享状态，另两栏据此高亮（代码行是联动的第三个入口）', async () => {
+		const wrapper = mount(CodePanel);
+		const nodes = declaration().nodes;
+
+		await wrapper.findAll('[data-testid="code-call-line"]')[1]!.trigger('click');
+
+		expect(doc.selectedNodeId.value).toBe(nodes[1]!.id);
+		expect(activeLines(wrapper)).toEqual(['3']);
+		// 推的是 nodeId；blockId 由积木那侧按映射表解析（与流程卡片同一条路）。
+		expect(doc.selectedBlockId.value).toBeNull();
+	});
+
+	it('键盘也能选（行是按钮语义，Enter / Space 与点击同义）', async () => {
+		const wrapper = mount(CodePanel);
+		const nodes = declaration().nodes;
+		const second = wrapper.findAll('[data-testid="code-call-line"]')[1]!;
+
+		await second.trigger('keydown', { key: 'Enter' });
+		expect(doc.selectedNodeId.value).toBe(nodes[1]!.id);
+
+		doc.select(null);
+		await wrapper.vm.$nextTick();
+		await wrapper.findAll('[data-testid="code-call-line"]')[3]!.trigger('keydown', { key: ' ' });
+		expect(doc.selectedNodeId.value).toBe(nodes[3]!.id);
+	});
+
+	it('注释行不属于任何步骤：不是按钮，点了也不改选中', async () => {
+		const wrapper = mount(CodePanel);
+		const comment = wrapper.find('li.cp-line[data-kind="comment"]');
+
+		expect(comment.find('button').exists()).toBe(false);
+		expect(comment.attributes('data-node-id')).toBeUndefined();
+		await comment.trigger('click');
+		expect(doc.selectedNodeId.value).toBeNull();
 	});
 });
 

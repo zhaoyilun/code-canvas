@@ -56,6 +56,17 @@ describe('流程画布 · 链与连线', () => {
 			'stop',
 		]);
 		expect(wrapper.findAll('[data-testid="flow-node-index"]').map((node) => node.text())).toEqual(['1', '2', '3', '4']);
+		// 徽标是三个视图共用的那个组件（M3）：同一个 class、同一组 --cc-seq-* 变量，
+		// 积木那侧画在 SVG 里的徽标也是如此。
+		expect(wrapper.findAll('[data-testid="flow-node-index"]').map((node) => node.classes())).toEqual(
+			Array.from({ length: 4 }, () => ['cc-seq']),
+		);
+		expect(wrapper.findAll('[data-testid="flow-node-index"]').map((node) => node.attributes('data-seq'))).toEqual([
+			'1',
+			'2',
+			'3',
+			'4',
+		]);
 		expect(wrapper.find('[data-testid="flow-count"]').text()).toContain('4 步 · 3 条连线');
 	});
 
@@ -193,8 +204,20 @@ describe('流程画布 · 选中是共享状态', () => {
 		expect(selected[0]!.attributes('data-node-id')).toBe(currentDeclaration().nodes[3]!.id);
 	});
 
-	it('从积木那边选块（只推 selectedNodeId）→ 对应卡片跟着高亮', async () => {
+	it('选中的那张卡片，序号徽标也进选中态（三处同一套视觉，不是只有卡片边框变）', async () => {
 		const wrapper = mount(FlowView);
+
+		await cards(wrapper)[2]!.trigger('click');
+
+		const activeBadges = wrapper.findAll('[data-testid="flow-node-index"][data-active="true"]');
+		expect(activeBadges).toHaveLength(1);
+		expect(activeBadges[0]!.text()).toBe('3');
+		expect(activeBadges[0]!.classes()).toContain('is-active');
+		// 它就在被选中的那张卡片里
+		expect(cards(wrapper)[2]!.find('[data-testid="flow-node-index"]').attributes('data-active')).toBe('true');
+	});
+
+	it('从积木那边选块（只推 selectedNodeId）→ 对应卡片跟着高亮', async () => {		const wrapper = mount(FlowView);
 		const target = currentDeclaration().nodes[1]!;
 
 		// 积木画布写选中的方式：同一个 store，推 nodeId + blockId。

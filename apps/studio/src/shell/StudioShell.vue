@@ -6,6 +6,9 @@
  * 所以既没有 tab 条也没有图标栏——不摆点了没用的控件。
  *
  * 右栏（虚拟设备 + 代码面板）自管内容，此处只摆放。
+ *
+ * 三栏之间留 `--cc-col-gap` 的空隙：那片空隙是**连线的过道**（见下一条），
+ * 线从一栏边缘出来、横穿空隙、贴到下一栏元素的边缘上——紧贴的 grid 里线会压在内容上。
  */
 import { ref } from 'vue';
 import StatusBar from './StatusBar.vue';
@@ -14,6 +17,7 @@ import { FIRST_REACHABLE_STAGE } from './stages';
 import BlocklyView from '../views/blockly/BlocklyView.vue';
 import FlowView from '../views/flow/FlowView.vue';
 import RightPanel from '../views/right/RightPanel.vue';
+import { LinkOverlay } from '../views/mapping';
 
 const currentStage = ref<string>(FIRST_REACHABLE_STAGE);
 </script>
@@ -36,6 +40,14 @@ const currentStage = ref<string>(FIRST_REACHABLE_STAGE);
 				<aside class="pane pane-inspector">
 					<RightPanel />
 				</aside>
+
+				<!--
+					跨栏连线层（M3）：盖在三栏之上的绝对定位 SVG。
+					它只画线、只读锚点，不吃指针事件（`.mapping-overlay` 里写死了 `pointer-events: none`），
+					所以三栏的点击、滚动、拖积木一切照旧。三处锚点靠同一个 `[data-node-id]` 认出来，
+					它自己不认识任何一栏的内部实现。
+				-->
+				<LinkOverlay />
 			</main>
 		</div>
 		<StatusBar :current-stage="currentStage" @select-stage="currentStage = $event" />
@@ -84,6 +96,16 @@ const currentStage = ref<string>(FIRST_REACHABLE_STAGE);
 .workspace {
 	display: grid;
 	grid-template-columns: minmax(320px, 1fr) minmax(320px, 1fr) var(--cc-right-w);
+	/*
+	 * 栏间空隙：连线要过道。26px 是「够线走、又不吃掉栏宽」的那一档——
+	 * 1920 宽下左栏仍有 ~620px；1280 宽下走下面的窄窗退化，栏宽下限另行给足。
+	 */
+	gap: 0 var(--cc-col-gap);
+	/*
+	 * overlay 的定位基准。它铺满整个工作区（含空隙），从任何一栏元素的边缘量到的工作区局部坐标
+	 * 都能直接当 SVG 坐标用。`position: relative` 不改任何一栏的宽度与滚动。
+	 */
+	position: relative;
 	flex: 1 1 auto;
 	min-width: 0;
 	min-height: 0;
@@ -110,10 +132,14 @@ const currentStage = ref<string>(FIRST_REACHABLE_STAGE);
 /*
  * 窄窗退化：三栏不再挤成一团。给工作区一个下限宽度并允许横向滚动，
  * 外壳本身不塌（页面仍可见顶部 + 底部）。
+ *
+ * ⚠ 空隙进了这条退化路径的宽度账：三栏 + 两条空隙要一起算。
+ * 空隙这里收到 16px——窄窗下每一像素都该给栏，线照画，只是过道窄一点。
  */
-@media (max-width: 1100px) {
+@media (max-width: 1400px) {
 	.workspace {
-		grid-template-columns: minmax(300px, 1fr) minmax(300px, 1fr) 300px;
+		grid-template-columns: minmax(300px, 1fr) minmax(300px, 1fr) 320px;
+		gap: 0 var(--cc-col-gap-tight);
 		overflow-x: auto;
 	}
 }

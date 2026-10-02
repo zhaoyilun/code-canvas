@@ -76,6 +76,63 @@
 	--cc-block-guard: #ffb648;
 	--cc-block-arm: #56d97f;
 	--cc-block-arm6: #a98bff;
+
+	/*
+	 * 联动（**仅追加**，上面已有的变量一个没动）。
+	 *
+	 * 一条声明派生三个视图，但界面上原先看不出「这块积木 = 这个步骤 = 这段代码」。
+	 * 序号徽标与选中高亮就是那个能一眼认出的东西，所以它们必须是**同一套**：
+	 * 三处用同一个徽标的两个状态 + 同一条强调色描边，用户才知道那三个说的是同一件事。
+	 *
+	 *   常态：序号压在 veil 底上，描边 dim → 安静，不抢内容
+	 *   选中：序号反白压在 accent 实心上，描边 accent  → 三处同时跳出来
+	 *
+	 * 积木那侧画的是 SVG（`g.blocklyDraggable` 里的 `g.cc-seq-badge`，见
+	 * `views/shared/sequence-badge.ts`），色值由 JS 从这几个变量读出来——不是另写一份。
+	 */
+	--cc-highlight: var(--cc-accent);
+	--cc-highlight-border-width: 2px;
+	/* 常态描边：1px，比选中那条细一档，所以描边粗细本身就是「选没选中」的信号 */
+	--cc-highlight-border-width-idle: 1px;
+	--cc-highlight-glow: 0 0 12px var(--cc-accent-glow);
+
+	--cc-seq-bg: var(--cc-accent-veil);
+	--cc-seq-border: var(--cc-accent-dim);
+	--cc-seq-text: var(--cc-accent-strong);
+	--cc-seq-bg-active: var(--cc-accent);
+	--cc-seq-border-active: var(--cc-accent-strong);
+	/* 反白：压在实心强调色上 */
+	--cc-seq-text-active: var(--cc-surface-sunken);
+
+	/*
+	 * 跨栏连线（**仅追加**，上面已有的变量一个没动）。
+	 *
+	 * 序号徽标回答「这三处说的是同一件事」，连线回答「它们怎么对上的」——
+	 * 也就是 spec §4.2 那张映射表长什么样：积木 → 流程卡片 → 代码行，一步两段。
+	 *
+	 * 常态与选中差三档，缺一档都看不出「现在看的是哪一步」：
+	 *   粗细 1px → 2.4px、线型 虚线 → 实线、颜色 line-strong → accent（外加辉光）。
+	 * 另外有选中时其余的线还会压到 `--cc-link-opacity-dimmed`——
+	 * 高亮是对比出来的，光把自己画亮不够。
+	 *
+	 * 色值都从已有变量派生（`--cc-highlight` 就是 `--cc-accent`），不新增色号：
+	 * 线是联动的第五处，它必须和徽标、描边是同一条强调色，用户才认得出是一套。
+	 */
+	--cc-link-idle: var(--cc-line-strong);
+	--cc-link-active: var(--cc-highlight);
+	--cc-link-glow: var(--cc-accent-glow);
+	--cc-link-width-idle: 1px;
+	--cc-link-width-active: 2.4px;
+	--cc-link-dash-idle: 5 4;
+	--cc-link-opacity-dimmed: 0.35;
+
+	/*
+	 * 栏间空隙：连线的过道。空隙也属于工作区，overlay 铺满整块工作区（含空隙），
+	 * 于是「从积木右边缘到卡片左边缘」这条线正好横穿这片空隙。
+	 * `-tight` 是窄窗退化时用的那一档（见 `StudioShell.vue` 的媒体查询）。
+	 */
+	--cc-col-gap: 26px;
+	--cc-col-gap-tight: 16px;
 }
 
 * {

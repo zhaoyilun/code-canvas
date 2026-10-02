@@ -11,10 +11,13 @@ import { useBlocklyCanvas } from './blockly-canvas';
 import DiagnosticsPanel from './DiagnosticsPanel.vue';
 
 const store = useStudioDocument();
-const { hostRef, diagnostics, status, statusText, failure, blockCount, writeSuspended, selectedBlockId } =
+const { hostRef, diagnostics, status, statusText, failure, blockCount, writeSuspended, selectedBlockId, decoratedBlocks } =
 	useBlocklyCanvas();
 
 const taskName = computed(() => store.declaration.value?.name ?? '');
+
+/** 已经挂上 `data-node-id` 与序号徽标的积木数——三个视图之间「同一件事」的锚点数。 */
+const anchoredCount = computed(() => decoratedBlocks.value.length);
 </script>
 
 <template>
@@ -35,6 +38,14 @@ const taskName = computed(() => store.declaration.value?.name ?? '');
 
 		<footer class="view-footer">
 			<span class="write-state" :class="status" data-testid="blockly-write-state">{{ statusText }}</span>
+			<span
+				v-if="anchoredCount > 0"
+				class="footer-hint"
+				data-testid="blockly-anchored-count"
+				title="每块积木的 SVG 上都挂了 data-node-id，跨栏连线只靠它定位"
+			>
+				{{ anchoredCount }} 块带 nodeId 锚点
+			</span>
 			<span v-if="writeSuspended" class="footer-hint">画布不完整，写回已暂停</span>
 			<span v-else-if="selectedBlockId !== null" class="footer-hint" data-testid="blockly-selected">
 				{{ selectedBlockId }}
@@ -123,6 +134,20 @@ const taskName = computed(() => store.declaration.value?.name ?? '');
 	font-size: var(--cc-fs-xs);
 	fill: var(--cc-text);
 	opacity: 0.85;
+}
+
+/*
+ * 序号徽标（M3）：它是画在积木 `<g>` 里的 SVG（见 `sequence-badge.ts`），所以色值走属性、
+ * 交互走 pointer-events——这里只钉一件事：徽标不参与命中，点它等于点积木。
+ * 两个状态的色值是同一个函数按 `--cc-seq-*` 设上去的，与流程卡片、代码行同一套。
+ */
+.canvas-host :deep(.cc-seq-badge) {
+	pointer-events: none;
+}
+
+/* 选中：与另外两栏同一套——徽标反白压实心强调色、描边加粗一档（形状见 updateBadge）。 */
+.canvas-host :deep(.cc-seq-badge-active) {
+	filter: drop-shadow(0 0 4px var(--cc-accent-glow));
 }
 
 .canvas-failure {
