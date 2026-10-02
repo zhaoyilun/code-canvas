@@ -19,6 +19,11 @@
  * 一个技能里几条原语会把同一句「第 N 步」连写三遍。行里的缩进与 `path`（`2.then.0` 这种）
  * 说明它在计划的哪一格，`第 N 步` 说的仍是它所属的**顶层**步。
  *
+ * 跑的时候三块视图一起走：**每一步先报 `running`**，那一条同时做两件事——
+ * 把「设备正在这一步」写进 `shell/device-run.ts`（流程画布据此给那张卡一个运行标记），
+ * 以及（跟随开着时）`select(那一步的节点)`，于是积木与代码面板跟着切到那一步的实现。
+ * **不复位选中**：跑完停在哪一步就停在哪一步——用户跟到最后一步，正是为了看它。
+ *
  * 3D 那部分的可视尺寸：由右栏宽度与这个面板的 flex 比例决定，
  * 全部走 `--cc-*` 变量（右栏栏宽是 `--cc-right-w`），组件里不写死像素。
  */
@@ -28,9 +33,10 @@ import { validateSkillPlan, type Diagnostic, type SkillPlan } from '@codecanvas/
 import { mountVirtualDevice, type BranchArm, type MountedVirtualDevice, type PlanStepReport } from '@codecanvas/robot3d';
 import { findTaskFormat, type TaskFormatRef } from '@codecanvas/task-import';
 import IconBase from '../../shell/IconBase.vue';
+import { clearRunningPlanPath, setRunningPlanPath } from '../../shell/device-run';
 import type { StudioDevice } from '../../shell/devices';
 import { useStudioDocument } from '../../state/document';
-import { waitLabelOf } from '../shared/plan-structure';
+import { nodeAtPlanPath, waitLabelOf } from '../shared/plan-structure';
 
 /** 目录出处按 `catalogRef` 认：认不着就不显示（编一个出处比不显示更坏） */
 const SO101_CATALOG_REF = ROBOFRAME_SO101_CATALOG.catalogRef;
@@ -66,6 +72,15 @@ const runDiagnostics = ref<readonly Diagnostic[]>([]);
 const status = ref('未运行');
 const busy = ref(false);
 
+/**
+ * 跟随：跑到哪一步就选中那一步（默认开）。
+ *
+ * 关掉之后**只是没人替用户改选中**——事件照旧写步骤行、照旧有运行标记，
+ * 用户自己的手点（流程画布、积木、步骤行）一个字都不受影响：
+ * 这个开关管的是「自动」，不是「能不能选」。
+ */
+const follow = ref(true);
+
 /** 分支走了哪条臂。`null` 是事实不是「不知道」：条件不成立又没给否则，这一步什么也不做。 */
 function armText(arm: BranchArm): string {
 	if (arm === 'then') return '走 then';
@@ -96,6 +111,18 @@ function rowOf(event: PlanStepReport): StepRow {
 
 const isVirtual = computed(() => props.device?.virtual === true);
 const declaration = computed(() => doc.declaration.value);
+
+/**
+ * 点步骤行 → 选中那一行对应的节点。
+ *
+ * 与跟随**同一个判据**（`nodeAtPlanPath`）：跑的时候跟到哪、跑完回头看哪一步，指的是同一棵树上的
+ * 同一个位置——两处各写一份路径解析，早晚会有一处把臂里的步认成顶层的那一步。
+ * 路径推不出节点（声明被改坏了）时什么都不做：宁可不亮，也不选一个编出来的位置。
+ */
+function selectRow(line: StepRow): void {
+	const node = nodeAtPlanPath(declaration.value, line.path);
+	if (node !== null) doc.select(node.id);
+}
 
 /** 仿真还是真机：设备表里写着的事实，界面上照实说，不靠设备名里的括号让人自己猜。 */
 const deviceKind = computed(() => (props.device === null ? '' : props.device.virtual ? '仿真' : '真机'));
@@ -157,6 +184,8 @@ async function runPlan(): Promise<void> {
 		return;
 	}
 	stepLines.value = [];
+	// 新的一趟从头算：上一趟留在画布上的运行标记不该跟过来。
+	clearRunningPlanPath();
 	busy.value = true;
 	status.value = `执行中：${String(plan.plan.length)} 步`;
 	try {
@@ -178,12 +207,22 @@ async function runPlan(): Promise<void> {
 			: `计划中断：${result.reason ?? '某一步没做成'}（失败即停，不自动重试）`;
 	} finally {
 		busy.value = false;
+		/*
+		 * 跑完就没有「正在跑的那一步」了，运行标记该灭。
+		 *
+		 * **但选中一动不动**：跑完停在最后一步，正是用户跟着看完的那一步——
+		 * 在这里把它复位（清空、或跳回第一步），等于刚跑完就把人看的东西收走。
+		 * 运行标记与选中因此是两件事，见 `shell/device-run.ts`。
+		 */
+		clearRunningPlanPath();
 	}
 }
 
 function resetDevice(): void {
 	device3d.value?.reset();
 	stepLines.value = [];
+	// 复位的是设备：它回到零位，没有「正在跑的那一步」了（选中照旧不动，同上）。
+	clearRunningPlanPath();
 	status.value = '已复位到零位。';
 }
 
@@ -195,6 +234,8 @@ function syncMount(): void {
 	device3d.value?.dispose();
 	device3d.value = null;
 	stepLines.value = [];
+	// 换了设备（或卸了）就没有正在跑的东西了：运行标记不许留在画布上。
+	clearRunningPlanPath();
 	if (!isVirtual.value) return;
 	const element = host.value;
 	if (element === null) return;
@@ -209,6 +250,21 @@ function syncMount(): void {
 		const row = rowOf(event);
 		const at = stepLines.value.findIndex((line) => line.path === row.path);
 		stepLines.value = at < 0 ? [...stepLines.value, row] : stepLines.value.map((line, i) => (i === at ? row : line));
+
+		/*
+		 * 「设备正在这一步」只由 `running` 写，**不等 done**：每一步都先报 running 再报 done/failed，
+		 * 等终态才动就成了跳着走（用户看到的是一步跑完了才亮，而不是它正在跑）。
+		 *
+		 * 这一处同时管两件事：画布上的运行标记（写 `shell/device-run.ts`，与跟随无关——
+		 * 机器在哪儿就说哪儿），以及跟随（替用户改选中）。判据只有这一个分支，
+		 * 两处各写一遍早晚会有一处忘了更新。
+		 */
+		if (event.state !== 'running') return;
+		setRunningPlanPath(event.path);
+		if (!follow.value) return;
+		const node = nodeAtPlanPath(declaration.value, event.path);
+		// 路径推不出节点（声明被改坏了）时不猜一个顶上：宁可这一格不亮。
+		if (node !== null) doc.select(node.id);
 	});
 }
 
@@ -302,6 +358,14 @@ onBeforeUnmount(() => {
 						复位
 					</button>
 				</div>
+				<!--
+					跟随开关：开着时「跑到哪一步就选中那一步」。关掉只停掉**自动**那一半——
+					用户手点卡片/步骤行照常改选中，运行标记也照常跟着设备走。
+				-->
+				<label class="device-follow" title="跑到哪一步就选中那一步（关掉后仍可自己点）">
+					<input type="checkbox" data-testid="virtual-device-follow" v-model="follow" />
+					跟随运行
+				</label>
 				<!-- 按不了就说清为什么：灰按钮自己不会解释。 -->
 				<p v-if="blockedReason !== null" class="device-note" data-testid="virtual-device-blocked">
 					{{ blockedReason }}
@@ -321,6 +385,8 @@ onBeforeUnmount(() => {
 			<!--
 				每走一步一行：`第 N 步 · 技能名 / 分支 · 走哪条臂 · 结果`。
 				臂里的步靠 `--step-depth` 缩进，行首那个 `2.then.0` 是它的路径（层级凭据）。
+				**行可点**：点它 = 选中那一步的节点（与跟随同一个判据），
+				于是跑完回头看某一步、或跟随关掉之后自己走一遍，都从这几行走。
 			-->
 			<ol v-if="stepLines.length > 0" class="device-steps" data-testid="virtual-device-steps">
 				<li
@@ -330,6 +396,12 @@ onBeforeUnmount(() => {
 					:data-path="line.path"
 					:data-depth="line.depth"
 					:style="{ '--step-depth': line.depth }"
+					role="button"
+					tabindex="0"
+					title="选中这一步（流程画布与代码面板都会切到它）"
+					@click="selectRow(line)"
+					@keydown.enter.prevent="selectRow(line)"
+					@keydown.space.prevent="selectRow(line)"
 				>
 					<span v-if="line.depth > 0" class="step-path">{{ line.path }}</span>
 					第 {{ line.index }} 步 · {{ line.label }} · {{ line.state }}
@@ -503,6 +575,24 @@ onBeforeUnmount(() => {
 	flex: 0 0 auto;
 }
 
+/* 跟随开关：与按钮同一行、同一套字号——它跟按钮一样是「运行期间怎么表现」的一个选择。 */
+.device-follow {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex: 0 0 auto;
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-dim);
+	cursor: pointer;
+	white-space: nowrap;
+}
+
+.device-follow input {
+	margin: 0;
+	accent-color: var(--cc-accent);
+	cursor: pointer;
+}
+
 .cc-run:hover:not(:disabled),
 .cc-reset:hover:not(:disabled) {
 	border-color: var(--cc-accent);
@@ -554,6 +644,20 @@ onBeforeUnmount(() => {
 /* 缩进按 `--step-depth`（路径里 `.then` / `.else` 的层数）算：臂里的步一眼看得出在第几层 */
 .device-steps li {
 	padding-left: calc(var(--step-depth, 0) * var(--cc-space-3));
+	/* 行是可点的（选中那一步）：手型光标与 hover 是它「点得动」的唯一提示 */
+	cursor: pointer;
+	border-radius: var(--cc-radius-sm);
+}
+
+.device-steps li:hover,
+.device-steps li:focus-visible {
+	background: var(--cc-accent-veil);
+	outline: none;
+}
+
+/* 正在跑的那一行也标一下：设备走到哪儿，面板上这几行里就亮哪一行 */
+.device-steps li[data-state='running'] {
+	color: var(--cc-accent-strong);
 }
 
 /* 路径是层级凭据（`2.then.0`），不是读数：压暗、跟在缩进后面，别抢「第 N 步」那句主语 */

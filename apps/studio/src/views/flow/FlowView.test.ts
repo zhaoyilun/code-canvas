@@ -7,7 +7,7 @@
  */
 import { mount } from '@vue/test-utils';
 import { defineComponent, h } from 'vue';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
 	computeWorkflowDigest,
 	describeActionFields,
@@ -18,6 +18,7 @@ import {
 import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import { TASK_BRANCH_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
 import { setSelectedDevice } from '../../shell/devices';
+import { clearRunningPlanPath, setRunningPlanPath } from '../../shell/device-run';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import FlowView from './FlowView.vue';
 import { planStructureOf } from '../shared/plan-structure';
@@ -757,7 +758,8 @@ describe('流程画布 · 等待步', () => {
 		expect(waitCard.get('[data-testid="flow-node-action"]').attributes('data-action')).toBe(TASK_WAIT_NODE_TYPE);
 		// 秒数写在卡头那句话里，不再摆一行参数（同一个数说两次）；也不是「这个动作没有参数」
 		expect(waitCard.find('[data-testid="flow-node-params"]').exists()).toBe(false);
-		expect(waitCard.text()).toContain('等待步没有参数');
+		// 措辞：等待步**有**参数（秒数，在卡头那句里），它没有的是「能力参数」那一栏。
+		expect(waitCard.text()).toContain('秒数在卡头那一句里');
 		expect(waitCard.text()).not.toContain('这个动作没有参数');
 		// 它没有条件，所以不是分支卡
 		expect(waitCard.find('[data-testid="flow-node-condition"]').exists()).toBe(false);
@@ -840,5 +842,112 @@ describe('流程画布 · 失败也往下走', () => {
 		// 视图里没有第二份「哪个键算 continue」的表：参数没了，那句话就没了
 		expect(cards(wrapper)[0]?.find('[data-testid="flow-node-continue"]').exists()).toBe(false);
 		expect(wrapper.findAll('[data-testid="flow-node-continue"]')).toHaveLength(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 运行标记：设备正在跑的那一步（**与「选中」是两件事**）
+// ---------------------------------------------------------------------------
+
+/**
+ * 出处的判据是**执行路径**（`shell/device-run.ts` 里那一个 ref，由右栏面板在每一步的
+ * `running` 事件里写），画布这边把路径认成一张卡。
+ *
+ * 为什么要有它：只有「选中」一种高亮时，跑到分支里就分不清是「机器正在这」还是「我刚点过它」。
+ * 所以运行标记是**另一个属性**（`data-running`）、**另一种观感**（左侧呼吸色条），
+ * 与选中可以同时出现、也可以各在一张卡上。
+ */
+describe('流程画布 · 运行标记（设备正在这一步）', () => {
+	beforeEach(() => {
+		loadPlan(BRANCH_PLAN_JSON);
+		clearRunningPlanPath();
+	});
+
+	afterEach(() => {
+		// 这个 ref 是模块级的（跨用例活着的），用完必须清掉，否则下一个用例开局就带着标记。
+		clearRunningPlanPath();
+	});
+
+	/** 带运行标记的卡片（正常最多一张）。 */
+	const runningCards = (wrapper: ReturnType<typeof mount>) =>
+		cards(wrapper).filter((card) => card.attributes('data-running') === 'true');
+
+	const runningCardOf = (wrapper: ReturnType<typeof mount>, path: string) => {
+		setRunningPlanPath(path);
+		return wrapper.vm.$nextTick();
+	};
+
+	it('没有在跑时：一张卡都不带运行标记（连属性都不出现）', () => {
+		const wrapper = mount(FlowView);
+
+		expect(runningCards(wrapper)).toHaveLength(0);
+		expect(cards(wrapper).map((card) => card.attributes('data-running'))).toEqual([
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+		]);
+	});
+
+	it('给一条正在跑的路径（顶层）→ 只有那一张带标记，别的都没有', async () => {
+		const wrapper = mount(FlowView);
+
+		await runningCardOf(wrapper, '2');
+
+		const running = runningCards(wrapper);
+		expect(running).toHaveLength(1);
+		expect(running[0]?.attributes('data-node-id')).toBe(currentDeclaration().nodes[4]?.id);
+		// 别的卡连属性都没有——「没有」与「false」在屏幕上是一回事，在断言里不是。
+		expect(cards(wrapper)[0]?.attributes('data-running')).toBeUndefined();
+	});
+
+	it('臂里那一步正在跑时，标记落在臂里那张卡上（路径认得出嵌套）', async () => {
+		const wrapper = mount(FlowView);
+
+		await runningCardOf(wrapper, '1.then.0');
+
+		const running = runningCards(wrapper);
+		expect(running).toHaveLength(1);
+		expect(running[0]?.attributes('data-node-id')).toBe(currentDeclaration().nodes[2]?.id);
+		// 它在 then 那条臂里（不是在顶层）
+		expect(running[0]?.element.closest('[data-testid="flow-arm"]')?.getAttribute('data-arm')).toBe('then');
+	});
+
+	it('运行标记与选中各写各的：用户手点别处时，两条一起看得见', async () => {
+		const wrapper = mount(FlowView);
+
+		await runningCardOf(wrapper, '1.then.0');
+		// 用户手点了分支卡（跟随关掉时就是这样）：选中在分支上，机器仍在臂里那一步。
+		store.select(currentDeclaration().nodes[1]!.id);
+		await wrapper.vm.$nextTick();
+
+		expect(cards(wrapper)[1]?.attributes('data-selected')).toBe('true');
+		expect(cards(wrapper)[1]?.attributes('data-running')).toBeUndefined();
+		expect(cards(wrapper)[2]?.attributes('data-running')).toBe('true');
+		expect(cards(wrapper)[2]?.attributes('data-selected')).toBe('false');
+		// 两种观感各是各的 class（一个描边、一个左侧呼吸条），不共用一个属性
+		expect(cards(wrapper)[1]?.classes()).toContain('selected');
+		expect(cards(wrapper)[2]?.classes()).toContain('running');
+	});
+
+	it('跟随把两者重合在一张卡上时，两个属性同时为真', async () => {
+		const wrapper = mount(FlowView);
+
+		await runningCardOf(wrapper, '1');
+		store.select(currentDeclaration().nodes[1]!.id);
+		await wrapper.vm.$nextTick();
+
+		expect(cards(wrapper)[1]?.attributes('data-selected')).toBe('true');
+		expect(cards(wrapper)[1]?.attributes('data-running')).toBe('true');
+		expect(cards(wrapper)[1]?.classes()).toEqual(expect.arrayContaining(['selected', 'running']));
+	});
+
+	it('路径推不出节点（越界/悬空）→ 一张都不带，不猜一张顶上', async () => {
+		const wrapper = mount(FlowView);
+
+		await runningCardOf(wrapper, '9');
+
+		expect(runningCards(wrapper)).toHaveLength(0);
 	});
 });

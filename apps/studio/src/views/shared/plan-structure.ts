@@ -307,6 +307,56 @@ export const branchPlanOf = (declaration: WorkflowDeclaration | null, nodeId: st
 };
 
 // ---------------------------------------------------------------------------
+// 执行路径（`1.then.0`）→ 那一步的节点
+// ---------------------------------------------------------------------------
+
+/** 路径里的一段是不是下标。只认非负整数：负号、小数、空串都不是路径的一部分。 */
+const PLAN_INDEX = /^\d+$/;
+
+/**
+ * 执行路径 → 那一步的节点。
+ *
+ * 路径的口径与执行侧同一份（`@codecanvas/robot3d` 的 `plan.ts`）：第一段是**顶层下标**（0 基），
+ * 之后 `then` / `else` 各带一个臂内下标往下接，例如 `1.then.0.else.1`。
+ * 走的是 `planStructureOf` 那棵树，**不是拿路径去索引 `declaration.nodes`**——
+ * 声明里节点是平铺的，臂里的节点排在分支后面，「路径的第几段」与「声明里的第几个节点」不是一回事。
+ *
+ * 推不出来就是 `null`：越界、格式不对、以及**悬空**（那段路径指着一个不存在的位置——
+ * 技能步后面接 `then`、空臂里取第 0 步、臂名不是 `then`/`else`）。
+ * 一律不猜、不抛：调用方拿到 `null` 就什么都不做，选中与运行标记都不该落在一个编出来的位置上。
+ */
+export const nodeAtPlanPath = (declaration: WorkflowDeclaration | null, path: string): WorkflowNode | null => {
+	if (declaration === null) return null;
+
+	const segments = path.split('.');
+	// 段数必须是奇数：下标、臂、下标……最后收在下标上（`1.then` 停在臂上，不是一个位置）。
+	if (segments.length % 2 === 0) return null;
+
+	let steps: readonly PlanStep[] = planStructureOf(declaration).steps;
+	/** 当前这一步的臂：下一段若是 `then` / `else`，就从这里挑一条往下走。 */
+	let arms: readonly PlanArm[] = [];
+	let node: WorkflowNode | null = null;
+
+	for (const [position, segment] of segments.entries()) {
+		if (position % 2 === 1) {
+			const arm = arms.find((candidate) => candidate.kind === segment);
+			if (arm === undefined) return null;
+			steps = arm.steps;
+			continue;
+		}
+
+		if (!PLAN_INDEX.test(segment)) return null;
+		const step = steps[Number(segment)];
+		if (step === undefined) return null;
+		node = step.node;
+		// 技能步与等待步的 `arms` 是空表，所以后面还跟着臂时下一轮必然挑不出臂来——那正是悬空。
+		arms = step.arms;
+	}
+
+	return node;
+};
+
+// ---------------------------------------------------------------------------
 // 条件：人话给画布看，代码形态给代码面板看
 // ---------------------------------------------------------------------------
 

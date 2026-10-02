@@ -10,8 +10,11 @@
  * 那是同一个构造（臂是分支的展开，不是它的下一步）；臂收口之后接的那张卡前面照画，
  * 于是「分支走完接着往下走」在画布上看得见。没有分支时这一条与从前逐字一致（每两张相邻卡片一条）。
  */
+import { computed } from 'vue';
 import SequenceBadge from '../shared/SequenceBadge.vue';
 import { useStudioDocument } from '../../state/document';
+import { runningPlanPath } from '../../shell/device-run';
+import { nodeAtPlanPath } from '../shared/plan-structure';
 import type { FlowArmRow, FlowRow } from './rows';
 
 const props = defineProps<{ readonly rows: readonly FlowRow[] }>();
@@ -19,6 +22,24 @@ const props = defineProps<{ readonly rows: readonly FlowRow[] }>();
 const store = useStudioDocument();
 
 const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === nodeId;
+
+/**
+ * 设备**正在跑**的那一步是哪张卡。
+ *
+ * 路径 → 节点仍走 `nodeAtPlanPath`（与右栏面板同一个判据）：路径说的是「在计划的哪一格」，
+ * 而画布上的行是按节点画的，中间那一步换算只有这一份实现。
+ * 推不出来就是 null：没有卡片带运行标记，不猜一张顶上。
+ *
+ * 它与「选中」是**两件事**，所以没有合成一个属性：跟随开着时两者正好重合，
+ * 用户手点别处时就分开——那时画布上要能同时看出「机器在这儿」与「我在看那儿」。
+ */
+const runningNodeId = computed<string | null>(() => {
+	const path = runningPlanPath.value;
+	if (path === null) return null;
+	return nodeAtPlanPath(store.declaration.value, path)?.id ?? null;
+});
+
+const isRunning = (nodeId: string): boolean => runningNodeId.value === nodeId;
 
 /** 选中是共享状态，不在这里另存一份：点卡片只把 nodeId 推给真相。 */
 function selectNode(nodeId: string): void {
@@ -41,12 +62,13 @@ const connectorAfter = (position: number): boolean => {
 		<article
 			v-if="row.kind === 'card'"
 			class="node-card"
-			:class="{ selected: isSelected(row.card.node.id), branch: row.card.condition !== null }"
+			:class="{ selected: isSelected(row.card.node.id), branch: row.card.condition !== null, running: isRunning(row.card.node.id) }"
 			role="listitem"
 			tabindex="0"
 			data-testid="flow-node-card"
 			:data-node-id="row.card.node.id"
 			:data-selected="isSelected(row.card.node.id) ? 'true' : 'false'"
+			:data-running="isRunning(row.card.node.id) ? 'true' : undefined"
 			:aria-current="isSelected(row.card.node.id) ? 'true' : undefined"
 			@click="selectNode(row.card.node.id)"
 			@keydown.enter.prevent="selectNode(row.card.node.id)"
@@ -242,6 +264,46 @@ const connectorAfter = (position: number): boolean => {
 /* 分支卡：左边的粗竖线与它下面的两条臂连成一体，一眼看出「这一坨是它的展开」。 */
 .node-card.branch {
 	border-left: var(--cc-highlight-border-width) solid var(--cc-accent-dim);
+}
+
+/*
+ * 「设备正在跑这一步」：**与选中不同的另一种观感**——选中的是一圈强调色描边（`--cc-highlight`），
+ * 运行是左边一条**呼吸的**色条。两者会同时存在（跟随开着时正好重合），所以各画各的、
+ * 不共用一个 class：一个有边框、一个有动，读的人分得清「机器在这儿」与「我在看那儿」。
+ * 色值全部取自现成变量，不新造色号。
+ */
+.node-card.running {
+	position: relative;
+}
+
+.node-card.running::before {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	left: 0;
+	width: var(--cc-highlight-border-width);
+	background: var(--cc-accent-strong);
+	border-radius: var(--cc-radius) 0 0 var(--cc-radius);
+	content: '';
+	animation: cc-card-running 1.2s ease-in-out infinite;
+}
+
+@keyframes cc-card-running {
+	0%,
+	100% {
+		opacity: 0.3;
+	}
+
+	50% {
+		opacity: 1;
+	}
+}
+
+/* 不喜欢动效的人（系统设置里）看到的是一条**稳定亮着**的色条：位置照样一眼看得出。 */
+@media (prefers-reduced-motion: reduce) {
+	.node-card.running::before {
+		animation: none;
+	}
 }
 
 .card-head {

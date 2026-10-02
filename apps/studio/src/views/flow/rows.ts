@@ -132,7 +132,9 @@ const cardOf = (
 				: summarizeNodeParameters(step.node.parameters, protocolAction, limits, capability),
 		diagnostics: nodeDiagnostics(diagnostics, step.node, step.index),
 		condition: step.isBranch ? conditionViewOf(step.node) : null,
-		paramsNote: step.isWait ? '等待步没有参数：它只是停一下，不改动上一步的结果。' : null,
+		// 措辞要准：等待步**有**参数（秒数，已经写在卡头那个「等待 N 秒」里了），
+		// 它没有的是"能力参数"——那一栏说的本来就是技能声明的那几个。写成「没有参数」是错的。
+		paramsNote: step.isWait ? '秒数在卡头那一句里。它只是停一下，不改动上一步的结果。' : null,
 		continuesOnFailure: continues,
 		continueNote: continues ? CONTINUE_ON_FAILURE_NOTE : null,
 	};

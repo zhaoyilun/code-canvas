@@ -13,13 +13,15 @@
  * 真实高度在浏览器里量（见交付报告）——happy-dom 不跑样式表，这里守结构与接线。
  */
 import { mount } from '@vue/test-utils';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ROBOFRAME_SO101_CATALOG, ROBOFRAME_SO101_PROVENANCE } from '@codecanvas/capabilities';
 import { computeWorkflowDigest, type SkillPlanStep, type WorkflowNode } from '@codecanvas/contracts';
 import type { BranchArm, PlanStepReport } from '@codecanvas/robot3d';
 import { SAMPLE_SKILL_PLAN_JSON } from '../../state/sample-skill-plan';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
+import { clearRunningPlanPath, runningPlanPath } from '../../shell/device-run';
 import { setSelectedDevice } from '../../shell/devices';
+import { BRANCH_PLAN_JSON, NESTED_NO_ELSE_PLAN_JSON } from '../flow/__fixtures__/branch-plan';
 import RightPanel from './RightPanel.vue';
 
 /**
@@ -562,5 +564,125 @@ describe('跑完之后那句话不许撒谎', () => {
 		const status = wrapper.get('[data-testid="virtual-device-status"]').text();
 		expect(status).toContain('失败');
 		expect(status).not.toContain('都走通了');
+	});
+});
+/**
+ * 跟随与步骤行：**跑到哪一步就选中那一步**，积木与代码面板因此跟着走。
+ *
+ * 事件用 `running` 触发（每一步都先报 running 再报 done/failed）——等 done 才动就成了跳着走。
+ * 关掉跟随之后**只是没人替用户改选中**：步骤行照旧写、画布上的运行标记照旧跟着设备走，
+ * 用户手点（流程画布、积木、步骤行）一个字都不受影响。这一组钉的就是这条分工。
+ */
+describe('右栏 · 跟随运行与可点的步骤行', () => {
+	const stepEvent = (
+		path: string,
+		index: number,
+		arm: BranchArm,
+		step: SkillPlanStep,
+		state: 'running' | 'done' | 'failed' = 'running',
+	): PlanStepReport => ({ kind: 'plan-step', path, index, total: 3, arm, step, taskId: `t-${path}`, state });
+
+	const IF_STEP: SkillPlanStep = {
+		step: 'if',
+		condition: { field: 'last.success', op: '==', value: false },
+		then: [{ step: 'skill', skill: 'close_gripper_skill' }],
+	};
+	const SKILL_STEP: SkillPlanStep = { step: 'skill', skill: 'close_gripper_skill' };
+
+	const pushPlanStep = (instance: FakeDevice, event: PlanStepReport): void => {
+		const listener = instance.onPlanStep.mock.calls.at(-1)?.[0] as ((e: PlanStepReport) => void) | undefined;
+		if (listener === undefined) throw new Error('面板没有订 onPlanStep');
+		listener(event);
+	};
+
+	/** 挂上面板、切到虚拟设备、灌一份带分支的计划（跟随要认得出路径 → 节点）。 */
+	const panelWithPlan = async (json: string): Promise<{ wrapper: ReturnType<typeof panel>; instance: FakeDevice }> => {
+		const wrapper = panel();
+		setSelectedDevice('so101_sim');
+		await wrapper.vm.$nextTick();
+		const instance = lastMount();
+		expect(doc.loadTaskJson(json)).toBe(true);
+		await wrapper.vm.$nextTick();
+		return { wrapper, instance };
+	};
+
+	/** 声明里那一步（按名字找：断言读起来是「哪一步」而不是一串 id）。 */
+	const nodeNamed = (name: string): string => {
+		const node = doc.declaration.value?.nodes.find((candidate) => candidate.name === name);
+		if (node === undefined) throw new Error(`声明里没有「${name}」这一步`);
+		return node.id;
+	};
+
+	beforeEach(() => {
+		clearRunningPlanPath();
+	});
+
+	afterEach(() => {
+		// 这个 ref 是模块级单例，跨用例活着：不清掉，下一个用例开局就带着上一个的运行标记。
+		clearRunningPlanPath();
+	});
+
+	it('收到 running 事件 → 选中那一步的节点（臂里的步也认得出来）', async () => {
+		const { instance } = await panelWithPlan(BRANCH_PLAN_JSON);
+
+		pushPlanStep(instance, stepEvent('1', 2, 'then', IF_STEP, 'running'));
+		expect(doc.selectedNodeId.value).toBe(nodeNamed('2. 分支'));
+
+		pushPlanStep(instance, stepEvent('1.then.0', 2, null, SKILL_STEP, 'running'));
+		expect(doc.selectedNodeId.value).toBe(nodeNamed('3. 关闭夹爪'));
+		// 画布上的运行标记读的就是这个值（右栏是唯一的写入者）
+		expect(runningPlanPath.value).toBe('1.then.0');
+
+		// done 不改选中：最后停在哪一步就停在哪一步
+		pushPlanStep(instance, stepEvent('1.then.0', 2, null, SKILL_STEP, 'done'));
+		expect(doc.selectedNodeId.value).toBe(nodeNamed('3. 关闭夹爪'));
+	});
+
+	it('跟随默认开着，可以关掉；关掉之后事件不改选中，手点步骤行仍然改', async () => {
+		const { wrapper, instance } = await panelWithPlan(BRANCH_PLAN_JSON);
+		const follow = wrapper.get('[data-testid="virtual-device-follow"]');
+		expect((follow.element as HTMLInputElement).checked).toBe(true);
+
+		await follow.setValue(false);
+		const before = nodeNamed('1. 观察桌面');
+		doc.select(before);
+
+		pushPlanStep(instance, stepEvent('1.then.0', 2, null, SKILL_STEP, 'running'));
+		await wrapper.vm.$nextTick();
+
+		// 没人替用户改选中了……
+		expect(doc.selectedNodeId.value).toBe(before);
+		// ……但设备在哪儿照旧看得出来（运行标记与跟随无关）
+		expect(runningPlanPath.value).toBe('1.then.0');
+
+		// 手点照常：点那一行 → 选中那一步的节点
+		await wrapper.get('[data-testid="virtual-device-steps"] li[data-path="1.then.0"]').trigger('click');
+		expect(doc.selectedNodeId.value).toBe(nodeNamed('3. 关闭夹爪'));
+	});
+
+	it('点步骤行 → 选中那一行对应的节点（嵌套路径那一行也一样）', async () => {
+		const { wrapper, instance } = await panelWithPlan(NESTED_NO_ELSE_PLAN_JSON);
+		pushPlanStep(instance, stepEvent('1.then.1.else.0', 2, 'else', SKILL_STEP, 'done'));
+		await wrapper.vm.$nextTick();
+
+		await wrapper.get('[data-testid="virtual-device-steps"] li[data-path="1.then.1.else.0"]').trigger('click');
+
+		// 嵌套路径说的是 then 臂里那个分支的 else 臂第一步，不是声明里第 5 个节点、也不是顶层任何一步
+		expect(doc.selectedNodeId.value).toBe(nodeNamed('6. 摇头'));
+	});
+
+	it('跑完之后运行标记灭，但选中留在最后一步（不复位）', async () => {
+		const { wrapper, instance } = await panelWithPlan(BRANCH_PLAN_JSON);
+		pushPlanStep(instance, stepEvent('1.then.0', 2, null, SKILL_STEP, 'running'));
+		expect(runningPlanPath.value).toBe('1.then.0');
+
+		await wrapper.get('[data-testid="virtual-device-run"]').trigger('click');
+		await wrapper.vm.$nextTick();
+
+		expect(instance.run).toHaveBeenCalled();
+		// 没有「正在跑的那一步」了，画布上的运行标记该灭
+		expect(runningPlanPath.value).toBeNull();
+		// 选中一动不动：用户跟到最后一步，正是为了看它
+		expect(doc.selectedNodeId.value).toBe(nodeNamed('3. 关闭夹爪'));
 	});
 });
