@@ -180,7 +180,7 @@ flowchart LR
 | 格式 | 谁用 | 长什么样 | 判据 |
 | --- | --- | --- | --- |
 | `phase1_task` | 一期设备（差速底盘 + 六轴臂） | §1.1 那份，七个固定动作 | `validateTask`（逐条对照 `task_protocol.py`） |
-| `skill_plan` | RoboFrame SO-101（真机 / 虚拟设备） | `{schemaVersion, robot, description?, plan:[{step:'skill', skill, params?, timeoutSec?}]}` | `validateSkillPlan`：**技能与参数照设备目录判** |
+| `skill_plan` | RoboFrame SO-101（真机 / 虚拟设备） | `{schemaVersion, robot, description?, plan:[Step, …]}`，其中 `Step` 是 `{step:'skill', skill, params?, timeoutSec?}` 或 `{step:'if', condition:{field:'last.success', op:'==' / '!=', value:boolean}, then:[Step, …], else?:[Step, …]}` | `validateSkillPlan`：**技能与参数照设备目录判**；分支照条件、臂与深度判 |
 
 三条规矩：
 
@@ -188,10 +188,24 @@ flowchart LR
   分叉点只有一处，见 `packages/task-import/src/format.ts`。
 - **尺子跟着声明走。** 第二道闸用「这份声明出生时那台设备的格式」量，不是用当前选中的设备。
   生成之后换设备，声明还是上一台产出的；这时拿新尺子量，改一个数字都会被莫名其妙拒掉。
-- **`skill_plan` 的形状沿用前作集成设计稿 §7.3 的 `RobotTaskPlan`**，两处偏离写在
+- **`skill_plan` 的形状沿用前作集成设计稿 §7.3 的 `RobotTaskPlan`**，三处偏离写在
   `packages/contracts/src/skill-plan.ts` 头上：参数名照抄上游（`motion_direction` 而不是示例里的
-  `motionDirection`），`step` 这一版只认 `'skill'`（`primitive` / `wait` / `skipIf` 还没做，
-  遇到就明确报错，不静默当技能）。
+  `motionDirection`），`step` 只认 `'skill'` 与 `'if'`（`primitive` / `wait` / `skipIf` 还没做，
+  遇到就明确报错，不静默当技能），以及 `if` 这一版的条件只认 `last.success`。
+
+**分支为什么长成这样（三条，都是被现实逼出来的）：**
+
+- **条件只认 `last.success`。** 计划是送给**机器**执行的，条件得是机器身上真的观测得到的量。
+  这台设备报上来的只有「上一步成没成」（它的 `recovery_policy` 也是照这一条写的），
+  写别的字段等于让数据模型承诺一件执行侧兑现不了的事。将来要加感知条件（比如夹爪里有没有东西），
+  加的是**一个新的 `field`**——那时执行侧也真的会报这个量——而不是把这里放宽成「随便填」。
+- **分支不回汇。** 两条臂各自收尾，走完就完了；`if` 执行**之后**的同层步骤由声明里
+  `task.branch` 节点的第三格出边承担（`main[0]`=then、`main[1]`=else、`main[2]`=`if` 之后的那些步，
+  空的那一格给 `[]`，位置不省略）。那不是回汇：回汇是两条边收进同一个节点，需要数据模型里
+  有一个明确的汇合点，那是下一步的事。
+- **嵌套深度上限定 8。** 校验器与三个视图都要走这棵树，一份恶意嵌套的 JSON 不该能把它们打爆；
+  正常人也不会写九层条件。超了给 `plan.step.depth_exceeded`，且那一层不再往下递归——
+  恶意嵌套的代价是一层诊断，不是一次爆栈。
 
 设备这一层因此是「一份目录 + 一套任务格式 + 一个去处」。同一份 SO-101 技能库发给真机还是发给仿真，
 换的只是去处——这也是 RoboFrame 自己的分法。

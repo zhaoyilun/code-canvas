@@ -5,15 +5,24 @@
  * 如果来回一趟会丢东西或变形，它显示的就是另一份东西，而不是同一份真相的另一种写法。
  *
  * 两条路都用**真实目录**跑：一期用示意目录，技能计划用上游 RoboFrame 转出来的那份。
+ * 技能计划这一侧还有分支：`if` 步 ↔ `task.branch` 节点，三条出边的**位置就是语义**，
+ * 所以「来回一趟等价」要连出边一起量（不是只量长度）。
  */
 import { describe, expect, it } from 'vitest';
 import { PHASE1_ROBOT_CATALOG, ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
-import { createDeterministicIdFactory, type WorkflowDeclaration } from '@codecanvas/contracts';
+import { createDeterministicIdFactory, type JsonObject, type WorkflowDeclaration } from '@codecanvas/contracts';
 import { declarationToSkillPlan, declarationToTask, findTaskFormat } from '../src/format';
-import { importSkillPlan } from '../src/skill-plan';
+import { TASK_BRANCH_NODE_TYPE, importSkillPlan } from '../src/skill-plan';
 import { importTaskJson } from '../src/convert';
 
 const ids = createDeterministicIdFactory();
+
+/** 某一步第 `port` 格出边指向谁（0=then，1=else，2=这一层后面那一步）。 */
+const portHead = (declaration: WorkflowDeclaration, nodeId: string, port: number): string | undefined =>
+	declaration.connections[nodeId]?.main?.[port]?.[0]?.node;
+
+const parametersAt = (declaration: WorkflowDeclaration, nodeId: string | undefined): JsonObject | undefined =>
+	nodeId === undefined ? undefined : declaration.nodes.find((node) => node.id === nodeId)?.parameters;
 
 /** 一份最小的合法一期任务：够跑通「导入 → 还原 → 再导入」就行。 */
 const SAMPLE_TASK = {
@@ -116,5 +125,163 @@ describe('技能计划：声明 ↔ 技能计划 JSON', () => {
 		const result = findTaskFormat('skill_plan').validateDeclaration(broken, context);
 		expect(result.ok).toBe(false);
 		expect(result.diagnostics.map((diagnostic) => diagnostic.code)).toContain('plan.step.skill.unknown');
+	});
+
+	it('没有分支的声明按声明顺序还原——哪怕它一条 connections 都没有', () => {
+		// 手拼出来的声明就是这种形状（studio 的夹具与「把声明贴进来」这种用法都有）。
+		// 平铺的一串只有按声明顺序读才对得上，所以这一条不能被分支那条路吃掉。
+		const flat: WorkflowDeclaration = {
+			formatVersion: 1,
+			id: 'wf_flat',
+			name: '两句技能',
+			nodes: [
+				{ id: 'nd_1', name: '1. 打招呼', type: 'task.action', typeVersion: 1, parameters: { action: 'wave_hello' }, position: { x: 0, y: 0 }, disabled: false },
+				{
+					id: 'nd_2',
+					name: '2. 相对移动',
+					type: 'task.action',
+					typeVersion: 1,
+					parameters: { action: 'move_relative_ee', motion_direction: 'forward', motion_distance: 0.03 },
+					position: { x: 220, y: 0 },
+					disabled: false,
+				},
+			],
+			connections: {},
+			digest: 'sha256-0000000000000000000000000000000000000000000000000000000000000000',
+			meta: { schemaVersion: 1, robot: 'so101_single_arm' },
+		};
+		expect(declarationToSkillPlan(flat)).toEqual({
+			schemaVersion: 1,
+			robot: 'so101_single_arm',
+			plan: [
+				{ step: 'skill', skill: 'wave_hello' },
+				{ step: 'skill', skill: 'move_relative_ee', params: { motion_direction: 'forward', motion_distance: 0.03 } },
+			],
+		});
+	});
+
+	// ------------------------------------------------------------------
+	// 分支：计划 → 声明 → 计划
+	// ------------------------------------------------------------------
+
+	/** 计划 → 声明 → 计划：深等价，再钉一次字节（键序照冻结的形状）。 */
+	const expectRoundTrip = (plan: Record<string, unknown>): WorkflowDeclaration => {
+		const imported = importSkillPlan(plan, context);
+		if (!imported.ok) throw new Error('计划应当能导入');
+		const restored = declarationToSkillPlan(imported.declaration);
+		expect(restored).toEqual(plan);
+		expect(JSON.stringify(restored)).toBe(JSON.stringify(plan));
+		// 第二道闸走的就是这条逆映射：同一份声明量出来必须是绿的。
+		expect(findTaskFormat('skill_plan').validateDeclaration(imported.declaration, context).ok).toBe(true);
+		return imported.declaration;
+	};
+
+	/** 「看一眼 → 没成就重看，否则挪一点 → 再挪一点」：then / else / if 之后的步骤三格全占。 */
+	const BRANCH_PLAN = {
+		schemaVersion: 1,
+		robot: 'so101_single_arm',
+		description: '看一眼，没成就重看，否则挪一点，最后再挪一点',
+		plan: [
+			{ step: 'skill', skill: 'inspect_scene' },
+			{
+				step: 'if',
+				condition: { field: 'last.success', op: '==', value: false },
+				then: [{ step: 'skill', skill: 'wave_hello' }],
+				else: [
+					{ step: 'skill', skill: 'move_relative_ee', params: { motion_direction: 'forward', motion_distance: 0.03 } },
+				],
+			},
+			{ step: 'skill', skill: 'inspect_scene' },
+		],
+	};
+
+	it('带分支的计划来回一趟等价，且三格出边的位置真的是 then / else / if 之后（内容断言）', () => {
+		const declaration = expectRoundTrip(BRANCH_PLAN);
+		const branchId = declaration.nodes.find((node) => node.type === TASK_BRANCH_NODE_TYPE)?.id;
+		if (branchId === undefined) throw new Error('应当有一个分支节点');
+
+		const groups = declaration.connections[branchId]?.main;
+		expect(groups).toHaveLength(3);
+		// main[0] 是 then：条件成立时走的那一步。
+		expect(parametersAt(declaration, portHead(declaration, branchId, 0))).toEqual({ action: 'wave_hello' });
+		// main[1] 是 else：条件不成立时挪一点（距离 0.03，不是 main[2] 那一步的距离）。
+		expect(parametersAt(declaration, portHead(declaration, branchId, 1))).toEqual({
+			action: 'move_relative_ee',
+			motion_direction: 'forward',
+			motion_distance: 0.03,
+		});
+		// main[2] 是 if 执行完接着走的那一步，与走了哪一臂无关。
+		expect(parametersAt(declaration, portHead(declaration, branchId, 2))).toEqual({ action: 'inspect_scene' });
+	});
+
+	it('只有 then 的计划来回一趟等价：没有 else 就给空格子（位置不省略）', () => {
+		const declaration = expectRoundTrip({
+			schemaVersion: 1,
+			robot: 'so101_single_arm',
+			plan: [
+				{
+					step: 'if',
+					condition: { field: 'last.success', op: '!=', value: false },
+					then: [{ step: 'skill', skill: 'wave_hello', timeoutSec: 5 }],
+				},
+			],
+		});
+		const branchId = declaration.nodes.find((node) => node.type === TASK_BRANCH_NODE_TYPE)?.id;
+		if (branchId === undefined) throw new Error('应当有一个分支节点');
+		expect(declaration.connections[branchId]?.main).toEqual([
+			[{ node: portHead(declaration, branchId, 0), input: 0 }],
+			[],
+			[],
+		]);
+	});
+
+	it('嵌套的计划来回一趟等价：臂里再放一个 if', () => {
+		expectRoundTrip({
+			schemaVersion: 1,
+			robot: 'so101_single_arm',
+			plan: [
+				{
+					step: 'if',
+					condition: { field: 'last.success', op: '==', value: false },
+					then: [
+						{
+							step: 'if',
+							condition: { field: 'last.success', op: '!=', value: false },
+							then: [{ step: 'skill', skill: 'wave_hello' }],
+						},
+						{ step: 'skill', skill: 'inspect_scene' },
+					],
+					else: [
+						{
+							step: 'skill',
+							skill: 'move_relative_ee',
+							params: { motion_direction: 'back', motion_distance: 0.02 },
+							timeoutSec: 10,
+						},
+					],
+				},
+			],
+		});
+	});
+
+	it('第二道闸认得出被改坏的分支臂，且 path 指到臂里那一层', () => {
+		const imported = importSkillPlan(BRANCH_PLAN, context);
+		if (!imported.ok) throw new Error('计划应当能导入');
+		const declaration = imported.declaration;
+		const branchId = declaration.nodes.find((node) => node.type === TASK_BRANCH_NODE_TYPE)?.id;
+		if (branchId === undefined) throw new Error('应当有一个分支节点');
+		const thenHead = portHead(declaration, branchId, 0);
+
+		const broken: WorkflowDeclaration = {
+			...declaration,
+			nodes: declaration.nodes.map((node) =>
+				node.id === thenHead ? { ...node, parameters: { ...node.parameters, action: 'fly' } } : node,
+			),
+		};
+		const result = findTaskFormat('skill_plan').validateDeclaration(broken, context);
+		expect(result.ok).toBe(false);
+		expect(result.diagnostics.map((diagnostic) => `${diagnostic.code}@${diagnostic.path ?? ''}`)).toContain(
+			'plan.step.skill.unknown@plan[1].then[0].skill',
+		);
 	});
 });

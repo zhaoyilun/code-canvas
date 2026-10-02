@@ -1,11 +1,13 @@
 /**
  * 技能计划的校验器：**判据是目录**，不是写死的动作表。
  *
- * 这份测试要钉住的三件事：
+ * 这份测试要钉住的四件事：
  * 1. 合法计划原样通过，参数按目录里的类型判；
  * 2. 不合法的每一类都有**自己的码**（技能查不到 / 参数名不认 / 类型不对 / 步种类不支持），
  *    界面能据此指出是哪一步的哪个字段；
- * 3. 缺参数只**提醒**（目录没有必填这一栏，执行侧有默认值），不许因此拦下整份计划。
+ * 3. 缺参数只**提醒**（目录没有必填这一栏，执行侧有默认值），不许因此拦下整份计划；
+ * 4. 分支（`if` 步）的每一条规矩都是硬规矩：条件只认 `last.success`（字段 / 运算符 / 取值各自有码）、
+ *    嵌套有深度上限、`then` 非空、`else` 给了就非空，且诊断的 `path` 要指到嵌套里的那一层。
  */
 import { describe, expect, it } from 'vitest';
 import { capabilityCatalogSchema, type CapabilityCatalog } from '../src/capability';
@@ -130,5 +132,174 @@ describe('技能计划的校验', () => {
 	it('超时必须正数', () => {
 		const result = validateSkillPlan(step({ step: 'skill', skill: 'wave_hello', timeoutSec: 0 }), { catalog: CATALOG });
 		expect(codes(result)).toEqual(['plan.step.timeout.invalid']);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 分支（`if` 步）
+// ---------------------------------------------------------------------------
+
+/** 一条 `if` 步，按冻结的形状写：条件只认 `last.success`，两条臂装的是同一个联合。 */
+const branch = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+	step: 'if',
+	condition: { field: 'last.success', op: '==', value: false },
+	then: [{ step: 'skill', skill: 'wave_hello' }],
+	...overrides,
+});
+
+const condition = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+	field: 'last.success',
+	op: '==',
+	value: true,
+	...overrides,
+});
+
+/** 把 `levels` 层 `if` 叠起来，最里面是一个技能步——用来量深度上限。 */
+const nest = (levels: number): Record<string, unknown> => {
+	let innermost: Record<string, unknown> = { step: 'skill', skill: 'wave_hello' };
+	for (let level = 0; level < levels; level += 1) innermost = branch({ then: [innermost] });
+	return innermost;
+};
+
+const planOf = (...steps: Record<string, unknown>[]) => ({
+	schemaVersion: SKILL_PLAN_SCHEMA_VERSION,
+	robot: 'so101_single_arm',
+	plan: steps,
+});
+
+describe('技能计划的分支', () => {
+	it('嵌套合法：`if` 里还能再放 `if`，两条臂里的步骤照目录判', () => {
+		const result = validateSkillPlan(
+			step(
+				branch({
+					then: [
+						{ step: 'skill', skill: 'move_relative_ee', params: { motion_direction: 'forward', motion_distance: 0.03 } },
+						branch({
+							condition: condition({ op: '!=' }),
+							then: [{ step: 'skill', skill: 'tune_joints', params: { joint_positions: { '1': 0.1 } } }],
+						}),
+					],
+					else: [{ step: 'skill', skill: 'wave_hello' }],
+				}),
+			),
+			{ catalog: CATALOG, expectedRobot: 'so101_single_arm' },
+		);
+		expect(codes(result)).toEqual([]);
+		if (!result.ok) throw new Error('应当通过');
+		expect(result.plan.plan).toStrictEqual([
+			{
+				step: 'if',
+				condition: { field: 'last.success', op: '==', value: false },
+				then: [
+					{ step: 'skill', skill: 'move_relative_ee', params: { motion_direction: 'forward', motion_distance: 0.03 } },
+					{
+						step: 'if',
+						condition: { field: 'last.success', op: '!=', value: true },
+						then: [{ step: 'skill', skill: 'tune_joints', params: { joint_positions: { '1': 0.1 } } }],
+					},
+				],
+				else: [{ step: 'skill', skill: 'wave_hello' }],
+			},
+		]);
+	});
+
+	it('平面步骤与分支混在同一条链上：分支在中间也合法（`if` 执行完接着往下走）', () => {
+		const result = validateSkillPlan(
+			planOf(
+				{ step: 'skill', skill: 'wave_hello' },
+				branch(),
+				{ step: 'skill', skill: 'tune_joints', params: { joint_positions: { '1': 0.1 } } },
+			),
+			{ catalog: CATALOG },
+		);
+		expect(codes(result)).toEqual([]);
+		if (!result.ok) throw new Error('应当通过');
+		// 三步都在，顺序照写的那样——「分支之后的步骤」在计划层就是普通的一步。
+		expect(result.plan.plan.map((item) => item.step)).toEqual(['skill', 'if', 'skill']);
+		expect(result.plan.plan[1]).toStrictEqual({
+			step: 'if',
+			condition: { field: 'last.success', op: '==', value: false },
+			then: [{ step: 'skill', skill: 'wave_hello' }],
+		});
+	});
+
+	it('只有 then 的分支合法：结果里不带 else 键', () => {
+		const result = validateSkillPlan(step(branch()), { catalog: CATALOG });
+		expect(codes(result)).toEqual([]);
+		if (!result.ok) throw new Error('应当通过');
+		expect(Object.keys(result.plan.plan[0] ?? {})).toEqual(['step', 'condition', 'then']);
+	});
+
+	it('深度 8 通过、9 被拒，且 path 指到超限的那一层', () => {
+		expect(codes(validateSkillPlan(step(nest(8)), { catalog: CATALOG }))).toEqual([]);
+
+		const tooDeep = validateSkillPlan(step(nest(9)), { catalog: CATALOG });
+		expect(codes(tooDeep)).toEqual(['plan.step.depth_exceeded']);
+		expect(tooDeep.diagnostics[0]?.path).toBe(`plan[0]${'.then[0]'.repeat(8)}`);
+		expect(tooDeep.diagnostics[0]?.details).toEqual({ depth: 9, limit: 8 });
+	});
+
+	it('`then` 至少要有一个步骤', () => {
+		const result = validateSkillPlan(step(branch({ then: [] })), { catalog: CATALOG });
+		expect(codes(result)).toEqual(['plan.step.if.then_empty']);
+		expect(result.diagnostics[0]?.path).toBe('plan[0].then');
+	});
+
+	it('`else` 给了就不能为空', () => {
+		const result = validateSkillPlan(step(branch({ else: [] })), { catalog: CATALOG });
+		expect(codes(result)).toEqual(['plan.step.if.else_empty']);
+		expect(result.diagnostics[0]?.path).toBe('plan[0].else');
+	});
+
+	it('条件只认 last.success：字段 / 运算符 / 取值 / 形状各自有码', () => {
+		const fieldResult = validateSkillPlan(step(branch({ condition: condition({ field: 'last.gripper' }) })), { catalog: CATALOG });
+		expect(codes(fieldResult)).toEqual(['plan.step.condition.field.unsupported']);
+		expect(fieldResult.diagnostics[0]?.path).toBe('plan[0].condition.field');
+		expect(fieldResult.diagnostics[0]?.details?.['allowed']).toEqual(['last.success']);
+
+		const opResult = validateSkillPlan(step(branch({ condition: condition({ op: '>' }) })), { catalog: CATALOG });
+		expect(codes(opResult)).toEqual(['plan.step.condition.op.unsupported']);
+		expect(opResult.diagnostics[0]?.path).toBe('plan[0].condition.op');
+		expect(opResult.diagnostics[0]?.details?.['allowed']).toEqual(['==', '!=']);
+
+		const valueResult = validateSkillPlan(step(branch({ condition: condition({ value: 'yes' }) })), { catalog: CATALOG });
+		expect(codes(valueResult)).toEqual(['plan.step.condition.value.invalid']);
+		expect(valueResult.diagnostics[0]?.path).toBe('plan[0].condition.value');
+
+		const shapeResult = validateSkillPlan(step(branch({ condition: 'last.success' })), { catalog: CATALOG });
+		expect(codes(shapeResult)).toEqual(['plan.step.condition.not_object']);
+		expect(shapeResult.diagnostics[0]?.path).toBe('plan[0].condition');
+	});
+
+	it('条件不对也接着量两条臂：一次把能报的都报出来', () => {
+		const result = validateSkillPlan(step(branch({ condition: condition({ field: 'last.gripper' }), then: [{ step: 'skill', skill: 'fly' }] })), {
+			catalog: CATALOG,
+		});
+		expect(result.diagnostics.map((diagnostic) => `${diagnostic.code}@${diagnostic.path ?? ''}`)).toEqual([
+			'plan.step.condition.field.unsupported@plan[0].condition.field',
+			'plan.step.skill.unknown@plan[0].then[0].skill',
+		]);
+	});
+
+	it('path 指到嵌套里那一层：臂里的技能与参数照目录判', () => {
+		const result = validateSkillPlan(
+			step(
+				branch({
+					then: [
+						branch({
+							then: [{ step: 'skill', skill: 'move_relative_ee', params: { motion_distance: 'far' } }],
+							else: [{ step: 'skill', skill: 'fly' }],
+						}),
+					],
+				}),
+			),
+			{ catalog: CATALOG },
+		);
+		expect(result.diagnostics.map((diagnostic) => `${diagnostic.code}@${diagnostic.path ?? ''}`)).toEqual([
+			'plan.step.param.type@plan[0].then[0].then[0].params.motion_distance',
+			// 另一个参数压根没给：提醒，不拦。
+			'plan.step.param.missing@plan[0].then[0].then[0].params',
+			'plan.step.skill.unknown@plan[0].then[0].else[0].skill',
+		]);
 	});
 });
