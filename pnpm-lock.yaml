@@ -150,6 +150,22 @@ importers:
         specifier: ^5.0.3
         version: 5.0.3(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@29.1.1)(vite@8.3.2(@types/node@26.6.4)(yaml@2.9.1))
 
+  packages/robot-bridge:
+    dependencies:
+      '@codecanvas/contracts':
+        specifier: workspace:*
+        version: link:../contracts
+      zod:
+        specifier: ^4.6.5
+        version: 4.6.5
+    devDependencies:
+      '@codecanvas/capabilities':
+        specifier: workspace:*
+        version: link:../capabilities
+      vitest:
+        specifier: ^5.0.3
+        version: 5.0.3(@types/node@26.6.4)(happy-dom@20.14.5)(jsdom@29.1.1)(vite@8.3.2(@types/node@26.6.4)(yaml@2.9.1))
+
   packages/task-import:
     dependencies:
       '@codecanvas/contracts':

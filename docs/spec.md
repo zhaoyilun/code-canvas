@@ -556,6 +556,56 @@ interface CapabilityCatalog {
 参数类型多了一个 `json`；渲染时紧凑 JSON 摊不下就摊成多行，
 那些续行与结构一样**只读**。
 
+### 5.2 计划 → bridge：编译契约
+
+技能计划要送到真机器人那边去，第一步是把它编成 **bridge 的调用序列**
+（`@codecanvas/robot-bridge` 的 `compilePlanToCalls`）。这一节钉的是那份编译的对外承诺：
+哪一类步送去哪儿、**轮询在哪一侧**、以及**哪一步送不出去**。
+
+形状的判据不是这份文档，是 bridge 自己的 pydantic 模型：`services/roboframe-bridge` 的
+`roboframe_bridge/models.py` 原样抄进 `docs/reference/bridge_models.py`（commit `561f75f9`，
+只抄 models 那一层，FastAPI app 不抄）。`packages/robot-bridge/src/models.ts` 是它的 zod 镜像，
+`test/model-parity.test.ts` 把编出来的请求交给那份 pydantic 逐个 validate——文档会漂，
+判据不会。
+
+bridge 暴露的接口：
+
+| 方法 / 路径 | 请求 | 响应 |
+| --- | --- | --- |
+| `POST /v1/skills/validate` | `{skill, params}` | `{valid, error_code, message}` |
+| `POST /v1/skills/execute` | `{task_id(1..128), skill, params, timeout_sec? > 0}` | 202 `{accepted, task_id, skill}`；**技能不在目录里就 404** |
+| `GET /v1/tasks/{task_id}` | — | `{task_id, skill, state, success, error_code, message, executed_primitives}` |
+| `POST /v1/tasks/{task_id}/cancel` | — | `{task_id, requested, state, message}` |
+| `GET /v1/catalog`、`/v1/catalog/skills/{name}`、`/v1/catalog/poses`、`/v1/status`、`/v1/health` | — | 见 `bridge_models.py` |
+
+四类计划步的去向（这份清单是**导出的数据**——`STEP_ROUTING`，界面直接读它，不另编一套说法）：
+
+| 计划步 | 送去哪儿 | 编译产物 |
+| --- | --- | --- |
+| `skill` | **bridge** | `POST /v1/skills/execute` 的请求体（字段名逐字对得上 `ExecuteRequest`）+ 要轮询的那条路径 |
+| `if` | **客户端** | 一条 `branch`：条件原样带过来，两条臂都编出来（走哪条等运行时才知道） |
+| `wait` | **客户端** | 一条 `wait`：秒数原样，bridge 不参与 |
+| `primitive` | **无处可送** | 一条调用都不产出，出一条诊断 `bridge.plan.primitive_unsupported` |
+
+**轮询在客户端这一侧。** `execute` 是异步的：它立刻回 202，成败**从不**进请求的响应，
+只通过任务注册表暴露——所以「这一步成没成」只能在客户端轮询 `GET /v1/tasks/{task_id}` 读到终态。
+终态判据是 `success && state === 'completed'`：`state` 是 `canceled` / `unknown` 时，哪怕设备说成了
+也**不算走完**——把取消说成成功，计划会照着「上一步成了」往下走，而机器其实没动。
+轮询的两个缺省值（500ms 一次、截止时间 = 超时 + 30 秒余量）与这条判据来自**已经跑过**的实现
+（旧仓库的 `nodes/shared/engine.ts`），不是这一层拍的。**分支读的就是那个 `success`**：
+`if` 只有 `last.success` 一个字段，而它指的是上一步轮询回来的结果——条件在客户端判，
+判据来自 bridge 的响应，两句话要一起说才成立。
+
+**原语送不了。** bridge 只接技能名：`execute` 拿请求里的 `skill` 去技能目录里比，不在就 404，
+而那份目录由 CLI 的 `skill_templates` 建出来——**只有技能，没有原语**。所以 `primitive` 步
+（`open_gripper` 这种没有技能包装的原子动作）**没有端点可送**。不许把它硬塞进 `execute`
+（那会把原语名当技能名发出去，换来一个 404），也不许假装它执行过——它出诊断，界面上照实说。
+**这不是我们的欠账，是执行侧没有这条路**：要送得先给 bridge（或它背后的 CLI）加一条原语通路。
+
+**`task_id` 是确定性的**：同一份计划两次编译给同一串 id（测试因此能逐字对账），长度落在
+bridge 的上限里（1..128），路径进 id 所以每一步、每条臂各有各的。真要下发第二次时，
+调用方传一个带时间戳的前缀——bridge 靠 `task_id` 认任务，重号就是把两次执行记成一次。
+
 ---
 
 ## 6. 生命周期
