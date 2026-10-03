@@ -16,6 +16,11 @@
  * 3. **失败只出诊断。** 网络、HTTP 非 2xx、响应不是 JSON、JSON 不合协议，四类都摆在入口下方，
  *    不弹窗、不动已有的声明（真相一个字节都不改）。
  *
+ * 生成是**流式**的（`llm-stream.ts`）：模型边说边给，于是入口下方多一行**运行中的原始文本**，
+ * 流程画布上同步长出**幽灵卡**（未校验的半成品，见 `provisional.ts` 与 `provisional-declaration.ts`）。
+ * 这三样东西的关系只有一句话：**原始文本与幽灵卡都是"我收到了什么"，不是"这份文档是什么"**——
+ * 定稿一到（校验过了）幽灵态整块消失，真相换新；失败则幽灵态清掉，回到上一份定稿。
+ *
  * 右半的转译链不是装饰：生成进行中它逐段点亮，成功后全亮一小会儿再回常态并留下「已完成」标记，
  * 失败则停在出错的那一段（染成危险色）。
  */
@@ -25,7 +30,16 @@ import { findTaskFormat, type TaskFormatRef } from '@codecanvas/task-import';
 import { useStudioDocument } from '../state/document';
 import { useStudioDevices } from './devices';
 import { DEFAULT_LLM_ENDPOINT, DEFAULT_LLM_MODEL } from './llm-json';
-import { generateTask, generationDiagnostic } from './task-generation';
+import {
+	beginProvisional,
+	endProvisional,
+	provisionalGenerating,
+	provisionalPlan,
+	provisionalText,
+	updateProvisional,
+} from './provisional-declaration';
+import { parseProvisionalSkillPlan } from './provisional';
+import { generateTaskStream, generationDiagnostic } from './task-generation';
 
 const doc = useStudioDocument();
 const devices = useStudioDevices();
@@ -143,9 +157,27 @@ const chainNote = ref('');
  */
 let runId = 0;
 
+/**
+ * 在途那次流式请求的中止把手。
+ *
+ * `runId` 管的是「结果还要不要」，它管不了**连接**：流式那条路会在生成途中一直往回吐字，
+ * 不主动断的话，一次被作废的生成还会继续占着连接、继续往界面上写原文。所以两者配对使用：
+ * 换一轮（或卸载）先 `abort()` 再 `runId += 1`——调用方那一侧据此拿到「已中止」而不是失败。
+ */
+let inFlight: AbortController | null = null;
+
+/** 作废在途的那一次生成：断开连接 + 推进 runId（两件事必须一起做，见上）。 */
+const cancelInFlight = (): void => {
+	inFlight?.abort();
+	inFlight = null;
+	runId += 1;
+};
+
 onBeforeUnmount(() => {
 	// 卸载即作废：在途的那次生成回来时 `runId` 已经变了，自己走掉，不碰真相、也不碰已卸载的组件。
-	runId += 1;
+	// 幽灵态是模块级的 ref（比组件活得久），所以这里还要把它清掉——否则下一次挂载会看到上一次的残影。
+	cancelInFlight();
+	endProvisional();
 });
 
 watch(endpoint, (value) => {
@@ -200,7 +232,9 @@ const settleChain = (converted: boolean, failAt: number): boolean => {
 
 /** 手工入口（粘贴 / 拖入落定后点的那一下）。同步完成，链路直接把结论摆出来。 */
 function convert(): void {
-	runId += 1;
+	cancelInFlight();
+	// 手工灌一份就是「不要那条在途的生成了」：幽灵态跟着清掉，视图立刻回到真相。不用等它跑完。
+	endProvisional();
 	transportDiagnostics.value = null;
 	failureLabel.value = '转换失败';
 	lastPath.value = 'paste';
@@ -208,7 +242,8 @@ function convert(): void {
 }
 
 function clear(): void {
-	runId += 1;
+	cancelInFlight();
+	endProvisional();
 	pasteText.value = '';
 	sourceName.value = '';
 	status.value = 'idle';
@@ -218,14 +253,17 @@ function clear(): void {
 
 /**
  * 生成：把 `{ deviceRef, formatRef, catalogRef, instruction }`（连同 LLM 那几个字段）POST 给生成接口，
- * 拿回任务 JSON。
+ * 拿回任务 JSON。**流式**：模型边说边给，途中界面就有原始文本与幽灵卡可看。
  *
  * 设备那三件缺一不可：`deviceRef` 说发给谁，`formatRef` 说按哪把尺子编（提示词也跟着它切），
  * `catalogRef` 说词汇表是哪一份——技能计划那条路的技能名与参数全靠目录，写死一份就错一份。
  *
  * 只有这一条路真正花时间，链路就在这段时间里亮着。**校验不在这一层**：
- * `generateTask` 拿到文本后交给 `accept`，而 `accept` 就是 `doc.loadTaskJson`——
+ * `generateTaskStream` 拿到文本后交给 `accept`，而 `accept` 就是 `doc.loadTaskJson`——
  * 唯一那条导入路。它说不行就再试一次（默认两次尝试），试完还不行就把诊断摆在入口下方。
+ *
+ * 途中那两样东西（原始文本、幽灵卡）**都不是真相**：它们从模型的累积原文算出来，
+ * 只活在 `provisional-declaration.ts` 那几个 ref 里。真相只在 `accept` 过闸的那一刻换。
  */
 async function generate(): Promise<void> {
 	const url = endpoint.value.trim();
@@ -233,7 +271,10 @@ async function generate(): Promise<void> {
 	const device = selectedDevice.value;
 	if (url === '' || text === '' || device === null || busy.value) return;
 
-	const mine = (runId += 1);
+	cancelInFlight();
+	const mine = runId;
+	const controller = new AbortController();
+	inFlight = controller;
 	busy.value = true;
 	transportDiagnostics.value = null;
 	status.value = 'idle';
@@ -241,6 +282,8 @@ async function generate(): Promise<void> {
 	lastPath.value = 'generate';
 	chainPhase.value = 'running';
 	chainNote.value = '生成中…';
+	// 幽灵态从这一刻开始（先清上一轮，再立起「正在生成」）。
+	beginProvisional();
 
 	/*
 	 * 整条流程包在 try 里，`busy` 在 finally 里无条件放下。
@@ -249,7 +292,7 @@ async function generate(): Promise<void> {
 	 * 这里无条件清是安全的：只有本函数会把它立起来，而它开头就被 `busy` 挡着。
 	 */
 	try {
-		const result = await generateTask({
+		const result = await generateTaskStream({
 			endpoint: url,
 			deviceRef: device.deviceRef,
 			formatRef: device.formatRef,
@@ -270,6 +313,18 @@ async function generate(): Promise<void> {
 				if (runId !== mine) return;
 				chainNote.value = total > 1 && attempt > 1 ? `生成中… 第 ${attempt}/${total} 次` : '生成中…';
 			},
+			/*
+			 * 每来一段：原文落在入口那一行上，同时重算半成品（幽灵卡的来源）。
+			 *
+			 * 拿到的是**已经剥好围栏、也去过信封的正文**（`llm-stream.ts` 的 `envelopeContentOf`
+			 * 与非流式那条路同一套判据），所以这里不重复处理——两处各剥一次，迟早有一处漏一种写法。
+			 * 半成品解析是纯函数、不抛：解不出几步就少画几张卡，一行原文照样在。
+			 */
+			onDelta: (content) => {
+				if (runId !== mine) return;
+				updateProvisional(content, parseProvisionalSkillPlan(device.formatRef, content));
+			},
+			signal: controller.signal,
 		});
 
 		if (runId !== mine) return;
@@ -279,6 +334,9 @@ async function generate(): Promise<void> {
 			pasteText.value = result.text ?? '';
 			sourceName.value = '';
 		}
+		// 到这里这次生成已经有了结论：幽灵态到此为止，视图立刻回到真相那一边。
+		// 「定稿换新」与「幽灵态清掉」是同一刻的两件事，中间没有逐块替换的窗口。
+		endProvisional();
 
 		if (!result.ok) {
 			if (result.kind === 'rejected') {
@@ -303,6 +361,8 @@ async function generate(): Promise<void> {
 		// 硬等了 ~0.39s——胶囊已经没有了，那就是纯粹给落定加延迟。
 		status.value = settleChain(true, 0) ? 'ok' : 'failed';
 	} finally {
+		// 只清自己那一把：被打断时 inFlight 已经换成新的了，清掉它会把新一轮的中止把手弄丢。
+		if (inFlight === controller) inFlight = null;
 		busy.value = false;
 	}
 }
@@ -415,6 +475,21 @@ const location = (diagnostic: Diagnostic): string => {
 					>
 						{{ busy ? '生成中…' : '生成' }}
 					</button>
+				</div>
+
+				<!--
+					原始 token 流：模型正在吐的那段原文（等宽、截断、滚到最后）。
+					它与右边状态行那句「生成中…」**不是同一件事**：那句说"我在干什么"，
+					这一行说"我收到了什么"——两句都要在，少一句就要么看不出在跑、要么看不见收到了啥。
+				-->
+				<div
+					v-if="provisionalGenerating"
+					class="raw-stream"
+					data-testid="task-raw-stream"
+					data-provisional="true"
+				>
+					<span class="raw-label">正在生成，尚未校验</span>
+					<code class="raw-text" data-testid="task-raw-text">{{ provisionalText }}</code>
 				</div>
 
 				<!-- 次要入口（一）：接口设置。折叠着，填一次记进 localStorage。 -->
@@ -887,7 +962,48 @@ const location = (diagnostic: Diagnostic): string => {
 	}
 }
 
-/* 降级：不要动效的人看到的是一行稳定常亮的字，信息一个不少 */
+/*
+ * 原始 token 流那一行：等宽、单行截断、滚到最后。
+ *
+ * 「滚到最后」不是 `overflow-x: auto` 自动给的——元素一多，横向滚动条停在最左，
+ * 看到的是最早那几个字。靠 flex 的 `justify-content: flex-end` 把内容顶到右端，
+ * 于是每次重渲染看到的都是**最新**那一段（人关心的是"它现在吐到哪了"）。
+ * `min-width: 0` 是必须的：没有它，flex 子项不会收缩，长文本会把带子撑破。
+ */
+.raw-stream {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: var(--cc-space-2);
+	flex: 0 0 auto;
+	min-width: 0;
+	overflow: hidden;
+	/* 与「它还没校验」这件事对得上：虚线，与下面那行实心的状态字分开 */
+	border-top: 1px dashed var(--cc-line-strong);
+	padding-top: var(--cc-space-1);
+}
+
+.raw-label {
+	flex: 0 0 auto;
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-chain-live);
+	white-space: nowrap;
+}
+
+.raw-text {
+	min-width: 0;
+	overflow: hidden;
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-dim);
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/*
+ * 降级：不要动效的人看到的是一行稳定常亮的字，信息一个不少。
+ * 这一行的区别本来就不靠动画（虚线 + 「尚未校验」四个字），这里不需要额外的降级分支。
+ */
 @media (prefers-reduced-motion: reduce) {
 	.chain-badge.running {
 		animation: none;

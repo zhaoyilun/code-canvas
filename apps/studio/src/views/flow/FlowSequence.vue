@@ -17,11 +17,26 @@ import { runningPlanPath } from '../../shell/device-run';
 import { nodeAtPlanPath } from '../shared/plan-structure';
 import type { FlowArmRow, FlowRow } from './rows';
 
-const props = defineProps<{ readonly rows: readonly FlowRow[] }>();
+const props = defineProps<{
+	readonly rows: readonly FlowRow[];
+	/**
+	 * 这一串卡片画的是**半成品**（生成途中、还没校验过的那份预览）。
+	 *
+	 * 为什么由外面传进来、不在这里读 `provisionalPlan`：这个组件是递归的（臂里装的还是它），
+	 * 而「这一整块是幽灵态」是**画布**那一层的判断，不是每一张卡各自的。传一个布尔下来，
+	 * 臂里的卡片与顶层的卡片说的就是同一件事，不会出现"主干说未校验、臂里说已定稿"。
+	 */
+	readonly provisional?: boolean;
+}>();
 
 const store = useStudioDocument();
 
-const isSelected = (nodeId: string): boolean => store.selectedNodeId.value === nodeId;
+/** 幽灵态：虚线描边 + 「未校验」三个字。两者的区别**不靠动画**（见模板与样式）。 */
+const isProvisional = computed(() => props.provisional === true);
+
+/** 幽灵卡永远不是"选中的那一步"（见 `selectNode` 上的说明）。 */
+const isSelected = (nodeId: string): boolean =>
+	!isProvisional.value && store.selectedNodeId.value === nodeId;
 
 /**
  * 设备**正在跑**的那一步是哪张卡。
@@ -39,10 +54,17 @@ const runningNodeId = computed<string | null>(() => {
 	return nodeAtPlanPath(store.declaration.value, path)?.id ?? null;
 });
 
-const isRunning = (nodeId: string): boolean => runningNodeId.value === nodeId;
+const isRunning = (nodeId: string): boolean => !isProvisional.value && runningNodeId.value === nodeId;
 
-/** 选中是共享状态，不在这里另存一份：点卡片只把 nodeId 推给真相。 */
+/**
+ * 选中是共享状态，不在这里另存一份：点卡片只把 nodeId 推给真相。
+ *
+ * **幽灵卡不接着一手**：选中说的是"我在看真相里的哪一步"，而半成品的节点 id 与真相里的
+ * 是两套（各自的工厂给的），推给 `store` 只会选中一个不存在的 id（三个视图一起空转）。
+ * 所以幽灵态下点卡片什么都不做——它本来也还没什么可看的（实现要去目录里查）。
+ */
 function selectNode(nodeId: string): void {
+	if (isProvisional.value) return;
 	store.select(nodeId);
 }
 
@@ -62,11 +84,12 @@ const connectorAfter = (position: number): boolean => {
 		<article
 			v-if="row.kind === 'card'"
 			class="node-card"
-			:class="{ selected: isSelected(row.card.node.id), branch: row.card.condition !== null, running: isRunning(row.card.node.id) }"
+			:class="{ selected: isSelected(row.card.node.id), branch: row.card.condition !== null, running: isRunning(row.card.node.id), provisional: isProvisional }"
 			role="listitem"
 			tabindex="0"
 			data-testid="flow-node-card"
 			:data-node-id="row.card.node.id"
+			:data-provisional="isProvisional ? 'true' : undefined"
 			:data-selected="isSelected(row.card.node.id) ? 'true' : 'false'"
 			:data-running="isRunning(row.card.node.id) ? 'true' : undefined"
 			:aria-current="isSelected(row.card.node.id) ? 'true' : undefined"
@@ -92,6 +115,18 @@ const connectorAfter = (position: number): boolean => {
 						{{ row.card.stepId }}
 					</span>
 				</div>
+				<!--
+					幽灵卡的标注：**文字**，不是只靠颜色或动画。定稿一到整块换掉，这三个字就没了。
+					`title` 说明它为什么还没校验：模型还在吐，校验要等定稿那一步。
+				-->
+				<span
+					v-if="isProvisional"
+					class="card-provisional"
+					data-testid="flow-node-provisional"
+					title="模型还在吐这份 JSON，还没有过校验：这不是声明，只是预览"
+				>
+					未校验
+				</span>
 			</header>
 
 			<!--
@@ -304,6 +339,34 @@ const connectorAfter = (position: number): boolean => {
 	.node-card.running::before {
 		animation: none;
 	}
+}
+
+/*
+ * 幽灵卡（生成途中那份**未校验**的半成品）：虚线描边 + 降一级的面色 + 不做选中。
+ *
+ * 为什么用虚线而不是"半透明 + 呼吸"：幽灵态与定稿态的区别必须在**没有动画**时也成立
+ * （`prefers-reduced-motion: reduce` 下动画全关，光靠动效就等于没区别）。虚线是静态的、
+ * 一眼看得出的；「未校验」那三个字是第二重、不依赖任何视觉样式的标记。
+ * 面色用 sunken（比定稿卡的 raised 低一档），于是整块看起来"还没落定"。
+ */
+.node-card.provisional {
+	background: var(--cc-surface-sunken);
+	border-style: dashed;
+	cursor: default;
+}
+
+.node-card.provisional:hover {
+	/* 它点不动（见 `selectNode`），别给出"可以点"的反馈。 */
+	border-color: var(--cc-line);
+}
+
+.card-provisional {
+	flex: 0 0 auto;
+	padding: 0 var(--cc-space-1);
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-chain-live);
+	border: 1px dashed var(--cc-line-strong);
+	border-radius: var(--cc-radius-sm);
 }
 
 .card-head {

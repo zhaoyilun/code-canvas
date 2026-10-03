@@ -34,10 +34,12 @@ import {
 import type { TaskFormatRef } from '@codecanvas/task-import';
 import {
 	GENERATION_ATTEMPTS,
+	RETRY_DELAY_MS,
 	type GenerationMessage,
 	type JsonGenerationFailureKind,
 	generateJson,
 } from './llm-json';
+import { generateJsonStream } from './llm-stream';
 
 /**
  * 一期任务规划器的系统提示词。
@@ -178,18 +180,7 @@ export type TaskGenerationResult =
  * 真的只是改一个地址，不需要换一套代码。
  */
 export async function generateTask(options: TaskGenerationOptions): Promise<TaskGenerationResult> {
-	const extras: JsonObject = {
-		// 从目录里推，不另开一个入参：设备与它的目录必须对得上，多一个入口就多一次对不上的机会。
-		catalogRef: options.catalog.catalogRef,
-		deviceRef: options.deviceRef,
-		formatRef: options.formatRef,
-		instruction: options.instruction,
-	};
-	// 技能计划要写明编给哪台机器人（上游 `robot_config` 的 `robot.name`）。
-	// 一期协议没有这一栏，也不编一个空字符串糊上去。
-	if (options.formatRef === 'skill_plan' && options.catalog.robotName !== undefined) {
-		extras['robot'] = options.catalog.robotName;
-	}
+	const extras = requestExtras(options);
 
 	const result = await generateJson({
 		messages: taskMessages(options.instruction, systemPromptFor(options.formatRef, options.catalog)),
@@ -211,6 +202,115 @@ export async function generateTask(options: TaskGenerationOptions): Promise<Task
 		text: result.text,
 		attempts: result.attempts,
 	};
+}
+
+export interface StreamingTaskGenerationOptions extends Omit<TaskGenerationOptions, 'fetchImpl' | 'wait'> {
+	/**
+	 * 每收到一段就报一次（参数是**累积到此刻的全文**）。
+	 * 界面拿它做两件事：入口带那行原始文本、以及重算半成品。
+	 */
+	readonly onDelta?: (accumulated: string) => void;
+	/** 中止：新一轮生成开始、组件卸载时把在途的断掉（`TaskInputBand` 的 `runId` 那套机制）。 */
+	readonly signal?: AbortSignal;
+	/** 测试用：换掉 fetch 与空闲计时。 */
+	readonly fetchImpl?: typeof fetch;
+	readonly idleTimeoutMs?: number;
+	/** 两次尝试之间的等待；缺省与 `generateJson` 同一个数（`RETRY_DELAY_MS`）。 */
+	readonly wait?: (ms: number) => Promise<void>;
+}
+
+/**
+ * 流式版：**同一个请求体、同一份提示词**，只是边说边给。
+ *
+ * 与非流式版的差别只有两处，都是刻意的：
+ *
+ * 1. 文本是**边收边报**的（`onDelta`），所以界面在生成途中就有东西可看——这是这一版存在的理由；
+ * 2. 判据（`accept`）只能在**一段说完了**之后再看（半截 JSON 当然过不了），于是重试的口径变成
+ *    「这一整段流完了、文本过不了判据 → 再流一次」。半成品解析不在这里：它是**预览**，
+ *    与判据无关，由界面自己从 `onDelta` 的文本算（见 `provisional.ts`）。
+ *
+ * 中止走 `signal`：调用方一断，`fetch` 那层就断，`ok: false, kind: 'aborted'` 收场——
+ * 不重试、也不算失败（那一次生成已经作废了）。
+ */
+export async function generateTaskStream(options: StreamingTaskGenerationOptions): Promise<TaskGenerationResult> {
+	const extras = requestExtras(options);
+	const messages = taskMessages(options.instruction, systemPromptFor(options.formatRef, options.catalog));
+	const attempts = Math.max(1, options.attempts ?? GENERATION_ATTEMPTS);
+	const wait = options.wait ?? defaultWait;
+
+	let lastText: string | null = null;
+	let failure: { kind: JsonGenerationFailureKind; message: string } = {
+		kind: 'transport',
+		message: '没有发起请求',
+	};
+
+	for (let attempt = 1; attempt <= attempts; attempt += 1) {
+		options.onAttempt?.(attempt, attempts);
+		const result = await generateJsonStream({
+			messages,
+			endpoint: options.endpoint,
+			extras,
+			...(options.model === undefined ? {} : { model: options.model }),
+			...(options.onDelta === undefined ? {} : { onDelta: options.onDelta }),
+			...(options.signal === undefined ? {} : { signal: options.signal }),
+			...(options.fetchImpl === undefined ? {} : { fetchImpl: options.fetchImpl }),
+			...(options.idleTimeoutMs === undefined ? {} : { idleTimeoutMs: options.idleTimeoutMs }),
+		});
+
+		if (result.ok) {
+			lastText = result.text;
+			// 拿回来了，判据在调用方手里——与非流式那条路同一个口径（`loadTaskJson` 是唯一那条路）。
+			if (options.accept(result.text)) return { ok: true, text: result.text, attempts: attempt };
+			failure = { kind: 'rejected', message: '模型给的 JSON 没通过调用方的判据' };
+		} else {
+			// 调用方自己中止的（新一轮生成 / 组件卸载）：那一次生成已经作废。
+			// 这里给 `transport` 只是**形状上的归属**——结果一交出去就被 `runId` 那道检查丢掉，
+			// 界面既不出诊断也不改真相（`TaskInputBand` 里逐个失败分支都先看 `runId`）。
+			if (result.kind === 'aborted') {
+				return { ok: false, kind: 'transport', message: result.error, text: result.text, attempts: attempt };
+			}
+			// **只更新到「拿到过多东西」**：后一次尝试连不上时 `text` 是 null，用 null 盖掉
+			// 前一次已经收到的部分，兜底框就空了——而"拿到过什么就让人看得见"这一条不该被重试抹掉。
+			if (result.text !== null) lastText = result.text;
+			// 卡住与流读一半断掉都是传输层：调用方看到的都是「这个地址没给全那份 JSON」。
+			failure = {
+				kind: result.kind === 'response' ? 'response' : 'transport',
+				message: result.error,
+			};
+		}
+
+		if (attempt < attempts) await wait(RETRY_DELAY_MS);
+	}
+
+	return { ok: false, kind: failure.kind, message: failure.message, text: lastText, attempts };
+}
+
+/** 两次尝试之间的等待（照 `llm-json.ts` 的 `RETRY_DELAY_MS`）。 */
+const defaultWait = (ms: number): Promise<void> =>
+	new Promise((resolve) => {
+		setTimeout(resolve, ms);
+	});
+
+/**
+ * 请求体里那些**不是 OpenAI 字段**的额外字段（设备组接口看它们）。
+ *
+ * 流式与非流式两条路各要一份，所以只在这里拼一次：两条路带的东西必须一样，
+ * 各写一遍迟早有一边漏一个字段，而那是联调时最难发现的一类偏差。
+ */
+function requestExtras(options: TaskGenerationOptions): JsonObject {
+	const extras: JsonObject = {
+		// 从目录里推，不另开一个入参：设备与它的目录必须对得上，多一个入口就多一次对不上的机会。
+		catalogRef: options.catalog.catalogRef,
+		deviceRef: options.deviceRef,
+		formatRef: options.formatRef,
+		instruction: options.instruction,
+	};
+	// 技能计划要写明编给哪台机器人（上游 `robot_config` 的 `robot.name`）。
+	// 一期协议没有这一栏，也不编一个空字符串糊上去。
+	if (options.formatRef === 'skill_plan' && options.catalog.robotName !== undefined) {
+		extras['robot'] = options.catalog.robotName;
+	}
+	return extras;
 }
 
 /** 传输 / 响应层失败用的诊断码（协议那几条由 `loadTaskJson` 给，码也是它的）。 */

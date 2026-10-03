@@ -17,6 +17,7 @@
 import { computed } from 'vue';
 import { LIMIT_LABELS, type NumericLimitName } from '@codecanvas/contracts';
 import { useStudioDocument } from '../../state/document';
+import { provisionalGenerating, provisionalPlan } from '../../shell/provisional-declaration';
 import FlowSequence from './FlowSequence.vue';
 import { declarationLimits, type NodeLimits } from './summary';
 import { planStructureOf } from '../shared/plan-structure';
@@ -24,10 +25,33 @@ import { buildFlowRows } from './rows';
 
 const store = useStudioDocument();
 
-const limits = computed<NodeLimits>(() => declarationLimits(store.declaration.value?.meta));
+/**
+ * 现在画的是不是**半成品**（生成途中、还没校验过的那份预览）。
+ *
+ * `provisionalGenerating` 与 `provisionalPlan` 两个条件都要：正在生成不等于已经解出了步骤
+ * （可能还在写 `schemaVersion`），那时该画的是上一份定稿，而不是一张空画布。
+ *
+ * ⚠ 这条判断**只在这里**，而且它绝不写回 `store`：半成品没有过闸，也永远不进真相。
+ * 定稿一到，`endProvisional()` 把生成标志放下，这个 computed 立刻变回 false——
+ * 于是整块从幽灵态换回真相，**一次切换**（模板上是 `v-if` / `v-else`，不可能有一帧两套都在）。
+ */
+const provisional = computed(() => provisionalGenerating.value && provisionalPlan.value !== null);
+
+/**
+ * 这一趟要渲染的那份声明。
+ *
+ * 幽灵态下用它（带 `data-provisional` 的那一块），否则用真相。两者**同型**，所以下面那套
+ * 推导（结构 / 行 / 限值）原封不动地复用——幽灵卡与定稿卡于是必然长得一样，
+ * 差别只有描边与那三个字（这是"预览"该有的样子：长出来的是同一件东西，只是还没落定）。
+ */
+const shownDeclaration = computed(() =>
+	provisional.value ? (provisionalPlan.value?.declaration ?? null) : store.declaration.value,
+);
+
+const limits = computed<NodeLimits>(() => declarationLimits(shownDeclaration.value?.meta));
 
 /** 声明的标题：任务里有 description 就用它（转换器就是这么起名的）。 */
-const taskTitle = computed(() => store.declaration.value?.name ?? '');
+const taskTitle = computed(() => shownDeclaration.value?.name ?? '');
 
 /** 限值条：这几个数字决定参数摘要里的上界，摆在画布上比藏在声明里有用。名字同样取自协议描述表。 */
 const limitChips = computed<readonly string[]>(() =>
@@ -37,28 +61,50 @@ const limitChips = computed<readonly string[]>(() =>
 );
 
 /** 这份声明的结构：一列步骤，分支自带两条臂。 */
-const plan = computed(() => planStructureOf(store.declaration.value));
+const plan = computed(() => planStructureOf(shownDeclaration.value));
 
 // 目录也从 store 取（声明出生时那台设备的）：卡头的中文名与参数名是**设备给**的，
 // 视图里写死任何一份都会在换设备之后显示成标识符。
+//
+// 幽灵态下目录给 null：那张卡上的技能名是**模型写的**，拿目录去认它就等于替它背了书
+// （而校验还没发生）。给 null 时卡片照出原名——与"技能在目录里查不到"是同一条路。
 const rows = computed(() =>
-	buildFlowRows(plan.value.steps, store.diagnostics.value, limits.value, store.declarationCatalog.value),
+	buildFlowRows(
+		plan.value.steps,
+		provisional.value ? [] : store.diagnostics.value,
+		limits.value,
+		provisional.value ? null : store.declarationCatalog.value,
+	),
 );
 
-/** 图本身的问题（悬空引用、环、多个链头）。有才画那一条，没有时一个像素都不多。 */
-const graphDiagnostics = computed(() => plan.value.diagnostics);
+/**
+ * 图本身的问题（悬空引用、环、多个链头）。
+ *
+ * 幽灵态下**一条都不报**：半成品本来就没有连线（`buildDeclarationFromPlan` 只连它已经有的那几步），
+ * 于是「有 N 个链头」「有节点走不到」这类话在半成品上必然成立、也必然没意义——
+ * 它们是**生成途中的正常样子**，不是问题。真正的问题由定稿那一步的诊断说（那条路一个字没改）。
+ */
+const graphDiagnostics = computed(() => (provisional.value ? [] : plan.value.diagnostics));
 </script>
 
 <template>
 	<section class="flow-view" data-testid="view-flow">
 		<header class="flow-header">
 			<span class="flow-title">流程画布</span>
-			<span v-if="store.hasDeclaration.value" class="flow-task" data-testid="flow-task-name">
+			<!--
+				幽灵态的整块标记：数据源、可见的字、以及 `data-provisional` 都有。
+				为什么不只靠卡片上的虚线：整块说一句「这些卡都还没校验」比逐张重复更准
+				（半成品是**一整份**东西，不是某几张卡的问题）。
+			-->
+			<span v-if="provisional" class="flow-provisional" data-testid="flow-provisional" data-provisional="true">
+				未校验 · 模型正在生成，这些卡片随时会变
+			</span>
+			<span v-if="shownDeclaration !== null" class="flow-task" data-testid="flow-task-name">
 				{{ taskTitle }}
 			</span>
 		</header>
 
-		<div v-if="store.hasDeclaration.value" class="flow-body" data-testid="flow-canvas">
+		<div v-if="shownDeclaration !== null" class="flow-body" data-testid="flow-canvas">
 			<!--
 				图自己的毛病：说出来，但**不影响画**。下面能画的部分照画，
 				所以这条在画布顶上，而不是把整块替换成一句错误。
@@ -77,7 +123,7 @@ const graphDiagnostics = computed(() => plan.value.diagnostics);
 			</ul>
 
 			<div class="flow-chain" role="list" data-testid="flow-chain">
-				<FlowSequence :rows="rows" />
+				<FlowSequence :rows="rows" :provisional="provisional" />
 			</div>
 		</div>
 
@@ -125,6 +171,18 @@ const graphDiagnostics = computed(() => plan.value.diagnostics);
 	font-family: var(--cc-font-mono);
 	font-size: var(--cc-fs-sm);
 	color: var(--cc-text-dim);
+}
+
+/*
+ * 幽灵态的整块标注：虚线（与卡片上的描边同一套语言）+ 一行文字。
+ * 不靠动画：`prefers-reduced-motion` 下这些字照旧在，信息一个不少。
+ */
+.flow-provisional {
+	padding: 0 var(--cc-space-2);
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-chain-live);
+	border: 1px dashed var(--cc-line-strong);
+	border-radius: var(--cc-radius-sm);
 }
 
 /* 纵向滚动：链子长了就往下走，横向永远不滚（横向留给卡片自己撑满）。 */
