@@ -630,6 +630,20 @@ const SO101_SKILL = ROBOFRAME_SO101_CATALOG.capabilities[0]?.capabilityRef ?? ''
 const SO101_ROBOT = ROBOFRAME_SO101_CATALOG.robotName ?? '';
 
 /** 四类步都有的计划：技能（真名）、分支、等待、原语（真名，且执行侧没有这条通路）。 */
+/**
+ * 抓取那台的计划：`pick_object` 只在那份目录里，所以这一份必须配抓取那台设备导入。
+ * 它比 `SAMPLE_PLAN_TEXT` 短——正是「换了一份更短的声明」那条用例要的形状。
+ */
+const GRASP_PLAN_TEXT = JSON.stringify({
+	schemaVersion: SKILL_PLAN_SCHEMA_VERSION,
+	robot: 'so101_handeye_realsense_grasp',
+	description: '看一眼桌面，把红色方块抓起来',
+	plan: [
+		{ step: 'skill', skill: 'inspect_scene' },
+		{ step: 'skill', skill: 'pick_object', params: { target_name: '红色方块' } },
+	],
+});
+
 const SAMPLE_PLAN_TEXT = JSON.stringify({
 	schemaVersion: SKILL_PLAN_SCHEMA_VERSION,
 	robot: SO101_ROBOT,
@@ -1023,6 +1037,34 @@ describe('发给机器人 · 按下去真的发（组件）', () => {
 		// 结论排在行列表上面，且与事件对得上：6 行里 5 行有结论（原语那一步没有事件）
 		expect(wrapper.get('[data-testid="robot-calls-verdict-face"]').text()).toBe('走完了');
 		expect(wrapper.get('[data-testid="robot-calls-verdict"]').text()).toContain('5 / 6 步有结论');
+		wrapper.unmount();
+	});
+
+	it('下了发之后上面换了一份声明：上一趟的结论跟着那份计划一起走，不落在新行上', async () => {
+		const wrapper = await mountedWithPlan();
+		stubRun([
+			event('0', 'running', 'POST /v1/skills/execute'),
+			event('0', 'completed', '终态 state=completed success=true'),
+			event('1.then.0', 'running', 'POST /v1/skills/execute'),
+			event('1.then.0', 'completed', '终态 state=completed success=true'),
+		]);
+		await dispatchButton(wrapper).trigger('click');
+		await flushPromises();
+
+		const before = wrapper.findAll('[data-testid="robot-calls-rows"] > li').length;
+		expect(wrapper.get('[data-testid="robot-calls-verdict"]').text()).toContain(`2 / ${String(before)} 步有结论`);
+		expect(runBoxOf(wrapper, '0').attributes('data-run-state')).toBe('completed');
+
+		// 换一份**更短**的声明：新计划第 0 步的路径还是 `0`——上一趟那条结果会正好落在它上面
+		setSelectedDevice('so101_grasp_sim');
+		expect(doc.loadTaskJson(GRASP_PLAN_TEXT)).toBe(true);
+		await flushPromises();
+
+		// 于是这一趟的账跟着上一份计划一起走了：结论没了，行上也没有「已完成」。
+		// 留着它就会被当成**这一份**的结果读，而这一份从没发出去过。
+		expect(wrapper.find('[data-testid="robot-calls-verdict"]').exists()).toBe(false);
+		expect(runBoxExists(wrapper, '0')).toBe(false);
+		expect(wrapper.findAll('[data-testid="robot-calls-rows"] > li').length).toBeGreaterThan(0);
 		wrapper.unmount();
 	});
 

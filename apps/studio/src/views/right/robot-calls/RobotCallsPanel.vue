@@ -182,15 +182,53 @@ const cancelRequested = ref(false);
 const runEvents = ref<readonly PlanRunEvent[]>([]);
 const verdict = ref<RunVerdict | null>(null);
 
+/**
+ * 这一屏摆着的那份计划的身份：声明的内容摘要 + 目标设备。
+ *
+ * 它要回答的是「上一趟下发的**是这一份**吗」。只有 `stepPath` 认不出这件事——
+ * 换了声明之后，新计划第 0 步的路径还是 `0`，上一趟那条结果会**正好落在**它上面，
+ * 屏幕上于是显示「第 0 步已完成」，而这一步从没发出去过。
+ * 摘要按内容算，所以改了任何一个字段都会换 key。
+ */
+const planKey = computed<string | null>(() => {
+	const current = doc.declaration.value;
+	return current === null ? null : `${current.digest}@${deviceRef.value}`;
+});
+
+/**
+ * 换了计划就把上一趟的账清掉。
+ *
+ * 为什么不是留着 + 标注：留在屏幕上的「第 0 步已完成」会被当成**这一份**的结果读，
+ * 而它说的是另一份计划。清掉之后那句话变成「这一份还没发过」，那是真的。
+ *
+ * **跑着的这一趟不清**：那是「下发途中上面换了一份声明」，事件确实发生过，也不许咽掉——
+ * 那条路由 `orphanPaths` 如实摆出来（它本来就是为这件事写的）。
+ */
+watch(planKey, () => {
+	if (running.value) return;
+	runEvents.value = [];
+	verdict.value = null;
+});
+
 /** 每一行现在是什么样：按 `stepPath` 对号（见 `plan-run.ts`）。 */
 const runStates = computed<ReadonlyMap<string, RowRun>>(() => runStatesByStepPath(runEvents.value));
 
 /** 对不上任何一行的事件路径。正常是空的——不空就说明下发途中上面换了一份声明，也不许咽掉。 */
 const orphanPaths = computed(() => orphanRunPaths(runEvents.value, rows.value.map((row) => row.stepPath)));
 
-/** 走完了几步（有终态的行数）。跑的时候用它说「进行到哪儿了」。 */
+/**
+ * 屏幕上这几行里，有几行有结论了。跑的时候用它说「进行到哪儿了」。
+ *
+ * 数的是**行**，不是事件：下发途中上面换了一份声明时，事件账本里还留着上一份的那些，
+ * 直接数事件会报出「5 / 3 步有结论」——分子比分母大，那句话自己就不成立。
+ * 对不上行的事件由 `orphanPaths` 单独提出来，两件事不混进同一个数里。
+ */
 const settledCount = computed(
-	() => [...runStates.value.values()].filter((state) => state.state !== 'running').length,
+	() =>
+		rows.value.filter((row) => {
+			const state = runStates.value.get(row.stepPath);
+			return state !== undefined && state.state !== 'running';
+		}).length,
 );
 
 /**
