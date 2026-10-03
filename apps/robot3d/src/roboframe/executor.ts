@@ -47,7 +47,14 @@ export interface StepEvent {
 	 * 与 `planIndex` 「不在计划里就没有」同一个口径。
 	 */
 	readonly capabilityRef?: string;
-	readonly primitiveRef: string;
+	/**
+	 * 这一步调的原语。**委托步没有原语**——它的实现在执行侧（`pick_object` →
+	 * `/manipulation/execute_pick`），这一栏就是 `null`：拿接口名冒充原语，
+	 * 下游会拿着一根目录里不存在的原语去查表。
+	 */
+	readonly primitiveRef: string | null;
+	/** 委托步的执行侧接口名；不是委托步就没有这一栏。 */
+	readonly interfaceRef?: string;
 	/** 这一步在**这个能力内部**是第几个原语（1 基） */
 	readonly index: number;
 	readonly total: number;
@@ -68,6 +75,15 @@ export interface RunOutcome {
 	readonly ok: boolean;
 	readonly steps: StepEvent[];
 	readonly reason?: string;
+	/**
+	 * 这次跑**本机仿真演不了**的步骤（执行侧接口名）。它是「没演」，不是「没成」——
+	 * 所以 `ok` 照旧是 `true`，调用方也不许把它记成失败。
+	 *
+	 * 为什么单独一栏而不是数 `steps` 里的 `skipped`：`skipped` 还有别的来路
+	 * （目录里没有那个原语、命名位姿查不到），那些是**目录与设备对不上**；
+	 * 这一栏说的是**边界**：这一步的实现在执行侧，本机压根没有那套东西。
+	 */
+	readonly unrunnable?: readonly string[];
 }
 
 export interface ExecutorHooks {
@@ -340,6 +356,7 @@ export class RoboFrameExecutor {
 		capabilityRef: string,
 		counter: { index: number; total: number },
 		events: StepEvent[],
+		unrunnable: string[],
 	): Promise<string | null> {
 		for (const statement of statements) {
 			if (this.cancelled) return '已取消';
@@ -349,8 +366,42 @@ export class RoboFrameExecutor {
 			}
 			if (statement.kind === 'if') {
 				const branch = this.evalExpression(statement.condition, scope) ? statement.then : (statement.else ?? []);
-				const nested = await this.runStatements(branch, scope, capabilityRef, counter, events);
+				const nested = await this.runStatements(branch, scope, capabilityRef, counter, events, unrunnable);
 				if (nested) return nested;
+				continue;
+			}
+			if (statement.kind === 'delegate') {
+				/*
+				 * 委托步：实现在执行侧（`pick_object` → `/manipulation/execute_pick`），
+				 * **本机这套仿真压根没有那套东西**。三件事在这儿说清：
+				 *
+				 * ① 照报一步（`skipped` + 接口名），不静默跳过——静默跳过会让 `pick_object`
+				 *    跑出「计划完成：1 步都走通了」而屏幕上一条步骤行都没有，那是假账；
+				 * ② 报**只有终态**，不先报 `running`：这一步没有时长、什么都没动，
+				 *    报一个 running 出去只是闪一下；
+				 * ③ 记进 `unrunnable`：它是「没演」不是「没成」，`ok` 与 `last.success` 都不许
+				 *    因此变坏（见 `RunOutcome.unrunnable`）。
+				 */
+				counter.index += 1;
+				const args: Record<string, unknown> = {};
+				for (const [name, arg] of Object.entries(statement.arguments)) {
+					args[name] = this.evalArgument(arg, scope);
+				}
+				const event: StepEvent = {
+					capabilityRef,
+					primitiveRef: null,
+					interfaceRef: statement.interfaceRef,
+					index: counter.index,
+					total: counter.total,
+					args,
+					state: 'skipped',
+					detail: `实现在执行侧（${statement.interfaceRef}），本机仿真不演这一步`,
+					...(this.planIndex === 0 ? {} : { planIndex: this.planIndex }),
+					...(this.taskId === undefined ? {} : { taskId: this.taskId }),
+				};
+				unrunnable.push(statement.interfaceRef);
+				events.push(event);
+				this.hooks.onStep?.(event);
 				continue;
 			}
 			if (statement.kind !== 'call') continue;
@@ -397,10 +448,19 @@ export class RoboFrameExecutor {
 			}
 			scope.set(param.name, param.type === 'number' ? Number(value) : value);
 		}
-		const total = countCalls(capability.implementation);
+		const total = countSteps(capability.implementation);
 		const events: StepEvent[] = [];
-		const reason = await this.runStatements(capability.implementation, scope, capability.capabilityRef, { index: 0, total }, events);
-		return reason === null ? { ok: true, steps: events } : { ok: false, steps: events, reason };
+		const unrunnable: string[] = [];
+		const reason = await this.runStatements(
+			capability.implementation,
+			scope,
+			capability.capabilityRef,
+			{ index: 0, total },
+			events,
+			unrunnable,
+		);
+		const outcome = reason === null ? { ok: true, steps: events } : { ok: false, steps: events, reason };
+		return unrunnable.length === 0 ? outcome : { ...outcome, unrunnable };
 	}
 
 	/**
@@ -471,12 +531,17 @@ export class RoboFrameExecutor {
 	}
 }
 
-/** 数一数这棵语句树里有多少个原语调用（进度显示用） */
-export function countCalls(statements: readonly ImplStatement[]): number {
+/**
+ * 数一数这棵语句树里有多少**步**（进度显示用）：原语调用 + **委托**。
+ *
+ * 委托不是原语调用，但它是这一步真的报出来的一件事——进度里不数它，
+ * 报出来的步号就会越过总数（`index` > `total`），那一栏就开始说瞎话。
+ */
+export function countSteps(statements: readonly ImplStatement[]): number {
 	let n = 0;
 	for (const s of statements) {
-		if (s.kind === 'call') n += 1;
-		else if (s.kind === 'if') n += countCalls(s.then) + countCalls(s.else ?? []);
+		if (s.kind === 'call' || s.kind === 'delegate') n += 1;
+		else if (s.kind === 'if') n += countSteps(s.then) + countSteps(s.else ?? []);
 	}
 	return n;
 }

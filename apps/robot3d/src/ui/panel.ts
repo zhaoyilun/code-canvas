@@ -26,7 +26,8 @@ export interface PlanStepView {
 	readonly total: number;
 	readonly skill: string;
 	readonly taskId: string;
-	readonly state: 'running' | 'done' | 'failed';
+	/** 与 `PlanStepReport['state']` 同一套取值：`unreachable` = 本机仿真演不了这一步。 */
+	readonly state: 'running' | 'done' | 'failed' | 'unreachable';
 }
 
 export interface Panel {
@@ -278,6 +279,8 @@ export function createPanel(
 				.map((s, i) => {
 					if (s.kind === 'call') return `${i + 1}. ${s.primitiveRef}(${summarizeArgs(s.arguments)})`;
 					if (s.kind === 'set') return `${i + 1}. set ${s.target}`;
+					// 委托：这一步没有原语可写，写的是它交给谁（实现在执行侧）。
+					if (s.kind === 'delegate') return `${i + 1}. delegate ${s.interfaceRef}(${summarizeArgs(s.arguments)})`;
 					return `${i + 1}. if …`;
 				})
 				.join('\n');
@@ -296,8 +299,10 @@ export function createPanel(
 			idx.textContent = `${event.index}/${event.total}`;
 			const main = document.createElement('span');
 			main.className = 'cc-step-main';
-			// 日志里长参数（轨迹模板那种）截断显示；完整原文在右上「实现」里
-			main.innerHTML = `${event.primitiveRef} <em>${summarizeArgs(event.args, 96).replace(/</g, '&lt;')}</em>${
+			// 日志里长参数（轨迹模板那种）截断显示；完整原文在右上「实现」里。
+			// 委托步没有原语名（实现在执行侧），报的是那个接口名——不拿接口名冒充原语。
+			const name = event.primitiveRef ?? `委托 ${event.interfaceRef ?? '?'}`;
+			main.innerHTML = `${name} <em>${summarizeArgs(event.args, 96).replace(/</g, '&lt;')}</em>${
 				event.detail ? ` — ${event.detail.replace(/</g, '&lt;')}` : ''
 			}`;
 			const state = document.createElement('span');
@@ -371,7 +376,7 @@ export function createPanel(
 		appendPlanStep(view) {
 			const text = `计划 ${String(view.index)}/${String(view.total)} · ${view.skill} · ${view.taskId}`;
 			// 同一步的 running 那行翻成终态，别一个计划步占两行
-			if (planRow && planRow.dataset['state'] === 'running' && planRow.textContent === text.replace(/ · (done|failed)$/, '')) {
+			if (planRow && planRow.dataset['state'] === 'running' && planRow.textContent === text.replace(/ · (done|failed|unreachable)$/, '')) {
 				planRow.dataset['state'] = view.state;
 				planRow.textContent = view.state === 'running' ? text : `${text} · ${view.state}`;
 			} else {

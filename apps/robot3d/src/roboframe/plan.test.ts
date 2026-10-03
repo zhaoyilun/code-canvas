@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { ROBOFRAME_SO101_CATALOG as catalog } from '@codecanvas/capabilities';
+import { ROBOFRAME_GRASP_CATALOG, ROBOFRAME_SO101_CATALOG as catalog } from '@codecanvas/capabilities';
 import type { CapabilitySpec, Diagnostic, JsonObject, SkillPlan, SkillPlanStep, SkillStep } from '@codecanvas/contracts';
 import {
 	intake,
@@ -11,6 +11,7 @@ import {
 	type PlanRunner,
 	type PlanSleep,
 	type PlanStepEvent,
+	type PlanStepReport,
 } from './plan';
 import type { RunOutcome } from './executor';
 
@@ -889,5 +890,114 @@ describe('runPlan · 原语步', () => {
 		expect(planStepLabel({ step: 'primitive', primitive: 'move_to_named_pose' })).toBe('move_to_named_pose');
 		// 目录里查不到也退回原名——那是设备真收到的东西，不编一个中文名
 		expect(planStepLabel({ step: 'primitive', primitive: 'not_in_catalog' }, catalog)).toBe('not_in_catalog');
+	});
+});
+
+/*
+ * 委托步（实现在执行侧）：本机仿真演不了它。
+ *
+ * 三件事必须钉住，否则「计划完成：N 步都走通了」会盖住一件从没发生过的事：
+ * ① 报 `unreachable`，既不报 `done`（那是假账）也不报 `failed`（它不是故障）；
+ * ② 计划**接着往下走**，`completed` 不把它数进去；
+ * ③ `last.success` **一个字都不动**（与等待步同一个口径）。
+ *
+ * 用抓取那份目录：`pick_object` 只在那儿，而且它的实现就是一条委托。
+ */
+describe('委托步：本机仿真演不了，但这不是失败', () => {
+	const grasp = ROBOFRAME_GRASP_CATALOG;
+	const ROBOT = 'so101_handeye_realsense_grasp';
+
+	/** 一台把某个技能报成「演不了」的替身；其余照常。 */
+	const runnerWithUnrunnable = (skill: string) => {
+		const ran: string[] = [];
+		const runner: PlanRunner = {
+			beginRun: () => {},
+			cancel: () => {},
+			onCancel: () => () => {},
+			run: async (capability): Promise<RunOutcome> => {
+				ran.push(capability.capabilityRef);
+				return capability.capabilityRef === skill
+					? { ok: true, steps: [], unrunnable: ['/manipulation/execute_pick'] }
+					: { ok: true, steps: [] };
+			},
+			runPrimitiveCommand: async (): Promise<RunOutcome> => ({ ok: true, steps: [] }),
+		};
+		return { runner, ran };
+	};
+
+	it('报 unreachable 并带上「哪儿在执行侧」；导演没演，所以不算完成', async () => {
+		const { runner } = runnerWithUnrunnable('pick_object');
+		const reports: PlanStepReport[] = [];
+		const outcome = await runPlan(
+			{ schemaVersion: 1, robot: ROBOT, plan: [{ step: 'skill', skill: 'pick_object', params: { target_name: '方块' } }] },
+			{ catalog: grasp, runner, onPlanStep: (event) => reports.push(event) },
+		);
+		expect(outcome.ok).toBe(true);
+		expect(outcome.completed).toBe(0);
+		expect(reports.map((e) => e.state)).toEqual(['running', 'unreachable']);
+		expect(reports[1]?.detail).toContain('/manipulation/execute_pick');
+		// 报的是 unreachable 而不是 failed：它是边界，不是故障。
+		expect(reports.some((e) => e.state === 'failed')).toBe(false);
+	});
+
+	it('计划接着往下走：后面的步骤照跑，completed 只数真走完的', async () => {
+		const { runner, ran } = runnerWithUnrunnable('pick_object');
+		const outcome = await runPlan(
+			{
+				schemaVersion: 1,
+				robot: ROBOT,
+				plan: [
+					{ step: 'skill', skill: 'pick_object', params: { target_name: '方块' } },
+					{ step: 'skill', skill: 'recover_safe_pose' },
+				],
+			},
+			{ catalog: grasp, runner },
+		);
+		expect(outcome.ok).toBe(true);
+		expect(ran).toEqual(['pick_object', 'recover_safe_pose']);
+		expect(outcome.completed).toBe(1);
+	});
+
+	it('不动 last.success：后面那条臂看到的仍是最近一次**真演过**的那一步', async () => {
+		const { runner } = runnerWithUnrunnable('pick_object');
+		/*
+		 * 第一步真跑成了（`open_gripper_skill` → success=true），第二步演不了。
+		 * 第三步的分支读 `last.success == true`：它必须**仍然成立**——
+		 * 委托步没演，凭什么把上一步的结论改成「没成」。
+		 * 两条臂各放一个目录里真有的技能，走哪条由事件里的路径说。
+		 */
+		const reports: PlanStepReport[] = [];
+		const outcome = await runPlan(
+			{
+				schemaVersion: 1,
+				robot: ROBOT,
+				plan: [
+					{ step: 'skill', skill: 'open_gripper_skill' },
+					{ step: 'skill', skill: 'pick_object', params: { target_name: '方块' } },
+					{
+						step: 'if',
+						condition: { field: 'last.success', op: '==', value: true },
+						then: [{ step: 'skill', skill: 'recover_safe_pose' }],
+						else: [{ step: 'skill', skill: 'recover_zero_pose' }],
+					},
+				],
+			},
+			{ catalog: grasp, runner, onPlanStep: (event) => reports.push(event) },
+		);
+		expect(outcome.ok).toBe(true);
+		// `last.success` 仍是 true，所以走的是 then——路径说得很清楚。
+		const ranPaths = reports.filter((e) => e.state === 'done').map((e) => e.path);
+		expect(ranPaths).toContain('2.then.0');
+		expect(ranPaths.some((path) => path.includes('.else.'))).toBe(false);
+	});
+
+	it('目录里没有这个技能时照旧是失败——「演不了」与「查不到」不是一回事', async () => {
+		const { runner } = runnerWithUnrunnable('pick_object');
+		const outcome = await runPlan(
+			{ schemaVersion: 1, robot: ROBOT, plan: [{ step: 'skill', skill: 'not_in_catalog' }] },
+			{ catalog: grasp, runner },
+		);
+		expect(outcome.ok).toBe(false);
+		expect(outcome.reason).toContain('目录里没有技能');
 	});
 });

@@ -15,7 +15,7 @@
  * 所以它跟 `state/document.ts` 是两件事，不混进那份 store。
  */
 import { computed, ref } from 'vue';
-import { PHASE1_ROBOT_CATALOG, ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
+import { PHASE1_ROBOT_CATALOG, ROBOFRAME_GRASP_CATALOG, ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import { findCapability, type CapabilityCatalog } from '@codecanvas/contracts';
 import type { TaskFormatRef } from '@codecanvas/task-import';
 
@@ -37,6 +37,10 @@ export interface StudioDevice {
  * 写一句话、生成、看它动。真机排第二——它跑的是同一份技能库，差的只是"谁去下发原语"，
  * 而现在没有硬件可接，选它只能看到一份目录事实。把一台"看不出动静"的设备放在默认位置，
  * 演示的人第一眼就以为这东西还没做完。
+ *
+ * 两台机器各一对（虚拟 / 真机），因为它们跑的是**两份不同的目录**：
+ * 单臂那份十六个技能全是动作，抓取那份多了一条抓取流水线（`pick_object` 的实现在执行侧）。
+ * 把抓取那对排在后面，是因为它的技能更多、也更接近真活。
  */
 export const DEVICES: readonly StudioDevice[] = [
 	{
@@ -52,6 +56,28 @@ export const DEVICES: readonly StudioDevice[] = [
 		label: 'SO-101 单臂（真机）',
 		virtual: false,
 		catalog: ROBOFRAME_SO101_CATALOG,
+		formatRef: 'skill_plan',
+	},
+	{
+		/*
+		 * 第二份真实目录：同一台臂，腕上多了一个 RealSense，于是配置里多了一条**抓取流水线**
+		 * （`grasp_execution.action_name` = `/manipulation/execute_pick`）。
+		 *
+		 * 它的七个技能里有一个 `pick_object`，实现在执行侧——转出来是一条 `delegate`。
+		 * 所以这台设备是「同一套机制、一半能演一半不能演」的实证：
+		 * 其余六个技能在本机 3D 上照跑，抓取那一步会如实报「本机仿真演不了」。
+		 */
+		deviceRef: 'so101_grasp_sim',
+		label: '虚拟设备（SO-101 抓取仿真）',
+		virtual: true,
+		catalog: ROBOFRAME_GRASP_CATALOG,
+		formatRef: 'skill_plan',
+	},
+	{
+		deviceRef: 'so101_grasp_robot',
+		label: 'SO-101 抓取（真机，腕装 RealSense）',
+		virtual: false,
+		catalog: ROBOFRAME_GRASP_CATALOG,
 		formatRef: 'skill_plan',
 	},
 	{

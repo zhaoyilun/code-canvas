@@ -154,7 +154,23 @@ export type PlanStepEvent =
 			readonly arm: BranchArm;
 			readonly step: SkillPlanStep;
 			readonly taskId: string;
-			readonly state: 'running' | 'done' | 'failed';
+			/**
+			 * 这一步的结局。
+			 *
+			 * `unreachable` 是第四种，说的是「**本机仿真演不了这一步**」：那一步的实现在执行侧
+			 * （委托型技能，例如 `pick_object` → `/manipulation/execute_pick`），本机这套东西
+			 * 压根没有它。它**不是失败**（`ok` 照旧是 `true`，计划照常往下走），
+			 * 也**不是成功**（什么都没演，报 `done` 就是假账）。
+			 *
+			 * 它**不动 `last.success`**：与等待步同一个口径（见 `runStep` 里等待那一段）——
+			 * 演都没演，凭什么说上一步成没成。
+			 */
+			readonly state: 'running' | 'done' | 'failed' | 'unreachable';
+			/**
+			 * 为什么是这个状态（一般没有；`unreachable` 一定有——它得说清是**哪儿**在执行侧）。
+			 * 界面直接展示这句话就是实话，不必再编一句。
+			 */
+			readonly detail?: string;
 	  }
 	| { readonly kind: 'primitive'; readonly index: number; readonly total: number; readonly step: SkillPlanStep; readonly event: unknown };
 
@@ -368,6 +384,27 @@ export async function runPlan(
 			// 换一步就重设上下文：这一步的原语事件因此带上「所属顶层步」与 task_id
 			runner.setPlanContext?.({ planIndex: topIndex, taskId });
 			const outcome = await runner.run(capability, step.params ?? {});
+			/*
+			 * 这一步里有**本机演不了**的委托（实现在执行侧）。
+			 *
+			 * 报 `unreachable`，不是 `done`——什么都没演就说「走通了」是假账。
+			 * 也不是 `failed`：它没坏，是这里压根没有那套东西（与派发面板里
+			 * 「原语送不出去」那一条同一个态度：边界不是欠账）。
+			 *
+			 * 于是 `last.success` **一个字都不动**（不写它）：与等待步同一个口径，
+			 * 后面那个 `if` 看到的仍是最近一次**真正演过**的那一步的结果。
+			 * `completed` 也不把它数进去——它确实没完成，只是也没失败。
+			 */
+			if (outcome.ok && outcome.unrunnable !== undefined && outcome.unrunnable.length > 0) {
+				const interfaces = outcome.unrunnable.join('、');
+				options.onPlanStep?.({
+					...header,
+					arm: null,
+					state: 'unreachable',
+					detail: `实现在执行侧（${interfaces}），本机仿真演不了这一步`,
+				});
+				return { ok: true, completed: false };
+			}
 			return settle(step.onFailure, outcome.ok, atPath(path, outcome.reason ?? `${step.skill} 未完成`, step.skill));
 		}
 

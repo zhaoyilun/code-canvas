@@ -124,8 +124,13 @@ async function runJson(text: string): Promise<void> {
 		/*
 		 * 这一步在日志里叫什么：跑技能时是能力名；跑**原语**时（`primitive` 步）没有能力可指，
 		 * 报的是目录里那个原语的标签（「张开夹爪」）——查不到就退回原语名，不编一个中文名。
+		 * 委托步两者都没有：它没有原语可查（实现在执行侧），报的是那个接口名。
 		 */
-		const name = event.capabilityRef ?? (findPrimitive(catalog, event.primitiveRef)?.label ?? event.primitiveRef);
+		const name =
+			event.capabilityRef ??
+			(event.primitiveRef === null
+				? `委托 ${event.interfaceRef ?? '?'}`
+				: (findPrimitive(catalog, event.primitiveRef)?.label ?? event.primitiveRef));
 		panel.appendPlanStep({
 			index: event.index,
 			total: event.total,

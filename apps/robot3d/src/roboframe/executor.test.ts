@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { CapabilitySpec, PrimitiveSpec } from '@codecanvas/contracts';
-import { countCalls, RoboFrameExecutor, type ArmRigLike, type StepEvent } from './executor';
+import { countSteps, RoboFrameExecutor, type ArmRigLike, type StepEvent } from './executor';
 import type { Waypoint } from './trajectory';
 
 /** 用假 rig 记录"设备收到了什么指令"——执行器的测试不该依赖画布 */
@@ -91,11 +91,11 @@ const celebrateTail: CapabilitySpec = {
 	],
 };
 
-describe('countCalls', () => {
+describe('countSteps', () => {
 	it('连 if 分支里的调用一起数', () => {
-		expect(countCalls(celebrateTail.implementation)).toBe(4);
+		expect(countSteps(celebrateTail.implementation)).toBe(4);
 		expect(
-			countCalls([
+			countSteps([
 				{ kind: 'call', primitiveRef: 'open_gripper', arguments: {} },
 				{
 					kind: 'if',
@@ -386,5 +386,92 @@ describe('RoboFrameExecutor · 跑单个原语', () => {
 		exec.beginRun();
 		expect((await exec.runPrimitiveCommand('open_gripper')).ok).toBe(true);
 		expect(log).toEqual(['gripper 1']);
+	});
+});
+
+/*
+ * 委托步：实现在执行侧，本机这套执行器没有那套东西。
+ *
+ * 这一条以前是**静默跳过**的（`if (statement.kind !== 'call') continue`）：
+ * 跑 `pick_object` 会得到「ok: true、零步」，界面于是报「1 步都走通了」而屏幕上一条都没有。
+ * 那是假账，所以现在它照报一步（`skipped` + 接口名），并把接口名记进 `unrunnable`。
+ */
+describe('委托步：照报一步，不静默跳过', () => {
+	const pickObject: CapabilitySpec = {
+		capabilityRef: 'pick_object',
+		label: '抓取物体',
+		kind: 'skill',
+		parameters: [{ name: 'target_name', label: '目标物', type: 'string', required: true }],
+		implementation: [
+			{
+				kind: 'delegate',
+				interfaceRef: '/manipulation/execute_pick',
+				arguments: { target_name: { kind: 'param', name: 'target_name' } },
+			},
+		],
+	};
+
+	it('报一步：没有原语（不拿接口名冒充），但有接口名与实参', async () => {
+		const { rig, log } = fakeRig();
+		const exec = new RoboFrameExecutor(rig, primitives);
+		const outcome = await exec.run(pickObject, { target_name: '红色方块' });
+
+		expect(outcome.ok).toBe(true);
+		expect(outcome.unrunnable).toEqual(['/manipulation/execute_pick']);
+		expect(outcome.steps).toHaveLength(1);
+		expect(outcome.steps[0]).toMatchObject({
+			primitiveRef: null,
+			interfaceRef: '/manipulation/execute_pick',
+			state: 'skipped',
+			index: 1,
+			total: 1,
+		});
+		expect(outcome.steps[0]?.args).toEqual({ target_name: '红色方块' });
+		expect(outcome.steps[0]?.detail).toContain('实现在执行侧');
+		// 机械臂一动没动：这一步本机压根没演。
+		expect(log).toEqual([]);
+	});
+
+	it('与别的步骤混在一棵树里：步号连着数，委托那一步也没被吞掉', async () => {
+		const { rig } = fakeRig();
+		const exec = new RoboFrameExecutor(rig, primitives);
+		const outcome = await exec.run(
+			{
+				...pickObject,
+				implementation: [
+					{ kind: 'call', primitiveRef: 'open_gripper', arguments: {} },
+					...pickObject.implementation,
+				],
+			},
+			{ target_name: '方块' },
+		);
+		expect(outcome.ok).toBe(true);
+		expect(outcome.steps.map((event) => event.index)).toEqual([1, 2]);
+		expect(outcome.steps.map((event) => event.state)).toEqual(['done', 'skipped']);
+		// 总数把委托也算进去——不数它，第 2 步就会报成「2/1」。
+		expect(outcome.steps[1]?.total).toBe(2);
+	});
+
+	it('嵌在 if 的 else 里也照样报出来', async () => {
+		const { rig } = fakeRig();
+		const exec = new RoboFrameExecutor(rig, primitives);
+		const outcome = await exec.run(
+			{
+				...pickObject,
+				parameters: [{ name: 'target_name', label: '目标物', type: 'string' }],
+				implementation: [
+					{
+						kind: 'if',
+						condition: { kind: 'literal', value: false },
+						then: [{ kind: 'call', primitiveRef: 'open_gripper', arguments: {} }],
+						else: pickObject.implementation,
+					},
+				],
+			},
+			{ target_name: '方块' },
+		);
+		expect(outcome.ok).toBe(true);
+		expect(outcome.steps).toHaveLength(1);
+		expect(outcome.steps[0]?.interfaceRef).toBe('/manipulation/execute_pick');
 	});
 });

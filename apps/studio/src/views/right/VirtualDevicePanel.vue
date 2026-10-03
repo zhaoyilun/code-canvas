@@ -29,7 +29,12 @@
  * 全部走 `--cc-*` 变量（右栏栏宽是 `--cc-right-w`），组件里不写死像素。
  */
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
-import { ROBOFRAME_SO101_CATALOG, ROBOFRAME_SO101_PROVENANCE } from '@codecanvas/capabilities';
+import {
+	ROBOFRAME_GRASP_CATALOG,
+	ROBOFRAME_GRASP_PROVENANCE,
+	ROBOFRAME_SO101_CATALOG,
+	ROBOFRAME_SO101_PROVENANCE,
+} from '@codecanvas/capabilities';
 import { validateSkillPlan, type Diagnostic, type SkillPlan } from '@codecanvas/contracts';
 import { mountVirtualDevice, type BranchArm, type MountedVirtualDevice, type PlanStepReport } from '@codecanvas/robot3d';
 import { findTaskFormat, type TaskFormatRef } from '@codecanvas/task-import';
@@ -39,9 +44,6 @@ import type { StudioDevice } from '../../shell/devices';
 import { useStudioDocument } from '../../state/document';
 import { nodeAtPlanPath, primitiveLabelOf, waitLabelOf } from '../shared/plan-structure';
 import { DISPATCH_PATH_NOTE } from './robot-calls/plan-run';
-
-/** 目录出处按 `catalogRef` 认：认不着就不显示（编一个出处比不显示更坏） */
-const SO101_CATALOG_REF = ROBOFRAME_SO101_CATALOG.catalogRef;
 
 const props = defineProps<{
 	device: StudioDevice | null;
@@ -67,6 +69,8 @@ interface StepRow {
 	readonly label: string;
 	readonly depth: number;
 	readonly state: string;
+	/** 这一步为什么是现在这个状态（只有需要解释的状态才有，例如本机演不了的委托）。 */
+	readonly note?: string;
 }
 
 const stepLines = ref<StepRow[]>([]);
@@ -112,6 +116,7 @@ function rowOf(event: PlanStepReport): StepRow {
 						: event.step.skill,
 		depth: armDepth(event.path),
 		state: event.state,
+		...(event.detail === undefined ? {} : { note: event.detail }),
 	};
 }
 
@@ -135,11 +140,19 @@ const deviceKind = computed(() => (props.device === null ? '' : props.device.vir
 
 /**
  * 目录的出处**只在拿到真实上游数据时才说**（与右栏另一处同一口径）：
- * SO-101 那份是 `tools/import-roboframe/import.mjs` 从上游仓库机械转出来的，`provenance` 里记着 commit；
- * 一期那份是示意，没有出处可报——编一个出处比不显示更坏。
+ * RoboFrame 那两份都是 `tools/import-roboframe/import.mjs` 从上游仓库机械转出来的，
+ * `provenance` 里记着 commit；一期那份是示意，没有出处可报——编一个出处比不显示更坏。
+ *
+ * 按 `catalogRef` 查表而不是「是不是 SO-101」：两份真实目录各有各的出处，
+ * 写死一份会让另一份显示**别人的** commit（同源同 commit 只是碰巧，不是保证）。
  */
+const PROVENANCE_BY_CATALOG: Readonly<Record<string, typeof ROBOFRAME_SO101_PROVENANCE>> = {
+	[ROBOFRAME_SO101_CATALOG.catalogRef]: ROBOFRAME_SO101_PROVENANCE,
+	[ROBOFRAME_GRASP_CATALOG.catalogRef]: ROBOFRAME_GRASP_PROVENANCE,
+};
+
 const provenance = computed(() =>
-	props.device?.catalog.catalogRef === SO101_CATALOG_REF ? ROBOFRAME_SO101_PROVENANCE : null,
+	props.device === null ? null : (PROVENANCE_BY_CATALOG[props.device.catalog.catalogRef] ?? null),
 );
 const shortCommit = computed(() => (provenance.value === null ? '' : provenance.value.commit.slice(0, 8)));
 
@@ -206,10 +219,15 @@ async function runPlan(): Promise<void> {
 		 * 所以失败数从**步骤行**里数——它就是屏幕上看得见的那份账，两个数不可能不一致。
 		 */
 		const failed = stepLines.value.filter((line) => line.state === 'failed').length;
+		// 「本机演不了」单独数：它不是失败，也不能被「N 步都走通了」这句话盖过去。
+		const unrunnable = stepLines.value.filter((line) => line.state === 'unreachable').length;
+		const tail = unrunnable === 0 ? '' : `另有 ${String(unrunnable)} 步本机仿真演不了（实现在执行侧），`;
 		status.value = result.ok
-			? failed === 0
+			? failed === 0 && unrunnable === 0
 				? `计划完成：${String(plan.plan.length)} 步都走通了。`
-				: `计划跑完了：有 ${String(failed)} 步失败（计划里标了失败也往下走），其余走通。`
+				: failed === 0
+					? `计划跑完了：${String(unrunnable)} 步本机仿真演不了（实现在执行侧），其余走通。`
+					: `计划跑完了：有 ${String(failed)} 步失败（计划里标了失败也往下走），${tail}其余走通。`
 			: `计划中断：${result.reason ?? '某一步没做成'}（失败即停，不自动重试）`;
 	} finally {
 		busy.value = false;
@@ -235,6 +253,10 @@ function resetDevice(): void {
 /**
  * 挂 3D。**只有**虚拟设备、且宿主真的在 DOM 里时才建——
  * 换设备重建时先把旧的 `dispose()` 掉，避免留下第二个 WebGL 上下文。
+ *
+ * 目录**跟着设备走**：执行器要拿它去查每个技能的实现。喂错一份，`pick_object`
+ * 会变成「目录里没有这个技能」——而它其实在**另一份**目录里，
+ * 于是面板上那句错话指向的是一次并不存在的缺失。
  */
 function syncMount(): void {
 	device3d.value?.dispose();
@@ -244,8 +266,9 @@ function syncMount(): void {
 	clearRunningPlanPath();
 	if (!isVirtual.value) return;
 	const element = host.value;
-	if (element === null) return;
-	device3d.value = mountVirtualDevice(element);
+	const current = props.device;
+	if (element === null || current === null) return;
+	device3d.value = mountVirtualDevice(element, { catalog: current.catalog });
 	/*
 	 * 每走一步在面板上留一行——**计划步**那种一步（技能步 / 分支步），不是技能内部的原语：
 	 * 分支步没有原语事件，而「走了哪条臂」只有它说得清。
@@ -421,6 +444,7 @@ onBeforeUnmount(() => {
 				>
 					<span v-if="line.depth > 0" class="step-path">{{ line.path }}</span>
 					第 {{ line.index }} 步 · {{ line.label }} · {{ line.state }}
+					<span v-if="line.note !== undefined" class="step-note">{{ line.note }}</span>
 				</li>
 			</ol>
 		</div>
@@ -700,5 +724,24 @@ onBeforeUnmount(() => {
 
 .device-steps li[data-state='failed'] {
 	color: var(--cc-danger);
+}
+
+/*
+ * 本机仿真演不了的那一步：虚线框 + 压暗，与「失败」明确分开。
+ *
+ * 它既不红也不亮：红字说的是「这一步没做成」，而这一步**根本没演**——
+ * 实现在执行侧，本机没有那套东西。把它画成失败，看的人会去查一个并不存在的故障。
+ * （派发面板里「原语送不出去」用的是同一套说法：边界不是欠账。）
+ */
+.device-steps li[data-state='unreachable'] {
+	border: 1px dashed var(--cc-border);
+	color: var(--cc-text-dim);
+}
+
+/* 需要解释的状态那半句：跟在状态后面，小一号，不抢「第 N 步」那句主语 */
+.step-note {
+	margin-left: var(--cc-space-1);
+	color: var(--cc-text-faint);
+	font-size: var(--cc-fs-xs);
 }
 </style>
