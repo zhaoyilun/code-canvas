@@ -10,10 +10,23 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 import type { So101Rig } from './so101';
 import type { Kit } from './kit';
 
+/**
+ * 待抓那方块摆在哪：**方块中心**，单位米，坐标系与 `workspace_limits` 同源
+ * （`rig.group` 就在原点，所以方块的世界坐标就是基座系坐标）。
+ *
+ * 值的来历：`y = 0.015` 是方块高（0.03）的一半，于是它正好坐在台面（y = 0）上。
+ * 这是**本机仿真的布景缺省**，不是任务参数——真机上目标物是相机看见的
+ * （`pick_object` 的 `target_name` 是「红色方块」这种视觉查询，上游 `ibrobot_msgs`
+ * 的 `PickObject.action` 里那是运行时文本查询），所以坐标一个字都不进声明与任务 JSON。
+ */
+export const DEFAULT_TARGET_BLOCK = { x: 0.12, y: 0.015, z: 0.16 } as const;
+
 export interface Stage {
 	readonly camera: THREE.PerspectiveCamera;
 	render(dt: number): void;
 	resize(): void;
+	/** 把待抓的方块摆到 `position`（方块中心，单位米，基座系）。 */
+	setTargetBlock(position: THREE.Vector3Like): void;
 	/** 拆舞台：停掉控制器、放掉这一场里的 GPU 资源、丢掉 GL 上下文。见 `disposeStageResources`。 */
 	dispose(): void;
 }
@@ -86,6 +99,18 @@ export function disposeStageResources(input: StageDisposeInput): void {
 	input.renderer.forceContextLoss();
 }
 
+/**
+ * 把方块摆到 `position`。**写的是本地坐标**，而这个 mesh 直接挂在场景上，所以本地就是世界坐标。
+ *
+ * 独立成函数是为了能测：`createStage` 要真 `WebGLRenderer`，happy-dom 里建不起来，
+ * 但「入口真的把三个数写到那块 mesh 上了」这件事不该因此没人钉。
+ */
+export function placeTargetBlock(block: THREE.Object3D, position: THREE.Vector3Like): void {
+	block.position.set(position.x, position.y, position.z);
+	// 方块是动态摆放的：不刷一次矩阵，同一帧里读它世界位置的人（阴影、同一个帧里的后续计算）会拿到旧值
+	block.updateMatrixWorld(true);
+}
+
 export function createStage(canvas: HTMLCanvasElement, rig: So101Rig, kit: Kit): Stage {
 	const { mat, box } = kit;
 	const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
@@ -145,9 +170,20 @@ export function createStage(canvas: HTMLCanvasElement, rig: So101Rig, kit: Kit):
 	floor.receiveShadow = true;
 	scene.add(floor);
 
+	/*
+	 * 待抓的方块：**引用要留出来**，它是这一场里唯一能被界面挪动的东西
+	 * （`setTargetBlock` 改的就是它）。取景也含它一份（见下面 `framed`）。
+	 */
 	const block = box(0.03, 0.03, 0.03, 0.003, mat.block);
-	block.position.set(0.12, 0.015, 0.16);
 	scene.add(block);
+
+	/** 把方块摆到 `position`。改的就是上面那块 mesh（见 `placeTargetBlock`）。 */
+	function setTargetBlock(position: THREE.Vector3Like): void {
+		placeTargetBlock(block, position);
+	}
+	// 缺省位置来自 `DEFAULT_TARGET_BLOCK` 这一份数：界面上的「复位」用的也是它，
+	// 两处各写一遍数，早晚会有一处改漏（改漏了就是「复位之后方块不在缺省处」）。
+	setTargetBlock(DEFAULT_TARGET_BLOCK);
 
 	scene.add(rig.group);
 
@@ -171,7 +207,8 @@ export function createStage(canvas: HTMLCanvasElement, rig: So101Rig, kit: Kit):
 	 * 就看不出爪子够不够得着），把相机按包围球摆到看得全它的地方，再让出一成余量。
 	 *
 	 * 只量一次，之后画面完全交给鼠标（`OrbitControls`）——每帧重新取景会把用户拖出来的
-	 * 视角顶回去。
+	 * 视角顶回去。**挪方块也不重新取景**：那是同一件事的另一半，用户刚把视角拖到自己要看的
+	 * 角度，界面里改一个数就把它顶回去，比构图不完美更坏。
 	 */
 	const framed = new THREE.Box3().setFromObject(rig.group).union(new THREE.Box3().setFromObject(block));
 	const centre = framed.getCenter(new THREE.Vector3());
@@ -191,6 +228,7 @@ export function createStage(canvas: HTMLCanvasElement, rig: So101Rig, kit: Kit):
 	return {
 		camera,
 		resize,
+		setTargetBlock,
 		render(dt: number) {
 			rig.update(dt);
 			controls.update();

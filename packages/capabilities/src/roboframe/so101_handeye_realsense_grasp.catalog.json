@@ -16,11 +16,138 @@
 			"observe_table",
 			"zero"
 		],
+		"namedPoseTargets": [
+			{
+				"name": "home",
+				"position": {
+					"x": 0.020030733201442157,
+					"y": -0.11809839488683391,
+					"z": 0.13887055751050842
+				},
+				"orientation": {
+					"x": -0.26790866048257905,
+					"y": -0.2622185975709204,
+					"z": -0.6525133891660432,
+					"w": 0.6585534402654153
+				}
+			},
+			{
+				"name": "observe_table",
+				"position": {
+					"x": 0.1,
+					"y": -0.16,
+					"z": 0.22
+				},
+				"orientation": {
+					"x": 0,
+					"y": 0,
+					"z": 0,
+					"w": 1
+				}
+			},
+			{
+				"name": "zero",
+				"position": {
+					"x": 0.0210077843415008,
+					"y": -0.278950111258735,
+					"z": 0.24858389783148477
+				},
+				"orientation": {
+					"x": -0.4740206645801369,
+					"y": -0.4668084047044082,
+					"z": -0.523033090590171,
+					"w": 0.532757645647648
+				}
+			}
+		],
+		"execution": {
+			"relativeMotionStepM": 0.03,
+			"relativeMotionReferenceFrame": "base",
+			"relativeMotionDirectionMapping": {
+				"forward": [
+					0,
+					-1,
+					0
+				],
+				"backward": [
+					0,
+					1,
+					0
+				],
+				"left": [
+					1,
+					0,
+					0
+				],
+				"right": [
+					-1,
+					0,
+					0
+				],
+				"up": [
+					0,
+					0,
+					1
+				],
+				"down": [
+					0,
+					0,
+					-1
+				]
+			},
+			"gripperOpenPosition": 1,
+			"gripperClosedPosition": 0
+		},
+		"trajectoryTemplates": [
+			{
+				"templateType": "wave_dance_v1",
+				"rule": "cycle_repeat_hold",
+				"cycleField": "active_waypoint_count",
+				"repeatField": "repeat_count",
+				"repeatDefault": 1,
+				"holdField": "zero_hold_count",
+				"holdDefault": 0,
+				"durationField": "waypoint_duration_sec",
+				"durationDefaultSec": 0.08
+			},
+			{
+				"templateType": "single_joint_wave_v1",
+				"rule": "cycle_repeat",
+				"cycleField": "active_waypoint_count",
+				"cycleDefault": 16,
+				"repeatField": "repeat_count",
+				"repeatDefault": 1,
+				"durationField": "waypoint_duration_sec",
+				"durationDefaultSec": 0.08
+			}
+		],
+		"interfaces": {
+			"task_command_topic": "/embodied/task_command",
+			"status_topic": "/embodied/task_status",
+			"skill_action_name": "/embodied/execute_skill",
+			"primitive_action_name": "/embodied/execute_primitive",
+			"validate_skill_service": "/embodied/validate_skill",
+			"task_executor_action_name": "/task_executor/execute_task_plan",
+			"move_configuration_service": "/moveit_gateway/move_to_configuration"
+		},
 		"primitives": [
 			{
 				"primitiveRef": "move_to_named_pose",
 				"label": "移动到命名位姿",
 				"summary": "移动到命名位姿",
+				"deviceFacts": {
+					"poseNameArgument": "pose_name"
+				},
+				"runtimeCapabilities": [
+					{
+						"name": "validate_skill",
+						"unavailableMessage": "validate skill service unavailable"
+					},
+					{
+						"name": "task_executor",
+						"unavailableMessage": "task executor action unavailable"
+					}
+				],
 				"parameters": [
 					{
 						"name": "pose_name",
@@ -57,6 +184,23 @@
 				"primitiveRef": "move_relative_ee",
 				"label": "相对当前末端位姿做笛卡尔增量移动",
 				"summary": "相对当前末端位姿做笛卡尔增量移动",
+				"deviceFacts": {
+					"directionArgument": "motion_direction"
+				},
+				"runtimeCapabilities": [
+					{
+						"name": "validate_skill",
+						"unavailableMessage": "validate skill service unavailable"
+					},
+					{
+						"name": "task_executor",
+						"unavailableMessage": "task executor action unavailable"
+					},
+					{
+						"name": "fresh_ee_pose",
+						"unavailableMessage": "ee pose unavailable or stale"
+					}
+				],
 				"parameters": [
 					{
 						"name": "motion_direction",
@@ -66,6 +210,8 @@
 					{
 						"name": "motion_distance",
 						"label": "移动距离（米）",
+						"unit": "meters",
+						"exclusiveMinimum": 0,
 						"type": "number"
 					}
 				]
@@ -74,6 +220,16 @@
 				"primitiveRef": "move_to_joint_positions",
 				"label": "按完整手臂关节顺序移动到单个关节目标",
 				"summary": "按完整手臂关节顺序移动到单个关节目标",
+				"runtimeCapabilities": [
+					{
+						"name": "validate_skill",
+						"unavailableMessage": "validate skill service unavailable"
+					},
+					{
+						"name": "arm_trajectory",
+						"unavailableMessage": "arm trajectory action unavailable"
+					}
+				],
 				"parameters": [
 					{
 						"name": "joint_positions",
@@ -91,6 +247,19 @@
 				"primitiveRef": "move_through_joint_positions",
 				"label": "按完整手臂关节顺序执行多路点关节轨迹",
 				"summary": "按完整手臂关节顺序执行多路点关节轨迹",
+				"deviceFacts": {
+					"trajectoryArgument": "trajectory_template"
+				},
+				"runtimeCapabilities": [
+					{
+						"name": "validate_skill",
+						"unavailableMessage": "validate skill service unavailable"
+					},
+					{
+						"name": "arm_trajectory",
+						"unavailableMessage": "arm trajectory action unavailable"
+					}
+				],
 				"parameters": [
 					{
 						"name": "trajectory_template",
@@ -103,18 +272,58 @@
 				"primitiveRef": "open_gripper",
 				"label": "张开夹爪",
 				"summary": "张开夹爪",
+				"deviceFacts": {
+					"gripperPosition": "open"
+				},
+				"runtimeCapabilities": [
+					{
+						"name": "validate_skill",
+						"unavailableMessage": "validate skill service unavailable"
+					},
+					{
+						"name": "task_executor",
+						"unavailableMessage": "task executor action unavailable"
+					}
+				],
 				"parameters": []
 			},
 			{
 				"primitiveRef": "close_gripper",
 				"label": "闭合夹爪",
 				"summary": "闭合夹爪",
+				"deviceFacts": {
+					"gripperPosition": "closed"
+				},
+				"runtimeCapabilities": [
+					{
+						"name": "validate_skill",
+						"unavailableMessage": "validate skill service unavailable"
+					},
+					{
+						"name": "task_executor",
+						"unavailableMessage": "task executor action unavailable"
+					}
+				],
 				"parameters": []
 			},
 			{
 				"primitiveRef": "rotate_gripper_cw",
 				"label": "绕当前末端局部 Z 轴顺时针旋转",
 				"summary": "绕当前末端局部 Z 轴顺时针旋转",
+				"runtimeCapabilities": [
+					{
+						"name": "validate_skill",
+						"unavailableMessage": "validate skill service unavailable"
+					},
+					{
+						"name": "task_executor",
+						"unavailableMessage": "task executor action unavailable"
+					},
+					{
+						"name": "fresh_ee_pose",
+						"unavailableMessage": "ee pose unavailable or stale"
+					}
+				],
 				"parameters": [
 					{
 						"name": "motion_distance",
@@ -127,6 +336,20 @@
 				"primitiveRef": "rotate_gripper_ccw",
 				"label": "绕当前末端局部 Z 轴逆时针旋转",
 				"summary": "绕当前末端局部 Z 轴逆时针旋转",
+				"runtimeCapabilities": [
+					{
+						"name": "validate_skill",
+						"unavailableMessage": "validate skill service unavailable"
+					},
+					{
+						"name": "task_executor",
+						"unavailableMessage": "task executor action unavailable"
+					},
+					{
+						"name": "fresh_ee_pose",
+						"unavailableMessage": "ee pose unavailable or stale"
+					}
+				],
 				"parameters": [
 					{
 						"name": "motion_distance",
@@ -209,6 +432,7 @@
 					{
 						"name": "motion_distance",
 						"label": "motion_distance",
+						"exclusiveMinimum": 0,
 						"type": "number",
 						"unit": "meters",
 						"required": true

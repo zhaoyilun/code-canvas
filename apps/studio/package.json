@@ -18,6 +18,7 @@
     "@codecanvas/robot-bridge": "workspace:*",
     "@codecanvas/robot3d": "workspace:*",
     "@codecanvas/task-import": "workspace:*",
+    "@dagrejs/dagre": "^3.1.1",
     "blockly": "^12.5.1",
     "vue": "^3.5.43"
   },

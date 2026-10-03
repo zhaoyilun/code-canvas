@@ -91,15 +91,27 @@ vi.mock('@codecanvas/robot-bridge', async (importOriginal) => {
  * 挂整块 `RightPanel` 时上半那块 3D **必须打桩**：真的 `mountVirtualDevice` 会建 WebGL 上下文，
  * happy-dom 里起不来（见 `RightPanel.test.ts` 同一处）。这一条用例要的是「第三个 tab 切得过去」，
  * 不是 3D 能不能画——3D 的契约在 `apps/robot3d/src/mount.test.ts` 里。
+ *
+ * `DEFAULT_TARGET_BLOCK` 也得给：面板顶上那句「本机布景」要拿它当输入框的初值，
+ * 少这一个名字，整个面板在导入期就挂了（错误会指向一处与 tab 毫无关系的地方）。
  */
 vi.mock('@codecanvas/robot3d', () => ({
+	DEFAULT_TARGET_BLOCK: { x: 0.12, y: 0.015, z: 0.16 },
 	mountVirtualDevice: () => ({
 		run: vi.fn().mockResolvedValue({ ok: true, completed: 1, total: 1 }),
+		// 单步那一套（`beginStepRun` / `releaseStep` / `onStepGate` / `stepping`）也在设备的面上：
+		// 面板挂载时会订 `onStepGate`（它靠那一条说清「停住等放行」）——少一个就在这里挂。
+		beginStepRun: vi.fn(() => new Promise(() => {})),
+		releaseStep: vi.fn(),
+		onStepGate: vi.fn(() => () => {}),
+		stepping: false,
 		reset: vi.fn(),
 		onStep: vi.fn(() => () => {}),
 		onPlanStep: vi.fn(() => () => {}),
 		dispose: vi.fn(),
 		size: { width: 0, height: 0 },
+		setTargetBlock: vi.fn(),
+		targetBlock: { x: 0.12, y: 0.015, z: 0.16 },
 	}),
 }));
 

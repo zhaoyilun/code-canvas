@@ -19,12 +19,25 @@
  * 不是几个文件的拷贝。
  *
  * 上游：`gitcode.com/openeuler/IB_Robot` 分支 `RoboFrame`。
- * 机械读的三个文件：
- * - `src/robot_config/config/robots/<robot>.yaml` —— 技能模板、命名位姿（SSOT）
+ * 机械读的文件：
+ * - `src/robot_config/config/robots/<robot>.yaml` —— 技能模板、命名位姿、执行量（SSOT）
  * - `src/skill_library/README.md` —— 允许的原语清单与中文作用（§3 表格）
  * - `src/skill_library/skill_library/gateway_policy.py` —— 原语需要哪些运行时能力
- * 另有一份是**人读的**（不解析）：`src/skill_library/skill_library/resolver.py`
- * ——「模板字段 → 原语实参」的展开规则在 `PRIMITIVE_ARGUMENTS` 那张表里，依据写在表头上。
+ *   （`_PRIMITIVE_CAPABILITY_MAP` × `_CAPABILITY_ORDER` × `_CAPABILITY_UNAVAILABLE_MESSAGES`
+ *   三面对账，见 `readRuntimeCapabilities`）
+ * - `src/embodied_bringup/embodied_bringup/launch_builders/embodied.py` —— 接口名表的归属对账：
+ *   机器人 YAML 里那几个名字，上游 launch builder 是从 `embodied_config` 还是 `execution` 读的
+ *   （见 `INTERFACE_FIELDS` 与 `assertInterfacesMatchLaunchBuilder`）
+ * - `src/skill_library/skill_library/resolver.py` —— 「模板字段 → 原语实参」的展开规则
+ *   （`PRIMITIVE_ARGUMENTS` 那张表、`direction_to_delta`、夹爪开合位的来源），
+ *   以及每条原语**落到哪条设备事实上**（见下面的 `PRIMITIVE_DEVICE_FACTS`，逐条对着这个文件核）
+ * - `src/embodied_common/embodied_common/trajectory_templates.py` —— 轨迹模板怎么展开成路点
+ *   （`expand_trajectory_template` 的分派表 + 两个生成器读哪些字段、缺省是多少）
+ * - `src/embodied_common/embodied_common/skill_templates.py` —— `DEFAULT_WAYPOINT_DURATION_SEC`
+ *   与「模板字段 → 步骤字段 → 缺省」那条解析顺序
+ *
+ * 轨迹模板那条规则**不是人读的**：字段名与缺省值从 `trajectory_templates.py` 里抠出来，
+ * 抠不出当场报错（见 `readTrajectoryRules`）——「照上游抄」这件事要能被执行面证明。
  *
  * 四处**翻译**（上游语义与本地契约不是一一对应，逐条写在这里，不藏在代码里）：
  * 1. `initial_gripper_state: open|closed` → 展开时在最前面插一条 `open_gripper` / `close_gripper`
@@ -48,6 +61,14 @@
  *    与第 3 条同一个理由。
  *    判据是**收紧**的：既没有 `primitive_sequence`、又不属于已知委托型的技能当场报错，
  *    不静默产出一条空实现，也不猜一条 delegate。
+ * 5. **设备事实**（`namedPoseTargets` / `execution` / `trajectoryTemplates` /
+ *    `primitiveSpec.deviceFacts`）是**照搬**，不是翻译：上游写着的数字直接进目录，
+ *    上游没写的字段一个不补。为什么要有这一层——模板里那条孤零零的
+ *    `move_to_named_pose(pose_name="observe_table")` 落到哪个坐标上，上游写着，我们得说出来。
+ *    轨迹模板展开成多少拍是**算**出来的（上游两个生成器是嵌套的两层循环：
+ *    `for _ in range(repeat_count): for index in range(active_waypoint_count)`，所以是乘法；
+ *    `wave_dance_v1` 末尾再补 `zero_hold_count` 拍静止）——规则的字段名与缺省值从上游代码抠，
+ *    拍数与秒数才是乘积。认不出的模板类型**什么都不说**，不猜。
  */
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -139,17 +160,460 @@ const assertKnownArguments = (primitiveRef, step, where) => {
 };
 
 /**
- * 运行时能力要求，读自 `gateway_policy.py` 的 `_PRIMITIVE_CAPABILITY_MAP`。
- * 只用来做**交叉校验**：模板里用到的原语必须在这张表里（或者在上游 README 的白名单里），
- * 否则说明我们认错了仓库版本。
+ * 一条原语的一次调用**落到设备的哪条事实上**，以及从哪个实参取值。
+ *
+ * 同样是人对 `resolver.py` 的判读，所以下面 `assertDeviceFactsMatchResolver` 会把每一条
+ * 拿上游源码逐条核一遍：原语名不在 resolver 的分派里、或者那个分支根本不读我们说的那个字段，
+ * 当场报错。「登记一条事实」这件事也不许靠记忆。
  */
-const readCapabilityMap = () => {
-	const source = read('src/skill_library/skill_library/gateway_policy.py');
-	const body = source.split('_PRIMITIVE_CAPABILITY_MAP')[1] ?? '';
-	const names = [...body.matchAll(/^\s{4}"([a-z_]+)":/gm)].map((match) => match[1]);
-	if (names.length === 0) throw new Error('gateway_policy.py 里解析不出 _PRIMITIVE_CAPABILITY_MAP');
-	return new Set(names);
+const PRIMITIVE_DEVICE_FACTS = {
+	move_to_named_pose: { poseNameArgument: 'pose_name' },
+	move_relative_ee: { directionArgument: 'motion_direction' },
+	move_through_joint_positions: { trajectoryArgument: 'trajectory_template' },
+	open_gripper: { gripperPosition: 'open' },
+	close_gripper: { gripperPosition: 'closed' },
 };
+
+/** 事实里那三个「哪个实参」的键名（核 resolver 时按它们去问）。 */
+const ARGUMENT_FACT_KEYS = ['poseNameArgument', 'directionArgument', 'trajectoryArgument'];
+
+/**
+ * 把 `resolver.py` 里每个原语分支的代码切出来。
+ *
+ * 两种分派写法都要认：`if primitive_name == "x":` 与 `if primitive_name in {"x", "y"}:`。
+ * 切不出来就报错——这张表要是核不上源码，「照上游抄」就只是一句话。
+ */
+const readResolverBranches = () => {
+	const source = read('src/skill_library/skill_library/resolver.py');
+	const markers = [...source.matchAll(/^ {8}if primitive_name (?:== "([a-z_]+)"|in \{([^}]+)\}):$/gm)];
+	if (markers.length === 0) throw new Error('resolver.py 里解析不出 primitive_name 的分派分支');
+	const branches = new Map();
+	markers.forEach((marker, index) => {
+		const body = source.slice(marker.index, markers[index + 1]?.index ?? source.length);
+		const names =
+			marker[1] !== undefined ? [marker[1]] : [...marker[2].matchAll(/"([a-z_]+)"/g)].map((item) => item[1]);
+		for (const name of names) branches.set(name, body);
+	});
+	return branches;
+};
+
+/**
+ * 把一个 Python 文件里每个顶层函数的名字与函数体切出来（按 `^def ` 切）。
+ * 只用来「顺着分支往下看一眼」，不解析语法。
+ */
+const readPythonFunctions = (source) => {
+	const markers = [...source.matchAll(/^def ([a-z_][a-z0-9_]*)\(/gm)];
+	const functions = new Map();
+	markers.forEach((marker, index) => {
+		functions.set(marker[1], source.slice(marker.index, markers[index + 1]?.index ?? source.length));
+	});
+	if (functions.size === 0) throw new Error('这个 Python 文件里一个顶层函数都没切出来（上游改了写法？）');
+	return functions;
+};
+
+/** 表 vs 上游源码：逐条核。对不上说明我们记错了上游——报错，不猜。 */
+const assertDeviceFactsMatchResolver = (branches) => {
+	const functions = readPythonFunctions(read('src/skill_library/skill_library/resolver.py'));
+
+	/**
+	 * 这个分支读不读那个字段。
+	 *
+	 * 分支里读不到时**再看一层它直接调用的函数**：`move_to_named_pose` 的 `pose_name`
+	 * 就是 `_resolve_pose_name(step, …)` 里读的，不是分支自己读的。只认一层——
+	 * 再往下就不是「这条原语读这个字段」，而是「这个工具函数碰巧也读」了。
+	 */
+	const readsArgument = (branch, argument) => {
+		if (branch.includes(`step.get("${argument}"`)) return true;
+		for (const call of branch.matchAll(/([a-z_][a-z0-9_]*)\(/g)) {
+			const body = functions.get(call[1]);
+			if (body !== undefined && body.includes(`step.get("${argument}"`)) return true;
+		}
+		return false;
+	};
+
+	for (const [primitiveRef, facts] of Object.entries(PRIMITIVE_DEVICE_FACTS)) {
+		const branch = branches.get(primitiveRef);
+		if (branch === undefined) {
+			throw new Error(
+				`原语 ${primitiveRef} 登记了设备事实，但 resolver.py 里没有它的分派分支——上游换了原语名？`,
+			);
+		}
+		for (const key of ARGUMENT_FACT_KEYS) {
+			const argument = facts[key];
+			if (argument === undefined) continue;
+			if (facts.trajectoryArgument !== undefined && key === 'trajectoryArgument') {
+				// 轨迹模板不在 resolver 里展开：skill_templates.py 调 expand_trajectory_template 那一侧才是展开点。
+				const expansion = read('src/embodied_common/embodied_common/skill_templates.py');
+				if (!expansion.includes(`step.get("${argument}")`)) {
+					throw new Error(`原语 ${primitiveRef} 的 ${argument} 在 skill_templates.py 里找不到展开点`);
+				}
+				continue;
+			}
+			if (!readsArgument(branch, argument)) {
+				throw new Error(
+					`原语 ${primitiveRef} 的 ${key}=${argument} 对不上 resolver.py：那个分支（连它直接调用的函数）都不读 ${argument}`,
+				);
+			}
+		}
+		if (facts.gripperPosition !== undefined) {
+			const expected = facts.gripperPosition === 'open' ? 'open_position' : 'closed_position';
+			if (!branch.includes(expected)) {
+				throw new Error(`原语 ${primitiveRef} 在 resolver.py 的分支里没有 ${expected}——夹爪到位值不是从那儿来的`);
+			}
+		}
+	}
+};
+
+/**
+ * 轨迹模板的展开规则：从上游代码里抠出字段名与缺省值。
+ *
+ * 上游那个文件是**代码**，这里是把它摊成数据。三件事都从源码取，抠不出就报错：
+ * 1. 类型名 → 生成函数（`expand_trajectory_template` 的分派表）；
+ * 2. 每个生成函数读哪几个整数字段、缺省多少（`int(template.get("…", N))`）；
+ * 3. 每拍时长的字段名与缺省值（`skill_templates.py` 的 `DEFAULT_WAYPOINT_DURATION_SEC`）。
+ *
+ * 字段的**角色**（循环 / 重复 / 静止）是命名上的判读，所以额外核一条：函数里读到的整数字段
+ * 必须一个不多一个不少地落在这张角色表里——上游加了一个新字段，这里立刻报错。
+ */
+const TRAJECTORY_FIELD_ROLES = {
+	active_waypoint_count: 'cycle',
+	repeat_count: 'repeat',
+	zero_hold_count: 'hold',
+};
+
+const readTrajectoryRules = () => {
+	const source = read('src/embodied_common/embodied_common/trajectory_templates.py');
+	const expansion = read('src/embodied_common/embodied_common/skill_templates.py');
+
+	const dispatch = source.split('def expand_trajectory_template')[1];
+	if (dispatch === undefined) throw new Error('trajectory_templates.py 里找不到 expand_trajectory_template');
+	const routes = [...dispatch.matchAll(/if template_type == "([a-z0-9_]+)":\s*\n\s*return ([a-z_0-9]+)\(template\)/g)];
+	if (routes.length === 0) throw new Error('expand_trajectory_template 的分派表一行都没解析出来');
+
+	const durationField = expansion.match(/trajectory_template\.get\(\s*"([a-z_]+)",\s*step\.get\(/)?.[1];
+	if (durationField === undefined) throw new Error('skill_templates.py 里找不到 waypoint_duration 的解析');
+	const defaultDuration = Number(expansion.match(/DEFAULT_WAYPOINT_DURATION_SEC = ([\d.]+)/)?.[1]);
+	if (!Number.isFinite(defaultDuration) || defaultDuration <= 0) {
+		throw new Error('skill_templates.py 里找不到正的 DEFAULT_WAYPOINT_DURATION_SEC');
+	}
+
+	return routes.map((route) => {
+		const [, templateType, generator] = route;
+		const body = source.split(`def ${generator}(`)[1]?.split('\ndef ')[0];
+		if (body === undefined) throw new Error(`trajectory_templates.py 里找不到生成器 ${generator}`);
+
+		const read_fields = [...body.matchAll(/int\(template\.get\("([a-z_]+)", (\d+)\)\)/g)].map((item) => ({
+			name: item[1],
+			defaultValue: Number(item[2]),
+		}));
+		for (const field of read_fields) {
+			if (TRAJECTORY_FIELD_ROLES[field.name] === undefined) {
+				throw new Error(
+					`生成器 ${generator} 读了一个没登记角色的字段 ${field.name}——轨迹展开规则表要跟着上游改`,
+				);
+			}
+		}
+		const byRole = new Map(read_fields.map((field) => [TRAJECTORY_FIELD_ROLES[field.name], field]));
+		const cycle = byRole.get('cycle');
+		const repeat = byRole.get('repeat');
+		const hold = byRole.get('hold');
+		if (cycle === undefined || repeat === undefined) {
+			throw new Error(`生成器 ${generator} 里找不到循环拍数与重复次数这两个字段`);
+		}
+		if (repeat.defaultValue <= 0) throw new Error(`生成器 ${generator} 的重复次数缺省不是正数`);
+
+		return {
+			templateType,
+			rule: hold === undefined ? 'cycle_repeat' : 'cycle_repeat_hold',
+			cycleField: cycle.name,
+			// 缺省 0 意味着「必须给」（生成器对非正数直接抛错），契约里不写这个假缺省。
+			...(cycle.defaultValue > 0 ? { cycleDefault: cycle.defaultValue } : {}),
+			repeatField: repeat.name,
+			repeatDefault: repeat.defaultValue,
+			...(hold === undefined ? {} : { holdField: hold.name, holdDefault: hold.defaultValue }),
+			durationField,
+			durationDefaultSec: defaultDuration,
+		};
+	});
+};
+
+/**
+ * 原语参数的**单位与范围**：从模板的 `capability.parameters` 里读。
+ *
+ * 「哪些模板把这个字段交给了这条原语」正是 `PRIMITIVE_PARAMETERS` 那张表说的
+ * （`<实参>` 或 `<实参>_from_request`）。同一个原语同一个字段被多个模板给出时，
+ * 单位必须一致——不一致就是上游自己没说清，此时报错，不去挑一个。
+ * **没有人给过单位就没有单位**：`duration_sec` 的「秒」写在字段名里，不是上游声明的 `unit`，
+ * 所以它这里什么都不带（宁可不写，也不把名字当声明）。
+ */
+const readPrimitiveParameterHints = (skills) => {
+	/** primitiveRef → 实参名 → {unit?, exclusiveMinimum?}。 */
+	const hints = new Map();
+	const remember = (primitiveRef, argument, property, where) => {
+		const unit = typeof property?.unit === 'string' && property.unit !== '' ? property.unit : undefined;
+		const exclusiveMinimum =
+			typeof property?.exclusiveMinimum === 'number' ? property.exclusiveMinimum : undefined;
+		if (unit === undefined && exclusiveMinimum === undefined) return;
+		const seen = hints.get(primitiveRef)?.get(argument);
+		if (seen !== undefined && JSON.stringify(seen) !== JSON.stringify({ unit, exclusiveMinimum })) {
+			throw new Error(
+				`${where} 声明的单位/范围与别的模板对不上（${JSON.stringify(seen)} vs ${JSON.stringify({ unit, exclusiveMinimum })}）——上游自己没说清，不挑一个`,
+			);
+		}
+		if (!hints.has(primitiveRef)) hints.set(primitiveRef, new Map());
+		hints.get(primitiveRef).set(argument, { unit, exclusiveMinimum });
+	};
+
+	for (const [skillName, template] of Object.entries(skills)) {
+		const properties = template?.capability?.parameters?.properties ?? {};
+		for (const step of template?.primitive_sequence ?? []) {
+			const primitiveRef = step?.primitive_name;
+			for (const parameter of PRIMITIVE_PARAMETERS[primitiveRef] ?? []) {
+				if (!(parameter.name in step) && step[`${parameter.name}_from_request`] !== true) continue;
+				remember(
+					primitiveRef,
+					parameter.name,
+					properties[parameter.name],
+					`技能 ${skillName} 的 ${primitiveRef}.${parameter.name}`,
+				);
+			}
+		}
+	}
+	return hints;
+};
+
+/**
+ * 一条原语参数 + 上游声明的单位/范围 → 目录里的那个参数对象。
+ *
+ * `unit` / `exclusiveMinimum` **排在 `type` 前面**是有意的：重跑导入时，新增的键必须是一行
+ * **纯插入**——排在末尾会让上一个键那一行多出一个逗号，那就成了「动了原有内容」
+ * （判据：diff 里 `-` 行数必须是 0）。顺序对 zod 与键序规范化序列化都没有影响。
+ */
+const parameterOf = (parameter, hint) => ({
+	name: parameter.name,
+	label: parameter.label,
+	...(hint?.unit === undefined ? {} : { unit: hint.unit }),
+	...(hint?.exclusiveMinimum === undefined ? {} : { exclusiveMinimum: hint.exclusiveMinimum }),
+	type: parameter.type,
+});
+
+// ---------------------------------------------------------------------------
+// 上游事实：设备事实（命名位姿 / 执行量）
+// ---------------------------------------------------------------------------
+
+/** 三/四个分量都必须在：缺一个就报错，**不补 0**（补了就是编一个上游没写过的坐标）。 */
+const componentsOf = (mapping, keys, where) => {
+	const result = {};
+	for (const key of keys) {
+		const value = mapping?.[key];
+		if (typeof value !== 'number' || !Number.isFinite(value)) {
+			throw new Error(`${where} 缺 ${key}（或不是有限数字）——不补默认值`);
+		}
+		result[key] = value;
+	}
+	return result;
+};
+
+/**
+ * 命名位姿落在哪个坐标上（`robot.embodied.named_poses`）。
+ *
+ * 与 `catalog.namedPoses`（名字列表）**同一个键集、同一个顺序**：两边都从这一处产出，
+ * 对不上就说明我们自己的代码分叉了，所以这里顺带核一次。
+ * 位姿的参考系与单位上游没声明（YAML 里没有，`loader.py` 也不管），所以这里不写——
+ * 「base 系」「米」都是对的，但「上游写着」这件事不成立。
+ */
+const namedPoseTargetsOf = (robotName, namedPoses) =>
+	Object.entries(namedPoses ?? {}).map(([name, pose]) => {
+		const where = `${robotName} 的 named_poses.${name}`;
+		const position = pose?.position;
+		const orientation = pose?.orientation;
+		if (position === undefined && orientation === undefined) {
+			throw new Error(`${where} 既没有 position 也没有 orientation——这条事实什么都没说`);
+		}
+		return {
+			name,
+			...(position === undefined
+				? {}
+				: { position: componentsOf(position, ['x', 'y', 'z'], `${where}.position`) }),
+			...(orientation === undefined
+				? {}
+				: { orientation: componentsOf(orientation, ['x', 'y', 'z', 'w'], `${where}.orientation`) }),
+		};
+	});
+
+/** 执行侧的量（`robot.embodied.execution`）。缺的字段不写——不替上游补默认值。 */
+const executionFactsOf = (robotName, execution) => {
+	if (execution === undefined) return undefined;
+	const where = `${robotName} 的 embodied.execution`;
+	const facts = {};
+	if (execution.relative_motion_step_m !== undefined) {
+		if (typeof execution.relative_motion_step_m !== 'number') throw new Error(`${where}.relative_motion_step_m 不是数字`);
+		facts.relativeMotionStepM = execution.relative_motion_step_m;
+	}
+	if (execution.relative_motion_reference_frame !== undefined) {
+		const frame = String(execution.relative_motion_reference_frame).trim();
+		if (frame === '') throw new Error(`${where}.relative_motion_reference_frame 是空的`);
+		facts.relativeMotionReferenceFrame = frame;
+	}
+	if (execution.relative_motion_direction_mapping !== undefined) {
+		const mapping = {};
+		for (const [direction, vector] of Object.entries(execution.relative_motion_direction_mapping)) {
+			if (!Array.isArray(vector) || vector.length !== 3 || vector.some((item) => typeof item !== 'number')) {
+				throw new Error(`${where}.relative_motion_direction_mapping.${direction} 不是三个数字`);
+			}
+			mapping[direction] = vector;
+		}
+		facts.relativeMotionDirectionMapping = mapping;
+	}
+	if (execution.gripper_open_position !== undefined) facts.gripperOpenPosition = execution.gripper_open_position;
+	if (execution.gripper_closed_position !== undefined) facts.gripperClosedPosition = execution.gripper_closed_position;
+	return Object.keys(facts).length === 0 ? undefined : facts;
+};
+
+/**
+ * **执行侧的接口名表**：这台设备的技能/原语最后发到哪个 action、哪个 service、哪个 topic。
+ *
+ * 为什么现在要它：教学要能说到「这一步最后落到设备的哪个接口上」，而这件事目录里原本一个字
+ * 都没有——原语那一层只说到 `move_to_named_pose(pose_name=…)` 为止。这些名字上游写着，
+ * 导进来就是了。
+ *
+ * 三条纪律：
+ *
+ * 1. **这是配置级的**（一台设备一份），所以放在目录级（`catalog.interfaces`），
+ *    不塞进单条原语里：原语与技能共用同一对 action，逐条原语各抄一遍必然分叉。
+ * 2. **路径就是归属**：`embodied.*` 那五个在机器人 YAML 的 `embodied` 段下，
+ *    `task_executor_action_name` / `move_configuration_service` 在 `embodied.execution` 下——
+ *    上游的 launch builder 正是分两处读的（`embodied_config.get(...)` 与 `execution.get(...)`），
+ *    下面 `assertInterfacesMatchLaunchBuilder` 拿它逐条核。
+ * 3. **上游缺字段就不许造**：`move_configuration_service` 单臂那份没有，目录里就不写这一条
+ *    ——`skill_executor_node.py` 里那个默认值不是这台设备声明过的事实。
+ */
+const INTERFACE_FIELDS = [
+	{ key: 'task_command_topic', path: ['embodied', 'task_command_topic'], required: true },
+	{ key: 'status_topic', path: ['embodied', 'status_topic'], required: true },
+	{ key: 'skill_action_name', path: ['embodied', 'skill_action_name'], required: true },
+	{ key: 'primitive_action_name', path: ['embodied', 'primitive_action_name'], required: true },
+	{ key: 'validate_skill_service', path: ['embodied', 'validate_skill_service'], required: true },
+	{
+		key: 'task_executor_action_name',
+		path: ['embodied', 'execution', 'task_executor_action_name'],
+		required: false,
+	},
+	{
+		key: 'move_configuration_service',
+		path: ['embodied', 'execution', 'move_configuration_service'],
+		required: false,
+	},
+];
+
+/** 接口名表 vs 上游 launch builder：每个键都要在那个文件里被读过，且读它的是**同一段**配置。 */
+const assertInterfacesMatchLaunchBuilder = () => {
+	const builder = read('src/embodied_bringup/embodied_bringup/launch_builders/embodied.py');
+	for (const field of INTERFACE_FIELDS) {
+		// 路径长度 2 = `embodied.<key>`（builder 读 `embodied_config`）；3 = `embodied.execution.<key>`
+		// （builder 读 `execution`）。归属不是我们分的，是上游读法分好的。
+		// 正则里的 `\s*` 是必须的：上游有个 `.get(` 换行写（`move_configuration_service`），
+		// 按字面串匹配会把它判成「不是从这儿读的」——那是我们看错了，不是上游的问题。
+		const section = field.path.length === 2 ? 'embodied_config' : 'execution';
+		const reading = new RegExp(`${section}\\.get\\(\\s*"${field.key}"`);
+		if (!reading.test(builder)) {
+			throw new Error(
+				`接口 ${field.key} 在 launch builder 里不是从 ${section} 读的——路径表里的归属要对上上游的读法`,
+			);
+		}
+	}
+};
+
+/** 这台设备的接口名表：按 `INTERFACE_FIELDS` 的顺序取，缺一个必填的就报错。 */
+const interfacesOf = (robotName, robot) => {
+	const interfaces = {};
+	for (const field of INTERFACE_FIELDS) {
+		const value = readPath(robot, field.path);
+		if (value === undefined) {
+			if (field.required) throw new Error(`${robotName}：取不到接口名 ${field.path.join('.')}`);
+			continue;
+		}
+		if (typeof value !== 'string' || value.trim() === '') {
+			throw new Error(`${robotName}：接口名 ${field.path.join('.')} 不是非空字符串`);
+		}
+		interfaces[field.key] = value.trim();
+	}
+	return interfaces;
+};
+
+/**
+ * 运行时能力：`gateway_policy.py` 里那三样一起读，因为它们是同一个键集的三面——
+ * 字段名（`SkillRequirements` 的 dataclass）、顺序（`_CAPABILITY_ORDER`）、
+ * 缺了怎么说（`_CAPABILITY_UNAVAILABLE_MESSAGES`）。三面对不上就报错，不挑一个。
+ *
+ * 为什么要有这一层：一条原语**不是想跑就能跑**——`move_relative_ee` 得先有新的末端位姿
+ * （`fresh_ee_pose`），`move_to_joint_positions` 得先有轨迹通道（`arm_trajectory`）。
+ * 这是「这台设备得先具备什么」的事实，教学讲「这一步为什么可能做不了」时只有它能依据。
+ *
+ * 返回 `{ map, fields }`：`map` 是 primitiveRef → 能力名数组（按 `_CAPABILITY_ORDER` 排），
+ * `fields` 是 dataclass 的字段顺序（对账用）。
+ */
+const readRuntimeCapabilities = () => {
+	const source = read('src/skill_library/skill_library/gateway_policy.py');
+
+	const dataclass = source.split('class SkillRequirements:')[1]?.split(/\n@|^class /m)[0] ?? '';
+	const fields = [...dataclass.matchAll(/^ {4}([a-z_][a-z0-9_]*): bool = False$/gm)].map((match) => match[1]);
+	if (fields.length === 0) throw new Error('gateway_policy.py 里解析不出 SkillRequirements 的字段');
+
+	const orderBody = source.split('_CAPABILITY_ORDER = (')[1]?.split(')')[0] ?? '';
+	const order = [...orderBody.matchAll(/"([a-z_]+)"/g)].map((match) => match[1]);
+	const messagesBody = source.split('_CAPABILITY_UNAVAILABLE_MESSAGES = {')[1]?.split(/\n\}/)[0] ?? '';
+	const messages = new Map(
+		[...messagesBody.matchAll(/"([a-z_]+)": "([^"]+)"/g)].map((match) => [match[1], match[2]]),
+	);
+	if (order.length === 0 || messages.size === 0) {
+		throw new Error('gateway_policy.py 里解析不出 _CAPABILITY_ORDER / _CAPABILITY_UNAVAILABLE_MESSAGES');
+	}
+	// 三面必须同一个键集、同一个顺序：少一个就说明上游改了其中一处而我们只读到了另一处。
+	for (const [index, name] of order.entries()) {
+		if (fields[index] !== name) {
+			throw new Error(`能力顺序对不上：_CAPABILITY_ORDER[${index}]=${name}，dataclass 那个位置是 ${fields[index]}`);
+		}
+		if (!messages.has(name)) throw new Error(`能力 ${name} 在 _CAPABILITY_UNAVAILABLE_MESSAGES 里没有那句话`);
+	}
+	for (const name of messages.keys()) {
+		if (!order.includes(name)) throw new Error(`_CAPABILITY_UNAVAILABLE_MESSAGES 里的 ${name} 不在 _CAPABILITY_ORDER 里`);
+	}
+
+	const mapBody = source.split('_PRIMITIVE_CAPABILITY_MAP')[1]?.split(/\n\}/)[0] ?? '';
+	const entries = [...mapBody.matchAll(/^ {4}"([a-z_]+)": SkillRequirements\(([^)]*)\),?$/gm)];
+	if (entries.length === 0) throw new Error('gateway_policy.py 里解析不出 _PRIMITIVE_CAPABILITY_MAP');
+
+	const map = new Map();
+	for (const [, primitiveRef, kwargs] of entries) {
+		const enabled = new Set(
+			[...kwargs.matchAll(/([a-z_][a-z0-9_]*)=True/g)].map((match) => match[1]),
+		);
+		for (const name of enabled) {
+			if (!fields.includes(name)) {
+				throw new Error(`${primitiveRef} 登记了能力 ${name}，但它不是 SkillRequirements 的字段`);
+			}
+		}
+		// `=False` 是 dataclass 的缺省，不写进目录——目录里只留「这条原语确实要的那几条」。
+		map.set(
+			primitiveRef,
+			order.filter((name) => enabled.has(name)).map((name) => ({ name, unavailableMessage: messages.get(name) })),
+		);
+	}
+	return { map, fields };
+};
+
+/**
+ * 一条原语 → 它在**这台设备上**要哪些运行时能力。
+ *
+ * 上游没登记的（`move_to_pose` / `move_to_configuration` 那两条）**不写这个字段**：
+ * 空数组与「上游没登记」是两件事。返回 `undefined` 时调用方把键整条省掉。
+ */
+const runtimeCapabilitiesOf = (primitiveRef, capabilityMap) => {
+	const capabilities = capabilityMap.get(primitiveRef);
+	return capabilities === undefined || capabilities.length === 0 ? undefined : capabilities;
+};
+
 
 // ---------------------------------------------------------------------------
 // 上游事实：技能模板
@@ -280,10 +744,12 @@ const statementsOf = (skillName, template, robot, capabilityParameters) => {
 /**
  * 能力参数：上游给的是 JSON Schema 片段。
  *
- * 除了类型，还要把上游**写着的东西**带过来——`unit`、`required`。
+ * 除了类型，还要把上游**写着的东西**带过来——`unit`、`exclusiveMinimum`、`required`。
  * 早先这里只取了类型，于是「米 / 度」这种单位在界面上丢了，
  * 而「这个参数必填」这条约束也没了，缺参数只能含糊地报一句提醒。
  * 判据在上游，核心不自己发明。
+ *
+ * `exclusiveMinimum` 同样排在 `type` 前面，理由见 `parameterOf`：新增的键要是一行纯插入。
  */
 const parametersOf = (skillName, schema) => {
 	const properties = schema?.properties ?? {};
@@ -295,6 +761,7 @@ const parametersOf = (skillName, schema) => {
 		return {
 			name,
 			label: spec?.description ?? name,
+			...(typeof spec?.exclusiveMinimum === 'number' ? { exclusiveMinimum: spec.exclusiveMinimum } : {}),
 			type,
 			...(typeof spec?.unit === 'string' && spec.unit !== '' ? { unit: spec.unit } : {}),
 			...(required.has(name) ? { required: true } : {}),
@@ -307,15 +774,41 @@ const parametersOf = (skillName, schema) => {
 // ---------------------------------------------------------------------------
 
 const primitiveTable = readPrimitiveTable();
-const capabilityMap = readCapabilityMap();
+const capabilityMap = readRuntimeCapabilities();
+const resolverBranches = readResolverBranches();
+assertDeviceFactsMatchResolver(resolverBranches);
+const trajectoryTemplates = readTrajectoryRules();
 
-const primitives = primitiveTable.map(({ primitiveRef, summary }) => {
-	const parameters = PRIMITIVE_PARAMETERS[primitiveRef];
-	if (parameters === undefined) {
-		throw new Error(`README 列出的原语 ${primitiveRef} 没有参数表——上游加了新原语，参数表要跟着改`);
-	}
-	return { primitiveRef, label: summary.split('，')[0] ?? summary, summary, parameters };
-});
+/**
+ * 原语表 + 上游声明的单位/范围 + 「落到哪条事实上」+ 「要设备先具备哪些运行时能力」。
+ *
+ * 四样都是**上游事实**：参数表是人对 `resolver.py` 的判读（下游有对账），
+ * 单位/范围从模板的 `capability.parameters` 里读，设备事实那张表的每一条都对着
+ * `resolver.py` 的分支核过（`assertDeviceFactsMatchResolver`），
+ * 运行时能力从 `gateway_policy.py` 的三张表里读（三面互相对账，见 `readRuntimeCapabilities`）。
+ */
+const primitivesOf = (skills) => {
+	const hints = readPrimitiveParameterHints(skills);
+	return primitiveTable.map(({ primitiveRef, summary }) => {
+		const parameters = PRIMITIVE_PARAMETERS[primitiveRef];
+		if (parameters === undefined) {
+			throw new Error(`README 列出的原语 ${primitiveRef} 没有参数表——上游加了新原语，参数表要跟着改`);
+		}
+		const deviceFacts = PRIMITIVE_DEVICE_FACTS[primitiveRef];
+		const runtimeCapabilities = runtimeCapabilitiesOf(primitiveRef, capabilityMap.map);
+		return {
+			primitiveRef,
+			label: summary.split('，')[0] ?? summary,
+			summary,
+			// 插在 `parameters` **前面**同样是纯插入（`summary` 那一行本来就带逗号）。
+			...(deviceFacts === undefined ? {} : { deviceFacts }),
+			...(runtimeCapabilities === undefined ? {} : { runtimeCapabilities }),
+			parameters: parameters.map((parameter) =>
+				parameterOf(parameter, hints.get(primitiveRef)?.get(parameter.name)),
+			),
+		};
+	});
+};
 
 /**
  * 语句树里用到哪些原语：递归走（含 if 分支、赋值右值、实参里嵌的表达式）。
@@ -361,6 +854,21 @@ const buildCatalog = (robotName) => {
 	const robot = parse(read(join('src/robot_config/config/robots', `${robotName}.yaml`))).robot;
 	const skills = robot.embodied.skill_templates;
 	if (skills === undefined) throw new Error(`${robotName} 的 YAML 里没有 embodied.skill_templates`);
+
+	const primitives = primitivesOf(skills);
+	const namedPoses = Object.keys(robot.embodied.named_poses ?? {});
+	const namedPoseTargets = namedPoseTargetsOf(robotName, robot.embodied.named_poses);
+	const execution = executionFactsOf(robotName, robot.embodied.execution);
+	// 接口名表：必填的那几个取不到就在里面报错，不在这里兜。
+	assertInterfacesMatchLaunchBuilder();
+	const interfaces = interfacesOf(robotName, robot);
+
+	// 对账 0：名字列表与坐标表必须同一个键集。两边都是从这一处 YAML 产出的，
+	// 对不上就说明我们自己的代码分叉了——那正是「屏幕上每个字都对得上事实」最怕的事。
+	const targetNames = namedPoseTargets.map((target) => target.name);
+	if (JSON.stringify(targetNames) !== JSON.stringify(namedPoses)) {
+		throw new Error(`${robotName}：namedPoseTargets 与 namedPoses 的键集/顺序对不上（${targetNames} vs ${namedPoses}）`);
+	}
 
 	const capabilities = Object.entries(skills).map(([name, template]) => {
 		const parameters = parametersOf(name, template.capability?.parameters);
@@ -409,7 +917,12 @@ const buildCatalog = (robotName) => {
 			robotName,
 			displayName,
 			revisionRef: `roboframe-${robotName}-${commit.slice(0, 8)}`,
-			namedPoses: Object.keys(robot.embodied.named_poses ?? {}),
+			namedPoses,
+			namedPoseTargets,
+			...(execution === undefined ? {} : { execution }),
+			trajectoryTemplates,
+			// 插在 `primitives` **前面**：与 `runtimeCapabilities` 同一个理由（纯插入）。
+			interfaces,
 			primitives,
 			capabilities,
 		},
@@ -431,8 +944,29 @@ const buildCatalog = (robotName) => {
 	);
 	console.log(
 		`  用到 ${used.size} 个原语：${[...used].sort().join(', ')}${
-			[...used].every((name) => capabilityMap.has(name)) ? '' : '（有原语不在 gateway_policy 表里，查一下）'
+			[...used].every((name) => capabilityMap.map.has(name)) ? '' : '（有原语不在 gateway_policy 表里，查一下）'
 		}`,
+	);
+	const withFacts = primitives.filter((primitive) => primitive.deviceFacts !== undefined);
+	const withHints = primitives.flatMap((primitive) =>
+		primitive.parameters.filter((parameter) => parameter.unit !== undefined || parameter.exclusiveMinimum !== undefined),
+	);
+	const withCapabilities = primitives.filter((primitive) => primitive.runtimeCapabilities !== undefined);
+	console.log(
+		`  设备事实：${namedPoseTargets.length} 个命名位姿的坐标、${
+			execution === undefined ? '没有 execution 段' : Object.keys(execution).length + ' 项执行量'
+		}、${trajectoryTemplates.length} 条轨迹展开规则（${trajectoryTemplates
+			.map((rule) => `${rule.templateType}/${rule.rule}`)
+			.join('、')}）、${withFacts.length} 条原语登记了落点、${withHints.length} 个原语参数带单位或范围`,
+	);
+	// 新增的两层（喂提示词用）：接口名表与「原语要设备先具备什么」。
+	console.log(
+		`  执行侧接口名：${Object.keys(interfaces).length} 条（${Object.keys(interfaces).join('、')}）；` +
+			`运行时能力：${withCapabilities.length}/${primitives.length} 条原语登记了（${[
+				...new Set(withCapabilities.flatMap((primitive) => primitive.runtimeCapabilities.map((item) => item.name))),
+			]
+				.sort()
+				.join('、')}），其余上游没登记`,
 	);
 	console.log(`  → ${outFile}`);
 };

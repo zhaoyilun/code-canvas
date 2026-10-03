@@ -546,45 +546,124 @@ export const renderPlanInto = (options: PlanRenderOptions): PlanRenderResult | n
 	};
 };
 
-/** 积木入场：一个块层一条计时器（连着换模块时，上一次那条收尾不许把这一次的类摘掉）。 */
-const enterTimers = new WeakMap<object, ReturnType<typeof setTimeout>>();
-
-/** 块层上那个类名：样式表按它放一段淡入（见 `BlocklyView.vue` 的 `:deep`）。 */
-export const BLOCKS_ENTER_CLASS = 'cc-blocks-enter';
-
-/** 淡入时长之外再留一点收尾余量，和样式表里那段 `220ms` 配套。 */
-const BLOCKS_ENTER_MS = 320;
+// ---------------------------------------------------------------------------
+// 积木的入场：**从工具箱那边拖进来 → 落位**
+// ---------------------------------------------------------------------------
 
 /**
- * 让积木「落定」：给块层挂一个类，由样式表放一段淡入（见 `BlocklyView.vue` 的 `:deep`）。
+ * 一块积木的入场类名：样式表按它放一段**落位**动画（见 `BlocklyView.vue` 的 `:deep`）。
  *
- * 为什么整层淡入而不是一块块来：**不做分批**——画面换模块时该做的是把「换了」讲清楚，
- * 不是演一段生成；而块与块之间还有连接线，一块块落会把连线拉成一段一跳的动画。
- *
- * 只动 `opacity`：`transform` 会挪动 `blocklyBlockCanvas` 的坐标系，
- * 而 Blockly 自己按内部坐标算命中区与连线——动画那两百毫秒里鼠标点下去可能落空。
- *
- * 放在模块层（不在 `useBlocklyCanvas` 的闭包里）是为了能拿一个假工作区单独量它——
- * 计时器按块层记，所以语义与「每个画布自己一个」一样。
+ * 观感是「拖块进来」：从**工具箱那一边**（左侧）带着一点位移滑进来，路上略过一点、
+ * 再收回原位——落定的手感。不是淡入，也不是描边扫一遍：那是「改了个状态」，不是「在动」。
  */
-export function playBlockEntrance(current: Blockly.WorkspaceSvg): void {
-	if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true) return;
-	const layer = current.getCanvas() as unknown as { classList?: DOMTokenList } | null;
-	const classes = layer?.classList;
-	if (layer == null || classes === undefined) return;
-	classes.remove(BLOCKS_ENTER_CLASS);
-	// 读一次布局把上一轮动画的收尾冲掉——不这样，连着换两个模块时第二次不会重放
-	void (layer as unknown as Element).getBoundingClientRect?.();
-	classes.add(BLOCKS_ENTER_CLASS);
-	const pending = enterTimers.get(layer);
-	if (pending !== undefined) clearTimeout(pending);
-	enterTimers.set(
-		layer,
-		setTimeout(() => {
-			enterTimers.delete(layer);
-			classes.remove(BLOCKS_ENTER_CLASS);
-		}, BLOCKS_ENTER_MS),
-	);
+export const BLOCK_STEP_ENTER_CLASS = 'cc-block-enter';
+
+/** 一趟入场动画的时长：样式表里那条 `220ms` 与这里配套。**上限 250ms**（见下面那条纪律）。 */
+export const BLOCK_STEP_ENTER_MS = 220;
+
+/** 动画放完再多留一点，才把类摘掉（正好在 220ms 摘会把最后一帧切掉）。 */
+const BLOCK_STEP_ENTER_SETTLE_MS = 320;
+
+/** 一棵块树里相邻两块的起手间隔，以及整棵树拖完的上限（块多的模块不会拖成一条长队）。 */
+export const BLOCK_LANDING_STAGGER_MS = 45;
+const BLOCK_LANDING_MAX_STAGGER_MS = 360;
+
+/** 一块积木那两条计时器（起手与收尾）：重复调它时两条一起换掉，收尾不会互相摘。 */
+interface BlockEntranceTimers {
+	start: ReturnType<typeof setTimeout> | null;
+	end: ReturnType<typeof setTimeout> | null;
+}
+
+const stepEnterTimers = new WeakMap<Element, BlockEntranceTimers>();
+
+/** 动效偏好：关掉时一个字都不动（样式表里也有降级，这里先挡一道，省得白挂类、白排计时器）。 */
+const prefersReducedMotion = (): boolean =>
+	typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true;
+
+/**
+ * 让**一块**积木「被拖进来、落位」：挂一个类，由样式表放那段位移动画。
+ *
+ * `delayMs` 是这一块的起手延迟（一棵树按顺序落位时用，见 `playBlockTreeEntrance`）。
+ *
+ * ## 两条边界（不是可以随便加特效的地方）
+ *
+ * 1. **只在入场动画期间动**，**必须收在 identity**：类与内联的 `transform-origin` 都由这里挂、
+ *    也由这里在收尾时擦干净——之后这一块与没动过的块**完全一致**，不留任何残留变换。
+ * 2. **时长 ≤ 250ms**（这里 220ms）。代价说清楚：`transform` 一族的属性会挪动
+ *    `blocklyBlockCanvas` 的坐标系，而 Blockly 按内部坐标算命中区与连线——那 220ms 里
+ *    鼠标点下去可能落空。这是「人要的是动」换来的、可接受的代价，但**不许留残留**。
+ *
+ * 实现上多做了一件事：用**独立的 `translate` / `scale` 属性**，不用 `transform` 简写。
+ * 原因很具体——Blockly 给每个块的 `<g>` 写着 `transform="translate(x, y)"`（块的定位就靠它），
+ * 而 CSS 的 `transform` 会**整个盖掉**那个属性（元素会跳到画布原点）；`translate`/`scale`
+ * 这两个独立属性是与它复合的，不碰定位。
+ *
+ * 缩放的原点必须显式给成**这一块自己的中心**：SVG 元素默认的原点是视口原点，
+ * 不管的话那点缩放会把整块拽向画布左上角。原点按块自己的框（`getBBox`）算，单位就是工作区单位。
+ */
+export function playBlockStepEntrance(element: Element, delayMs = 0): void {
+	if (prefersReducedMotion()) return;
+	const styled = element as Element & { style?: CSSStyleDeclaration; getBBox?: () => DOMRect };
+	const classes = element.classList;
+
+	// 上一次那两条计时器先撤掉：同一块连着被判两次「新来的」时，只留这一次的收尾。
+	const pending = stepEnterTimers.get(element);
+	if (pending !== undefined) {
+		if (pending.start !== null) clearTimeout(pending.start);
+		if (pending.end !== null) clearTimeout(pending.end);
+	}
+	const record: BlockEntranceTimers = { start: null, end: null };
+	stepEnterTimers.set(element, record);
+
+	const start = (): void => {
+		record.start = null;
+		const box = styled.getBBox?.();
+		if (styled.style !== undefined && box !== undefined && box.width > 0 && box.height > 0) {
+			styled.style.transformOrigin = `${String(box.width / 2)}px ${String(box.height / 2)}px`;
+		}
+		// 先摘再挂 + 读一次布局：不这样，连着两次入场里的第二次不会重放（浏览器会把两次合成一次）。
+		classes.remove(BLOCK_STEP_ENTER_CLASS);
+		void (element as Element).getBoundingClientRect?.();
+		classes.add(BLOCK_STEP_ENTER_CLASS);
+		record.end = setTimeout(() => {
+			stepEnterTimers.delete(element);
+			classes.remove(BLOCK_STEP_ENTER_CLASS);
+			styled.style?.removeProperty('transform-origin');
+		}, BLOCK_STEP_ENTER_SETTLE_MS);
+	};
+
+	if (delayMs > 0) record.start = setTimeout(start, delayMs);
+	else start();
+}
+
+/** 一棵块树里的全部块，**深度优先、先父后子**（C 形块先落，它里嵌的那串语句紧跟着落）。 */
+const depthFirstBlocks = (workspace: Blockly.WorkspaceSvg): Blockly.BlockSvg[] => {
+	const out: Blockly.BlockSvg[] = [];
+	const visit = (block: Blockly.BlockSvg): void => {
+		out.push(block);
+		for (const child of block.getChildren(true)) visit(child as Blockly.BlockSvg);
+	};
+	for (const top of workspace.getTopBlocks(true)) visit(top);
+	return out;
+};
+
+/**
+ * 一棵块树 → 一块块拖进来。
+ *
+ * 「一块块」在**嵌套**的树上也成立：顺序是深度优先（先父后子），于是 C 形块先落位、
+ * 它里面那串语句紧跟着一块块落——不是只把最外层摆出来就完事。第 n 块晚 45ms 起手，
+ * 整棵树封顶 360ms（块多的模块不会拖成长队）。
+ *
+ * 用在工作区刚画完一整棵树的时刻（换模块、导入新任务）。**流式那一侧不用它**：
+ * 那时一次只多一块，调用方对新出现的那一块单独调 `playBlockStepEntrance` 就够了。
+ */
+export function playBlockTreeEntrance(workspace: Blockly.WorkspaceSvg): void {
+	if (prefersReducedMotion()) return;
+	depthFirstBlocks(workspace).forEach((block, index) => {
+		const element = block.getSvgRoot();
+		if (!(element instanceof Element)) return;
+		playBlockStepEntrance(element, Math.min(index * BLOCK_LANDING_STAGGER_MS, BLOCK_LANDING_MAX_STAGGER_MS));
+	});
 }
 
 export function useBlocklyCanvas(): UseBlocklyCanvasResult {
@@ -854,7 +933,7 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 				status.value = 'plan';
 				Blockly.svgResize(current);
 				requestFit(current);
-				playBlockEntrance(current);
+				playBlockTreeEntrance(current);
 			} else {
 				const result = renderDeclaration({
 					workspace: current,
@@ -871,7 +950,7 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 				syncedDigest = declaration.digest;
 				status.value = writeSuspended.value ? 'broken' : 'synced';
 				Blockly.svgResize(current);
-				playBlockEntrance(current);
+				playBlockTreeEntrance(current);
 				// 重画之后把这条实现链量一遍：按内容定一个装得下、又不会小到看不清的比例，并居中。
 				// 只在这里（以及第一次量到容器尺寸时）做——用户自己缩放/拖动过的视图不会被抢回去。
 				requestFit(current);

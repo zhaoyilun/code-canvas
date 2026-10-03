@@ -1,6 +1,14 @@
 import { describe, expect, it, vi } from 'vitest';
 import { ROBOFRAME_GRASP_CATALOG, ROBOFRAME_SO101_CATALOG as catalog } from '@codecanvas/capabilities';
-import type { CapabilitySpec, Diagnostic, JsonObject, SkillPlan, SkillPlanStep, SkillStep } from '@codecanvas/contracts';
+import {
+	createStepGate,
+	type CapabilitySpec,
+	type Diagnostic,
+	type JsonObject,
+	type SkillPlan,
+	type SkillPlanStep,
+	type SkillStep,
+} from '@codecanvas/contracts';
 import {
 	intake,
 	makeTaskId,
@@ -722,6 +730,158 @@ describe('runPlan · 失败处置', () => {
 			'1@0.then.1 - done skill',
 			'1@0 then done if',
 		]);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 单步（`stepGate`）：走完一步就停住，放行一次才走下一步
+// ---------------------------------------------------------------------------
+
+/**
+ * 这一组钉住「单步」这件事的**全部判据**：
+ * ① 走完一个顶层步就真的停住——下一步不下发（设备那边一次调用都没多收）、事件也不再往下走；
+ * ② 放行一次走一步，跑到尾就结束（`ok` / `completed` 与整趟跑同一套账）；
+ * ③ **一步 = 顶层的一格**：臂里的步不各停一次（一个分支步连同它的臂一次走完）；
+ * ④ 停着的时候取消要能把它叫醒——闸收信号。
+ *
+ * 闸本身（预放行、waiting 通知、abort）的用例在 `packages/contracts/test/step-gate.test.ts`；
+ * 这里钉的是**计划层怎么用它**。
+ */
+describe('runPlan · 单步', () => {
+	/** 一条技能步。 */
+	const call = (skill: string): SkillPlanStep => ({ step: 'skill', skill });
+
+	/** 一棵分支：条件照契约的口径写。 */
+	const branch = (value: boolean, then: readonly SkillPlanStep[], other?: readonly SkillPlanStep[]): SkillPlanStep => ({
+		step: 'if',
+		condition: { field: 'last.success', op: '==', value },
+		then,
+		...(other === undefined ? {} : { else: other }),
+	});
+
+	const planOf = (steps: readonly SkillPlanStep[]): SkillPlan => ({ schemaVersion: 1, robot: 'so101_single_arm', plan: steps });
+
+	/** 计划步事件压成一行：`所属顶层步@路径 臂 状态 步型`（与上面几张表同一个写法）。 */
+	const traceOf = (e: Extract<PlanStepEvent, { kind: 'plan-step' }>): string =>
+		`${String(e.index)}@${e.path} ${e.arm ?? '-'} ${e.state} ${e.step.step}`;
+
+	/** 让微任务跑完：这一组测的是「谁先谁后」，一毫秒都不等。 */
+	const flush = async (): Promise<void> => {
+		for (let i = 0; i < 30; i += 1) await Promise.resolve();
+	};
+
+	it('走完第一步就停住：第二步一次都没下发，闸上真的停着', async () => {
+		const { runner, ran } = fakeRunner();
+		const trace: string[] = [];
+		const gate = createStepGate();
+		let settled = false;
+		const running = runPlan(planOf([call('inspect_scene'), call('wave_hello'), call('nod_yes')]), {
+			catalog,
+			runner,
+			stepGate: gate,
+			onPlanStep: (e) => trace.push(traceOf(e)),
+		}).then((outcome) => {
+			settled = true;
+			return outcome;
+		});
+
+		await flush();
+		// 设备只收到第一步；屏幕上那一行是 `done`（不是 `running`——它确实走完了才停的）
+		expect(ran).toEqual(['inspect_scene']);
+		expect(trace).toEqual(['1@0 - running skill', '1@0 - done skill']);
+		expect(gate.waiting).toBe(true);
+		// 停住＝这一趟还没结束：再等多久都不会自己往下走
+		expect(settled).toBe(false);
+		await flush();
+		expect(ran).toEqual(['inspect_scene']);
+
+		// 放行一次 → 走第二步，然后**又停住**
+		gate.release();
+		await flush();
+		expect(ran).toEqual(['inspect_scene', 'wave_hello']);
+		expect(trace).toEqual([
+			'1@0 - running skill',
+			'1@0 - done skill',
+			'2@1 - running skill',
+			'2@1 - done skill',
+		]);
+		expect(gate.waiting).toBe(true);
+		expect(settled).toBe(false);
+
+		// 最后一步放行之后就收摊：账与整趟跑同一套（3 步都走通）
+		gate.release();
+		const outcome = await running;
+		expect(outcome.ok).toBe(true);
+		expect(outcome.completed).toBe(3);
+		expect(outcome.total).toBe(3);
+		expect(ran).toEqual(['inspect_scene', 'wave_hello', 'nod_yes']);
+		expect(gate.waiting).toBe(false);
+	});
+
+	it('一步 = 顶层的一格：一个分支步里的整条臂一次走完，不停在臂里', async () => {
+		const { runner, ran } = fakeRunner();
+		const gate = createStepGate();
+		const running = runPlan(planOf([call('inspect_scene'), branch(true, [call('wave_hello'), call('nod_yes')])]), {
+			catalog,
+			runner,
+			stepGate: gate,
+		});
+
+		await flush();
+		expect(ran).toEqual(['inspect_scene']);
+		expect(gate.waiting).toBe(true);
+
+		// 放行一次：顶层第二步（那个分支）连同它 then 臂里的两步一次走完——闸没有再停
+		gate.release();
+		const outcome = await running;
+		expect(ran).toEqual(['inspect_scene', 'wave_hello', 'nod_yes']);
+		expect(gate.waiting).toBe(false);
+		expect(outcome.ok).toBe(true);
+		expect(outcome.completed).toBe(2);
+	});
+
+	it('停在闸上按取消：当场收摊，下一步不会走（闸收信号）', async () => {
+		const { runner, ran, cancel } = fakeRunner();
+		const gate = createStepGate();
+		const running = runPlan(planOf([call('inspect_scene'), call('wave_hello')]), { catalog, runner, stepGate: gate });
+
+		await flush();
+		expect(gate.waiting).toBe(true);
+		expect(ran).toEqual(['inspect_scene']);
+
+		cancel();
+		const outcome = await running;
+		expect(outcome.ok).toBe(false);
+		expect(outcome.reason).toContain('已取消');
+		// 只有第一步走完了：停在闸上的那一步没走，也不算完成
+		expect(outcome.completed).toBe(1);
+		expect(ran).toEqual(['inspect_scene']);
+		expect(gate.waiting).toBe(false);
+	});
+
+	it('上一步还在跑时连按：每一次放行都算数（按几次走几步），不丢按', async () => {
+		const { runner, ran } = fakeRunner();
+		const gate = createStepGate();
+		const running = runPlan(planOf([call('inspect_scene'), call('wave_hello'), call('nod_yes')]), {
+			catalog,
+			runner,
+			stepGate: gate,
+		});
+
+		// 第一步还没走完就先按两下：它们记在闸上，后两步因此一路走完（不多走、也不少走）
+		gate.release();
+		gate.release();
+		const outcome = await running;
+		expect(ran).toEqual(['inspect_scene', 'wave_hello', 'nod_yes']);
+		expect(outcome.completed).toBe(3);
+	});
+
+	it('不给闸就一口气跑完：单步是加的一个模式，默认行为一个字没变', async () => {
+		const { runner, ran } = fakeRunner();
+		const outcome = await runPlan(planOf([call('inspect_scene'), call('wave_hello'), call('nod_yes')]), { catalog, runner });
+		expect(ran).toEqual(['inspect_scene', 'wave_hello', 'nod_yes']);
+		expect(outcome.ok).toBe(true);
+		expect(outcome.completed).toBe(3);
 	});
 });
 

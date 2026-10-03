@@ -92,10 +92,15 @@ describe('外壳 · 上层入口带', () => {
 
 		expect(doc.declaration.value).not.toBe(beforeDeclaration);
 		expect(doc.declaration.value?.meta.description).toBe('从外壳里换掉的描述');
-		// 右栏的代码面板跟着变——「一份声明，三个视图」在真链路上成立。
-		// 断言落在模块标题上（那份任务只有一步 stop）：面板字面上换成了新声明的实现，
-		// 面板上原先那个任务名（cp-task）已随页脚小字一起去掉，这里不再拿它当凭据。
-		expect(wrapper.get('[data-testid="code-panel"]').text()).toContain('停止 · 实现');
+		/*
+		 * 右栏那块面板还在（外壳的摆放没变），但它**不再**跟着声明换内容。
+		 *
+		 * 为什么：三张画布（含代码面板）改成了画**模型给的教学规格**——那是第二次调用的产出，
+		 * 要等这一份声明定稿之后另发一次请求才回来。所以「改一份声明 → 面板字面上换成它的实现」
+		 * 这条链**已经不成立了**，再断言它就是在断言一件不存在的事。
+		 * 这一条用例真正的主语是「外壳里的入口带改的就是那份真相」，上面两行已经量到了它。
+		 */
+		expect(wrapper.find('[data-testid="code-panel"]').exists()).toBe(true);
 	});
 
 	it('切到任务 JSON tab：同一份声明在右栏那边以 JSON 呈现', async () => {

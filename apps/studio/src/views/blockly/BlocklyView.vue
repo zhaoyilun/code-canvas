@@ -1,43 +1,44 @@
 <script setup lang="ts">
 /**
- * 左栏：积木画布（spec §4.1）。三个视图里**只有这块能改**。
+ * 左栏：积木画布（spec §4.1）——**模型写的块树**。
  *
- * 画的是**当前选中模块的实现**：一个模块 = 一个能力，实现是一棵**语句树**——
- * 赋值块、C 形条件块，条件里嵌着比较块、比较两侧再嵌引用块与数字块。
- * 改字段 → 编译回同一份 workflow 声明（只改这个节点的 parameters）→ `store.applyDeclaration`；
- * 校验不过就只留诊断。接线全在 `useBlocklyCanvas()` 里，这里只摆放 DOM 与显示状态。
+ * 画的是第二次调用的产出（`state/teaching.ts` 的 `spec.blocks`）：一棵可嵌套的块树——
+ * 调用块、C 形条件块、重复块、等待块、说明块，实参是插进槽位里的**值块**。
+ * 块的定义按规格动态生成（`spec-canvas.ts`），铺开由播放队列一格一格放出来，
+ * 每一块入场是「从工具箱方向拖进来、落位」（`playBlockStepEntrance`，收在 identity）。
+ *
+ * 这一栏从前是**唯一能写回声明**的地方。现在不是了，而且是有意的：屏幕上这棵树讲的是
+ * 「这件事怎么做」（模型的教学），机器要执行的那份契约仍然是 `state/document.ts` 的声明。
+ * 拿一棵讲解用的树去改契约，等于让讲解变成命令——那两件事不是一回事。
+ * 声明那条通道一个字都没动（`applyDeclaration` 还在，只是这里不再调它）。
+ *
+ * 画不出来时照实说，不退回旧那套「从目录推实现」的积木顶上：
+ * 那不是这块画布现在要画的东西，拿它顶上等于把「模型没画出来」这句话藏起来。
  */
 import { computed } from 'vue';
-import { useStudioDocument } from '../../state/document';
-import { useBlocklyCanvas } from './blockly-canvas';
-import DiagnosticsPanel from './DiagnosticsPanel.vue';
+import { teachingBlockCount } from '@codecanvas/contracts';
+import { useSpecCanvas } from './spec-canvas';
+import { useTeaching } from '../../state/teaching';
 
-const store = useStudioDocument();
-const {
-	hostRef,
-	diagnostics,
-	status,
-	statusText,
-	failure,
-	writeSuspended,
-	selectedBlockId,
-	moduleTitle,
-	planView,
-	activeStepIndex,
-} = useBlocklyCanvas();
+const teaching = useTeaching();
 
-const taskName = computed(() => store.declaration.value?.name ?? '');
+/** 播放队列放到第几格（值块也算一格——它插进槽里的那一刻也该是一块块落进来的一块）。 */
+const revealedCount = computed(() => teaching.revealedBlockItems.value.length);
+
+const { hostRef, failure, blockCount } = useSpecCanvas({ spec: teaching.spec, revealedCount });
+
+const spec = teaching.spec;
+
+/** 规格里一共有几块（铺开的进度读数用它，与画布上真实块数对账）。 */
+const specBlockCount = computed(() => (spec.value === null ? 0 : teachingBlockCount(spec.value.blocks)));
 </script>
 
 <template>
 	<section class="blockly-view" data-testid="view-blockly">
 		<header class="view-header">
 			<span class="view-title">积木画布</span>
+			<span v-if="spec !== null" class="view-task" data-testid="blockly-title">{{ spec.title }}</span>
 		</header>
-
-		<p class="view-module" data-testid="blockly-module-title">{{ moduleTitle }}</p>
-
-		<p v-if="taskName !== ''" class="view-task" data-testid="blockly-task">{{ taskName }}</p>
 
 		<div class="canvas" data-testid="blockly-canvas-frame">
 			<div ref="hostRef" class="canvas-host" data-testid="blockly-canvas" />
@@ -45,27 +46,22 @@ const taskName = computed(() => store.declaration.value?.name ?? '');
 		</div>
 
 		<footer class="view-footer">
-			<span class="write-state" :class="status" data-testid="blockly-write-state">{{ statusText }}</span>
-			<span
-				v-if="activeStepIndex !== null"
-				class="footer-hint footer-step"
-				data-testid="blockly-selected-step"
-				:data-plan="planView ? 'true' : 'false'"
-				:title="
-					planView
-						? '计划里的第几步（声明里的顺序）；点积木或点代码行都会改这一个数'
-						: '实现里的第几步（顶层语句）；点积木或点代码行都会改这一个数'
-				"
-			>
-				选中{{ planView ? '计划' : '' }}第 {{ activeStepIndex + 1 }} 步
+			<!--
+				两个数分开说：规格里有几块、讲到第几块，是**规格与播放队列**的事实（画布起没起来都成立）；
+				画布上真有几块是**画布**的事实，画布没建起来时一个字都不说它——
+				那时报一个「0 块」会读成「这份规格是空的」，而那是假的。
+			-->
+			<span v-if="spec !== null" class="footer-hint" data-testid="blockly-block-count">
+				共 {{ specBlockCount }} 块（讲到了第 {{ revealedCount }} 块<template v-if="failure === null">，画布上 {{ blockCount }} 块</template>）
 			</span>
-			<span v-if="writeSuspended" class="footer-hint">画布不完整，写回已暂停</span>
-			<span v-else-if="selectedBlockId !== null" class="footer-hint" data-testid="blockly-selected">
-				{{ selectedBlockId }}
+			<span v-else-if="teaching.status.value === 'drawing'" class="footer-hint" data-testid="blockly-drawing">
+				正在写…（已经收到 {{ teaching.streamedChars.value }} 字）
 			</span>
+			<span v-else-if="teaching.failure.value !== null" class="footer-hint footer-failed" data-testid="blockly-failed">
+				模型没画出来：{{ teaching.failure.value.message }}
+			</span>
+			<span v-else class="footer-hint" data-testid="blockly-empty">还没有积木可画</span>
 		</footer>
-
-		<DiagnosticsPanel :rows="diagnostics" />
 	</section>
 </template>
 
@@ -95,25 +91,14 @@ const taskName = computed(() => store.declaration.value?.name ?? '');
 }
 
 .view-task {
-	margin: 0;
+	margin-left: auto;
 	font-family: var(--cc-font-mono);
 	font-size: var(--cc-fs-sm);
 	color: var(--cc-text-dim);
 }
 
 /*
- * 模块标题：「<能力的 label> · 实现」。它是这一栏唯一的「我在看什么」的说明——
- * 积木画布现在只显示一个模块的内部，标题不写清楚，用户就不知道这堆积木属于谁。
- */
-.view-module {
-	margin: 0;
-	font-size: var(--cc-fs-md);
-	font-weight: 600;
-	color: var(--cc-text);
-}
-
-/*
- * Blockly 自己往这个容器里塞 SVG 与工具箱，所以容器必须是个有尺寸的定位盒子。
+ * Blockly 自己往这个容器里塞 SVG（没有工具箱——这些块是讲解，不是可拖的东西）。
  * 底色由主题给（componentStyles.workspaceBackgroundColour = --cc-surface-sunken）。
  */
 .canvas {
@@ -131,87 +116,59 @@ const taskName = computed(() => store.declaration.value?.name ?? '');
 }
 
 /*
- * 单位标签：`@codecanvas/blockly-toolkit` 的 BLOCK_UNIT_CLASS 挂在块内那个只读小标签上。
- * Blockly 块内文字共用一个字号，这里按 class 单独压到 --cc-fs-xs——
- * 单位因此不占主行宽度，`angular (rad/s)` 那种截断不会再发生（单位也留在 tooltip 里）。
+ * 还没轮到的那一块：按住（透明、不吃指针）。用 `opacity` 而不是 `display/visibility`——
+ * 块的位置是画的时候就定下来的，铺开过程里**一个位置都不许变**；透明只是「还没出现」。
+ * 指针也不给它：不然画布上会出现一块看不见却点得中的东西。
  */
-.canvas-host :deep(.cc-block-unit) {
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-xs);
-	fill: var(--cc-text);
-	opacity: 0.85;
-}
-
-/*
- * 序号徽标：它是画在积木 `<g>` 里的 SVG（见 `sequence-badge.ts`），所以色值走属性、
- * 交互走 pointer-events——这里只钉一件事：徽标不参与命中，点它等于点积木。
- * 现在它只挂在**顶层语句**上，数的是「实现里的第几步」（这个模块内部 1、2、3）；
- * 嵌在条件里、比较里的块不是「步」，不挂徽标。它与流程卡片上「任务里的第几步」
- * 不是同一个数——后者属于整条链，前者属于这个模块的内部。
- */
-.canvas-host :deep(.cc-seq-badge) {
+.canvas-host :deep(.cc-spec-pending) {
+	opacity: 0;
 	pointer-events: none;
 }
 
-/* 选中：与另外两栏同一套——徽标反白压实心强调色、描边加粗一档（形状见 updateBadge）。 */
-.canvas-host :deep(.cc-seq-badge-active) {
-	filter: drop-shadow(0 0 4px var(--cc-accent-glow));
-}
-
 /*
- * 「设备正在跑这一步」（M4 的动线在积木这一侧的落点）。
+ * 积木的入场：**从工具箱那边拖进来 → 落位**（类由 `blockly-canvas.ts` 的
+ * `playBlockStepEntrance` 挂/摘）。三个属性各自干什么：
+ *   - `translate`：从工具箱那一边（左侧）滑进来，路上略过一点再收回——落定的手感；
+ *   - `scale`：起手小一点，落定时收回 1（**收在 identity**）；
+ *   - `opacity`：同一趟里渐显，免得块在半空中是透明的。
  *
- * 与上面那条**选中**是两种观感，缺一种就分不清「机器在这儿」与「我在看那儿」
- * （跟随开着时两者落在同一块上，那时要能同时看出来）：
- *   选中 → 徽标反白 + Blockly 自己那圈高亮描边
- *   在跑 → 这一块整体亮一下：`filter` 的辉光从强到弱，停在很淡的一圈上
- *
- * 用 `filter` 而不是改几何：它不触发布局（积木的形状、位置、命中区一个像素没动），
- * 而且画布上本来就用 `filter` 画徽标那圈光（上面那条），同一套手段。
- * 动效关掉时只剩一个静态的淡辉光——「这一块在跑」照样看得出来。
+ * 为什么用独立的 `translate`/`scale` 而不用 `transform` 简写：Blockly 给每个块的 `<g>` 写着
+ * `transform="translate(x, y)"` —— 块的定位就靠它。CSS 的 `transform` 会整个盖掉那个属性
+ * （元素会跳到画布原点）；这两个独立属性是与它复合的，不碰定位。
  */
 /*
- * 换模块时的入场：整层积木淡入一下（类由 `blockly-canvas.ts` 的 `playBlockEntrance` 挂/摘）。
- *
- * 只管 `opacity`：块层上做 `transform` 或 `scale` 会挪动 `blocklyBlockCanvas` 的坐标系，
- * 而 Blockly 按内部坐标算命中区与连线——那两百毫秒里点下去会落空。
- * 动效偏好关掉时这条整条不生效，画面直接换。
+ * ⚠ 选择器**不带** `blocklyDraggable`：这块画布是 `readOnly` 的（这些积木是讲解，不是可拖的东西），
+ * 而 Blockly 只在可拖时给块根元素挂那个类——实测 readOnly 的块根上没有 `blocklyDraggable`
+ * （真浏览器里量过），照旧写那个类，入场动画会一条都不生效。
+ * `cc-block-enter` 是我们自己挂的类，拿它当判据最准。
  */
-.canvas-host :deep(.blocklyBlockCanvas.cc-blocks-enter) {
-	animation: cc-blocks-in 220ms ease-out 1 both;
+.canvas-host :deep(g.cc-block-enter) {
+	animation: cc-block-land 220ms cubic-bezier(0.22, 0.9, 0.3, 1) 1 both;
 }
 
-@keyframes cc-blocks-in {
+@keyframes cc-block-land {
 	from {
 		opacity: 0;
+		translate: -60px -14px;
+		scale: 0.9;
+	}
+
+	/* 落定的手感：略过一点再收回（这一段之后才是真正的终态）。 */
+	62% {
+		opacity: 1;
+		translate: 5px 0;
+		scale: 1.012;
 	}
 
 	to {
 		opacity: 1;
-	}
-}
-
-.canvas-host :deep([data-cc-step-running='true']) {
-	animation: cc-block-lit var(--cc-lit-flash-ms) ease-out 1 forwards;
-}
-
-@keyframes cc-block-lit {
-	0% {
-		filter: drop-shadow(0 0 3px var(--cc-accent-strong)) drop-shadow(0 0 12px var(--cc-lit-flash-glow));
-	}
-
-	100% {
-		filter: drop-shadow(0 0 2px var(--cc-flow-settled));
+		translate: none;
+		scale: none;
 	}
 }
 
 @media (prefers-reduced-motion: reduce) {
-	.canvas-host :deep([data-cc-step-running='true']) {
-		animation: none;
-		filter: drop-shadow(0 0 2px var(--cc-flow-settled));
-	}
-
-	.canvas-host :deep(.blocklyBlockCanvas.cc-blocks-enter) {
+	.canvas-host :deep(g.cc-block-enter) {
 		animation: none;
 	}
 }
@@ -236,34 +193,14 @@ const taskName = computed(() => store.declaration.value?.name ?? '');
 	font-size: var(--cc-fs-sm);
 }
 
-.write-state {
-	color: var(--cc-text-dim);
-}
-
-.write-state.written {
-	color: var(--cc-accent);
-}
-
-/* 计划视图：只读，与「已写回」区分开（那两件事不一样）。 */
-.write-state.plan {
-	color: var(--cc-accent-strong);
-}
-
-.write-state.rejected,
-.write-state.broken,
-.write-state.failed {
-	color: var(--cc-danger-strong);
-}
-
-/* 选中步：与另外两栏同一根线（`--cc-highlight`），只是这里是一句话。 */
-.footer-step {
-	color: var(--cc-highlight);
-}
-
 .footer-hint {
 	font-family: var(--cc-font-mono);
 	font-size: var(--cc-fs-xs);
 	color: var(--cc-text-faint);
 	overflow-wrap: anywhere;
+}
+
+.footer-failed {
+	color: var(--cc-danger-strong);
 }
 </style>

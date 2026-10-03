@@ -30,6 +30,8 @@ import { findTaskFormat, type TaskFormatRef } from '@codecanvas/task-import';
 import { useStudioDocument } from '../state/document';
 import { useStudioDevices } from './devices';
 import { DEFAULT_LLM_ENDPOINT, DEFAULT_LLM_MODEL } from './llm-json';
+// 地址与它的存储键只有一处定义：第二次调用（教学规格）用的是同一个地址。
+import { ENDPOINT_STORAGE_KEY as ENDPOINT_STORAGE_KEY_SHARED } from './llm-endpoint';
 import {
 	beginProvisional,
 	endProvisional,
@@ -81,7 +83,7 @@ const pastePlaceholder = computed(() =>
  * 默认 `/llm` 是**同源相对路径**：dev server 把它反代到 LLM 服务并在服务端注入 key，
  * 所以浏览器里从来没有密钥。联调时改成设备组的基地址即可——见 `task-generation.ts`。
  */
-const ENDPOINT_STORAGE_KEY = 'codecanvas.task-endpoint';
+const ENDPOINT_STORAGE_KEY = ENDPOINT_STORAGE_KEY_SHARED;
 const DEFAULT_ENDPOINT = DEFAULT_LLM_ENDPOINT;
 /**
  * 指令框里的例子**跟着当前设备的格式走**。

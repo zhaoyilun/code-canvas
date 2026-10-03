@@ -26,6 +26,7 @@
  * 每隔 `intervalMs` 问一次，问够了预算就不再等。默认（真 sleep）下它与墙上时钟是一回事。
  */
 import type { ZodError } from 'zod';
+import type { StepGate } from '@codecanvas/contracts';
 import {
 	BRIDGE_EXECUTE_PATH,
 	isTerminalTaskState,
@@ -53,6 +54,18 @@ export interface RunOverHttpOptions {
 	readonly headers?: Record<string, string>;
 	/** 取消：打断等待与轮询。它**不是**失败——见文件头那条纪律。 */
 	readonly signal?: AbortSignal;
+	/**
+	 * **单步放行闸**：给了就是单步模式——每个**顶层步**之间等一次 `release()`。
+	 *
+	 * 「一个顶层步」= 编译产物里 `stepPath` 没有 `.` 的那一批调用（`'1'` / `'2'`）；臂里的调用
+	 * （`'1.then.0'`）不各停一次——一次放行 = 流程画布上的一张卡，两条执行路同一个口径。
+	 * 第一个顶层步**不等**：按下「单步运行」那一刻就该走完第一步。
+	 *
+	 * 判据是「下一步的请求真的没发出去」：等放行是在这一段的**请求之前**，所以停着的时候
+	 * 设备那边一个新请求都收不到。取消（`signal`）能叫醒它——闸收信号，理由与形状见
+	 * `@codecanvas/contracts` 的 `StepGate`。
+	 */
+	readonly stepGate?: StepGate;
 	/** 每出一条事件就调一次（界面上「看着计划走」用的就是它）。 */
 	readonly onStep?: (event: PlanRunEvent) => void;
 }
@@ -104,6 +117,12 @@ interface CallRange {
 }
 
 const messageOf = (error: unknown): string => (error instanceof Error ? error.message : String(error));
+
+/**
+ * 这一步是不是**顶层步**：路径里没有 `.`（`'1'` 是顶层，`'1.then.0'` 在臂里）。
+ * 单步的「一步」就是这个口径——与执行侧、studio 的步骤行说的是同一件事。
+ */
+const isTopLevelPath = (stepPath: string): boolean => !stepPath.includes('.');
 
 /** 报文本截短：错误信息进事件与 reason，太长会把界面撑坏（原样仍然在对方那边）。 */
 const shorten = (text: string, limit = 200): string => (text.length <= limit ? text : `${text.slice(0, limit)}…`);
@@ -181,6 +200,12 @@ export const runCompiledPlan = async (
 	const sleep = options.sleep ?? ((ms: number): Promise<void> => sleepUntil(ms, signal));
 	const base = options.baseUrl.replace(/\/+$/, '');
 	const calls = compiled.calls;
+	const stepGate = options.stepGate;
+	/**
+	 * 闸等的那条信号。`options.signal` 缺席时自己起一个**永远不会 abort** 的：
+	 * 闸的 `wait()` 收 `AbortSignal`（形状在 contracts 里只有一份），这里不给它第二种形状。
+	 */
+	const gateSignal = signal ?? new AbortController().signal;
 
 	/** 停下来的原因；`undefined` ＝ 还在走。计划是顺序执行的，所以一个标志就够。 */
 	let stop: string | undefined;
@@ -435,6 +460,20 @@ export const runCompiledPlan = async (
 		while (index < to && stop === undefined) {
 			const call = calls[index];
 			if (call === undefined) return; // 到这儿就是这一段走完了
+
+			/*
+			 * 单步：进一个**顶层步**之前先等一次放行。两件事在这儿说清：
+			 * ① 臂里的调用（`'1.then.0'`）不等——一次放行 = 一个顶层步，与流程画布的一张卡同口径；
+			 * ② `index > 0`：整套调用的第一个**不等**（按下「单步运行」那一刻就该走完第一步）。
+			 */
+			if (stepGate !== undefined && index > 0 && isTopLevelPath(call.stepPath)) {
+				await stepGate.wait(gateSignal);
+				if (aborted()) {
+					stop = `运行被取消（AbortSignal）：停在放行闸上，第 ${call.stepPath} 步的请求一个字节都没发出去`;
+					return;
+				}
+			}
+
 			index += 1;
 
 			if (call.kind === 'execute') {

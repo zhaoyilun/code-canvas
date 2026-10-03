@@ -5,13 +5,12 @@
  * 为什么薄：`packages/capabilities/src/phase1-robot.ts` 是**示意目录**，等 RoboFrame 给出真实实现就整份替换
  * （数据结构不变）。所以这里只问「这份目录在界面上显示得出来吗」，不问「它显示成了什么」——
  * 内容断言一旦写在这里，目录一改就集体失效（那是这次解耦要消灭的耦合）。
- * 界面形状的断言用夹具目录，见 `code-panel/CodePanel.test.ts` 与 `blockly/implementation.test.ts`。
+ * 界面形状的断言用夹具目录，见 `blockly/implementation.test.ts`（目录 → 积木形状那套仍在库里）。
  *
  * 判据是 **error 与「查不到能力」**，不是「零诊断」：真实实现里出现经得起解释的 warning 不算坏。
  *
  * ⚠ 这个文件**故意不 mock** `@codecanvas/capabilities`：它量的就是真实目录那一份。
  */
-import { mount } from '@vue/test-utils';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { PHASE1_ROBOT_CATALOG } from '@codecanvas/capabilities';
 import { renderImplementation } from '@codecanvas/code-render';
@@ -28,7 +27,6 @@ import {
 import { setSelectedDevice } from '../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../state/document';
 import { FIXTURE_CATALOG } from './__fixtures__/catalog';
-import CodePanel from './code-panel/CodePanel.vue';
 
 const doc = useStudioDocument();
 
@@ -73,15 +71,6 @@ const nodeFor = (capability: CapabilitySpec, index: number): WorkflowNode => {
 };
 
 describe('真实目录的冒烟：改了内容也站得住', () => {
-	it('代码面板拿真实目录渲染得出来：有代码行，也没有「查不到能力」那类 error', () => {
-		const wrapper = mount(CodePanel);
-
-		expect(wrapper.findAll('li.cp-line').length).toBeGreaterThan(0);
-		// 「查不到能力 / 查不到原语」会画成说明行（`unsupported`）——真实目录不该走到那儿。
-		expect(wrapper.find('li.cp-line[data-kind="unsupported"]').exists()).toBe(false);
-		expect(wrapper.get('[data-testid="code-title"]').text()).toContain('实现');
-	});
-
 	it('遍历它的每一个能力都能渲染出来，且没有 error 诊断', () => {
 		const nodes = PHASE1_ROBOT_CATALOG.capabilities.map((capability, index) => nodeFor(capability, index));
 		const draft: WorkflowDeclarationDraft = {
@@ -96,7 +85,7 @@ describe('真实目录的冒烟：改了内容也站得住', () => {
 
 		const errors: string[] = [];
 		for (const node of nodes) {
-			// 与 `CodePanel.vue` 里那一次渲染是同一条调用路径。
+			// 目录 → 实现那棵语句树，仍由 `@codecanvas/code-render` 渲染（界面不再显示它）。
 			const program = renderImplementation({ node, catalog: PHASE1_ROBOT_CATALOG, declaration });
 			const ref = String(node.parameters['action']);
 			expect(program.lines.length, ref).toBeGreaterThan(0);

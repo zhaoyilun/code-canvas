@@ -22,6 +22,7 @@ import {
 	type SkillPlan,
 	type SkillPlanOnFailure,
 	type SkillPlanStep,
+	type StepGate,
 } from '@codecanvas/contracts';
 import type { RunOutcome } from './executor';
 
@@ -59,6 +60,12 @@ export interface PlanRunner {
  * 测试注入假的，别让单测真的等两秒；真身不需要换。
  */
 export type PlanSleep = (ms: number, signal: AbortSignal) => Promise<void>;
+
+/**
+ * 单步放行闸。形状与语义在 `@codecanvas/contracts`（本机这条路与 bridge HTTP 那条路**共用一份**，
+ * 于是界面上「按一次走一步」在两条路上是同一件事）。
+ */
+export type PlanStepGate = StepGate;
 
 /**
  * 可打断的等待：`signal` 一 abort，`setTimeout` 当场被清掉、Promise 立刻收摊。
@@ -291,6 +298,11 @@ type StepResult = { readonly ok: true; readonly completed: boolean } | { readonl
  *
  * 顶层一格 → 臂里一格 → 再嵌套，走的是同一个递归（`runStep` / `runSteps`），
  * 所以「怎么算一步、怎么报一步」只有一份。
+ *
+ * **单步（`stepGate`）**：给了放行闸就是单步模式——每个**顶层步**之间等一次放行
+ * （臂里的步不各停一次：「第 N 步」在界面上就是顶层那一格，与流程画布的一张卡同一件事）。
+ * 第一个顶层步**不等**：按下「单步运行」那一刻就该走完第一步，等放行的话第一次按什么都没有发生。
+ * 等放行时取消照旧生效（闸收信号）：停在闸上的那一趟不许被一个没人再按的按钮挂住。
  */
 export async function runPlan(
 	plan: SkillPlan,
@@ -301,9 +313,11 @@ export async function runPlan(
 		readonly onPrimitive?: (event: Extract<PlanStepEvent, { kind: 'primitive' }>) => void;
 		/** 计划层的等待怎么等。缺省 `interruptibleSleep`；测试注入假的，别真等两秒。 */
 		readonly sleep?: PlanSleep;
+		/** 单步放行闸（见文件头那段）。不给就是一口气跑完。 */
+		readonly stepGate?: PlanStepGate;
 	},
 ): Promise<PlanRunOutcome> {
-	const { catalog, runner } = options;
+	const { catalog, runner, stepGate } = options;
 	const sleep = options.sleep ?? interruptibleSleep;
 	const total = plan.plan.length;
 	runner.beginRun();
@@ -456,6 +470,15 @@ export async function runPlan(
 
 	try {
 		for (const [index, step] of plan.plan.entries()) {
+			/*
+			 * 单步：进这一步之前先等一次放行。**第一个顶层步不等**（按下那一刻就该走完第一步），
+			 * 臂里的步也不各停一次——`runSteps` 里没有闸，一个顶层步里的整条臂一次走完。
+			 * 等的时候取消要能叫醒它（`wait` 收信号）：否则这一趟会被一个没人再按的按钮挂住。
+			 */
+			if (index > 0 && stepGate !== undefined) {
+				await stepGate.wait(cancelled.signal);
+				if (cancelled.signal.aborted) return { ok: false, completed, total, reason: '已取消' };
+			}
 			// 顶层步号就是它自己的下标 + 1；臂里的步由 `runSteps` 把同一个号带下去
 			const result = await runStep(step, String(index), index + 1);
 			if (!result.ok) return { ok: false, completed, total, reason: result.reason };

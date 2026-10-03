@@ -13,3 +13,6 @@ export * from './task-protocol';
 export * from './skill-plan';
 export * from './workflow';
 export * from './capability';
+export * from './device-facts';
+export * from './teaching-spec';
+export * from './step-gate';

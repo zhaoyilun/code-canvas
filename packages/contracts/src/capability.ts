@@ -20,6 +20,12 @@
  * 见 docs/spec.md §5。
  */
 import { z } from 'zod';
+import {
+	executionFactsSchema,
+	namedPoseTargetSchema,
+	primitiveFactsSchema,
+	trajectoryTemplateRuleSchema,
+} from './device-facts';
 import { jsonValueSchema, type JsonValue } from './json';
 import { interfaceReferenceSchema, stableReferenceSchema } from './stable-ids';
 
@@ -51,6 +57,11 @@ export const catalogParameterSchema = z
 		/** 单位（上游 YAML 里写着，例如 `meters` / `degrees`）。有就显示，没有不编。 */
 		unit: z.string().trim().min(1).max(24).optional(),
 		/**
+		 * 开区间下界（上游 YAML 里写着的 `exclusiveMinimum`，`gateway_policy.py` 真的按它校验）。
+		 * 名字与上游逐字相同——换个说法就等于我们重新解释了一遍上游的约束。
+		 */
+		exclusiveMinimum: z.number().optional(),
+		/**
 		 * 这个参数**必须给**。
 		 *
 		 * 判据来自上游：技能的 `capability.parameters.required` 数组。缺了它就是缺陷，
@@ -62,6 +73,22 @@ export const catalogParameterSchema = z
 export type CatalogParameter = z.infer<typeof catalogParameterSchema>;
 
 /**
+ * 这台设备的一条**运行时能力**（上游 `gateway_policy.SkillRequirements` 的字段 + 它自己的说法）。
+ *
+ * 两个字段都是上游的：`name` 是那个 dataclass 的字段名，`unavailableMessage` 是上游
+ * `_CAPABILITY_UNAVAILABLE_MESSAGES` 里那句话（「这条能力不满足时网关就是这么说的」）。
+ * 不自己翻一遍：那句话是上游面向用户的原文，我们重写一遍就等于替它解释。
+ */
+export const runtimeCapabilitySchema = z
+	.object({
+		name: z.string().trim().min(1).max(64),
+		/** 上游那句话（`_CAPABILITY_UNAVAILABLE_MESSAGES[name]`）。 */
+		unavailableMessage: z.string().trim().min(1).max(120),
+	})
+	.strict();
+export type RuntimeCapability = z.infer<typeof runtimeCapabilitySchema>;
+
+/**
  * 一个基础操作。
  * `returns` 缺省表示它不返回值（只能当语句用）；给了就说明它能出现在表达式里。
  */
@@ -71,8 +98,29 @@ export const primitiveSpecSchema = z
 		label: z.string().trim().min(1).max(64),
 		/** 这个原子动作做什么，一句话（上游文档里那句）。 */
 		summary: z.string().trim().min(1).max(200).optional(),
+		/**
+		 * 跑这条原语**设备上要先具备哪些运行时能力**（上游 `gateway_policy` 的
+		 * `_PRIMITIVE_CAPABILITY_MAP` + `_CAPABILITY_UNAVAILABLE_MESSAGES`，顺序照上游
+		 * `_CAPABILITY_ORDER`）。
+		 *
+		 * 与 `deviceFacts` 的区别：那是「这一次调用落到哪个坐标 / 哪个到位值」，这是
+		 * 「这台设备得先有什么才有得谈」——`move_relative_ee` 要 `fresh_ee_pose`（末端位姿得是新的），
+		 * `move_to_joint_positions` 要 `arm_trajectory`（轨迹通道）。
+		 * 上游那张表只登记了 8 条，剩下的两条（`move_to_pose` / `move_to_configuration`）
+		 * 上游没说，这里就**不写**——空数组与「上游没登记」是两件事，不许用一个空数组糊过去。
+		 */
+		runtimeCapabilities: z.array(runtimeCapabilitySchema).optional(),
 		parameters: z.array(catalogParameterSchema),
 		returns: expressionValueTypeSchema.optional(),
+		/**
+		 * 这条原语的一次调用**落到设备的哪几条事实上**（见 `device-facts.ts`）。
+		 *
+		 * 为什么挂在原语上而不是能力上：这些事实是**设备属性**（一张位姿表、一套方向映射、
+		 * 一个夹爪到位值），一次调用落到哪几条由上游 `resolver.py` 决定——它把模板字段翻成
+		 * 原语实参时就定下了（`pose_name` 查 `named_poses`、`motion_direction` 查方向映射）。
+		 * 没登记就是「这条路我们不认识」：渲染层什么都不写，不猜。
+		 */
+		deviceFacts: primitiveFactsSchema.optional(),
 	})
 	.strict();
 export type PrimitiveSpec = z.infer<typeof primitiveSpecSchema>;
@@ -252,10 +300,39 @@ export const capabilityCatalogSchema = z
 		 */
 		robotName: z.string().trim().min(1).max(64).optional(),
 		revisionRef: stableReferenceSchema,
+		/**
+		 * **执行侧的接口名表**（上游机器人配置里写着、`skill_executor_node.py` 认的那些名字）。
+		 *
+		 * 键是上游 YAML 里的字段名，**逐字照抄**（`skill_action_name` / `primitive_action_name` /
+		 * `validate_skill_service` / `task_command_topic` / `status_topic` /
+		 * `task_executor_action_name` / `move_configuration_service`），值是它的取值。
+		 * 为什么键不翻成 camelCase：这些名字是**这一层唯一的存在理由**——
+		 * 「这一步最后发到哪个 topic / action」要能对着上游原文核，翻一遍就多一层可能翻错的东西。
+		 *
+		 * 为什么放在目录级而不是每条原语上：它们是**配置级的**（一台设备一份），
+		 * 原语与技能共用同一对 action（`execute_primitive` / `execute_skill`）。
+		 * 上游自己也把它们放在两处：`embodied.*` 与 `embodied.execution.*`——
+		 * 导入脚本按各自的真实位置取，`task_executor_action_name` /
+		 * `move_configuration_service` 因此来自 `embodied.execution`（见 `import.mjs` 的
+		 * `INTERFACE_FIELDS`，那里逐条写着路径，并有对着 launch builder 的对账）。
+		 */
+		interfaces: z.record(z.string().trim().min(1).max(64), z.string().trim().min(1).max(128)).optional(),
 		primitives: z.array(primitiveSpecSchema).min(1),
 		capabilities: z.array(capabilitySpecSchema).min(1),
 		/** 命名位姿之类设备自带的枚举，可选。 */
 		namedPoses: z.array(z.string().trim().min(1)).optional(),
+		/**
+		 * 命名位姿**落在哪个坐标上**：`namedPoses` 只给名字，这里给那六个量。
+		 *
+		 * 与 `namedPoses` 同一个键集（导入脚本按同一份 YAML 一起产出，测试对账）。
+		 * 为什么另开一个字段而不是把 `namedPoses` 改成对象数组：那份 name 列表已经被
+		 * 别处读着（任务格式校验拿它对名字），改形状等于把一条在用的链子拆掉。
+		 */
+		namedPoseTargets: z.array(namedPoseTargetSchema).optional(),
+		/** 执行侧的量：一步多远、方向映射、夹爪开合位（上游 `robot.embodied.execution`）。 */
+		execution: executionFactsSchema.optional(),
+		/** 轨迹模板的展开规则（上游 `expand_trajectory_template` 那一侧）。 */
+		trajectoryTemplates: z.array(trajectoryTemplateRuleSchema).optional(),
 	})
 	.strict();
 export type CapabilityCatalog = z.infer<typeof capabilityCatalogSchema>;

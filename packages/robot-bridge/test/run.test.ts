@@ -9,7 +9,7 @@
  * 成败无从谈起），后者才轮到 `onFailure` 说话。
  */
 import { describe, expect, it, vi } from 'vitest';
-import { SKILL_PLAN_SCHEMA_VERSION, type SkillPlan, type SkillPlanStep } from '@codecanvas/contracts';
+import { SKILL_PLAN_SCHEMA_VERSION, createStepGate, type SkillPlan, type SkillPlanStep } from '@codecanvas/contracts';
 import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import {
 	BRIDGE_HEALTH_PATH,
@@ -579,5 +579,138 @@ describe('probeBridge', () => {
 		const probe = await probeBridge({ baseUrl: '   ', fetchImpl: spy });
 		expect(probe.ok).toBe(false);
 		expect(called).toBe(0);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 单步（`stepGate`）：下一个顶层步的请求在放行之前**一个字节都不发**
+// ---------------------------------------------------------------------------
+
+/**
+ * 这一组钉的是「单步在 HTTP 这条路上真的停住」：
+ * ① 走完一个顶层步就停——下一个顶层步的 `POST` 一次都没发出去（判据是**请求台账**，不是界面）；
+ * ② 放行一次走一步，走到尾收摊（结局与整趟跑同一套账）；
+ * ③ 一步 = 一个**顶层步**：分支臂里的调用不各停一次；
+ * ④ 停在闸上取消能把它叫醒（闸收信号）——那时那一步的请求也一个都没发。
+ *
+ * 闸本身（预放行、waiting、abort）在 `@codecanvas/contracts` 那边有专门的用例，
+ * 这里钉的是**执行器怎么用它**。
+ */
+describe('单步（stepGate）：停住时下一步的请求还没发出去', () => {
+	/** 让微任务跑完：这一组测的是「谁先谁后」，不真等时间。 */
+	const flush = async (): Promise<void> => {
+		for (let i = 0; i < 30; i += 1) await Promise.resolve();
+	};
+
+	/** 一个「发出去就收下、轮询立刻给终态」的替身：考的是发了几条，不是成败怎么读。 */
+	const happyStub = (): FetchStub =>
+		stubFetch(({ method, url }) => {
+			if (method === 'POST') return accepted('t', 'x');
+			const taskId = /\/v1\/tasks\/([^/]+)$/.exec(url)?.[1] ?? 't';
+			return jsonResponse(200, {
+				task_id: taskId,
+				skill: 'x',
+				state: 'completed',
+				success: true,
+				executed_primitives: [],
+			});
+		});
+
+	/** POST 出去了几条（＝真的下发了几步）。 */
+	const posts = (stub: FetchStub): number => stub.calls.filter((call) => call.method === 'POST').length;
+
+	it('走完第一步就停住：第二个 POST 没发出去，放行之后才发', async () => {
+		const compiled = compile([
+			{ step: 'skill', skill: 'inspect_scene' },
+			{ step: 'skill', skill: 'wave_hello' },
+		]);
+		const stub = happyStub();
+		const gate = createStepGate();
+		let settled = false;
+		const running = run(compiled, stub, { stepGate: gate }).then((result) => {
+			settled = true;
+			return result;
+		});
+
+		await flush();
+		expect(posts(stub)).toBe(1);
+		expect(gate.waiting).toBe(true);
+		expect(settled).toBe(false);
+		// 停住 = 再等也不会自己往下走
+		await flush();
+		expect(posts(stub)).toBe(1);
+
+		gate.release();
+		const result = await running;
+		expect(posts(stub)).toBe(2);
+		expect(result.ok).toBe(true);
+		expect(gate.waiting).toBe(false);
+	});
+
+	it('一步 = 一个顶层步：分支臂里的调用不各停一次', async () => {
+		const compiled = compile([
+			{ step: 'skill', skill: 'inspect_scene' },
+			{
+				step: 'if',
+				condition: { field: 'last.success', op: '==', value: true },
+				then: [
+					{ step: 'skill', skill: 'wave_hello' },
+					{ step: 'skill', skill: 'nod_yes' },
+				],
+			},
+		]);
+		const stub = happyStub();
+		/** 数闸被等了几次：一次 = 一个顶层步的边界。 */
+		let waits = 0;
+		const gate = createStepGate((waiting) => {
+			if (waiting) waits += 1;
+		});
+
+		const running = run(compiled, stub, { stepGate: gate });
+		await flush();
+		expect(posts(stub)).toBe(1);
+		expect(waits).toBe(1);
+
+		// 放行一次：顶层第二步（那个分支）连同它 then 臂里的两步一次走完——闸没有再停
+		gate.release();
+		const result = await running;
+		expect(result.ok).toBe(true);
+		expect(posts(stub)).toBe(3);
+		expect(waits).toBe(1);
+		expect(gate.waiting).toBe(false);
+	});
+
+	it('停在闸上取消：当场收摊，那一步的请求一个字节都没发出去', async () => {
+		const compiled = compile([
+			{ step: 'skill', skill: 'inspect_scene' },
+			{ step: 'skill', skill: 'wave_hello' },
+		]);
+		const stub = happyStub();
+		const gate = createStepGate();
+		const controller = new AbortController();
+
+		const running = run(compiled, stub, { stepGate: gate, signal: controller.signal });
+		await flush();
+		expect(gate.waiting).toBe(true);
+		expect(posts(stub)).toBe(1);
+
+		controller.abort();
+		const result = await running;
+		expect(result.ok).toBe(false);
+		expect(result.reason).toContain('放行闸');
+		// 取消叫醒的是闸，不是「发出去了再取消」：第二个 POST 根本没有出现过
+		expect(posts(stub)).toBe(1);
+		expect(gate.waiting).toBe(false);
+	});
+
+	it('不给闸就一口气发完：单步是加的一个模式，默认行为一个字没变', async () => {
+		const compiled = compile([
+			{ step: 'skill', skill: 'inspect_scene' },
+			{ step: 'skill', skill: 'wave_hello' },
+		]);
+		const stub = happyStub();
+		const result = await run(compiled, stub);
+		expect(result.ok).toBe(true);
+		expect(posts(stub)).toBe(2);
 	});
 });

@@ -7,13 +7,15 @@
  * 所以这里断言的是 `renderer.dispose()` **与** `renderer.forceContextLoss()` 都被调到。
  *
  * 测得到什么：清理被调到、顺序对（先摘监听/放资源，最后丢上下文）、共享材质只放一次、
- * 挂在场景上的环境贴图不会漏。
+ * 挂在场景上的环境贴图不会漏；还有「待抓的方块真的被摆到入口给的位置上」（`placeTargetBlock`）。
  * 测不到什么（如实记）：真的 GL 上下文有没有被回收——happy-dom 没有 GL，这里用的是假渲染器；
- * 「反复 mount/dispose 不泄漏」只能在浏览器里验（见交付报告）。
+ * 还有 `createStage` 内部的接线（它要真 `WebGLRenderer`，这里建不起来）——
+ * 「界面改一个数 → 3D 里那块真的挪过去」只能整条链在浏览器里验（见交付报告截图）。
+ * 「反复 mount/dispose 不泄漏」同样只能在浏览器里验。
  */
 import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
-import { disposeStageResources, type RendererTeardown } from './stage';
+import { DEFAULT_TARGET_BLOCK, disposeStageResources, placeTargetBlock, type RendererTeardown } from './stage';
 
 type Spy = ReturnType<typeof vi.fn<() => void>>;
 
@@ -88,5 +90,41 @@ describe('disposeStageResources', () => {
 		expect(sphereDisposed).toHaveBeenCalledTimes(1);
 		expect(separateMaterialDisposed).toHaveBeenCalledTimes(1);
 		expect(environmentDisposed).toHaveBeenCalledTimes(1);
+	});
+});
+
+/**
+ * 待抓的方块：**摆到界面上给的那个位置**。
+ *
+ * 这条是「台面上那块方块要能摆」这件需求里唯一能机械核的一段：`createStage` 本身
+ * 要真 `WebGLRenderer`（happy-dom 里建不起来），但「三个数真的写到了那块 mesh 上」
+ * 可以拿一个真 `THREE.Mesh` 核——真身用的就是这个函数。
+ */
+describe('placeTargetBlock', () => {
+	it('三个分量逐个写到那块 mesh 上（不是只写 x、也不是写了个副本）', () => {
+		const block = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.03), new THREE.MeshStandardMaterial());
+
+		placeTargetBlock(block, { x: 0.2, y: 0.05, z: -0.1 });
+
+		expect(block.position.x).toBe(0.2);
+		expect(block.position.y).toBe(0.05);
+		expect(block.position.z).toBe(-0.1);
+	});
+
+	it('同一帧里读它的世界位置就是新位置（矩阵当场刷，不等下一次 render）', () => {
+		const block = new THREE.Mesh(new THREE.BoxGeometry(0.03, 0.03, 0.03), new THREE.MeshStandardMaterial());
+
+		placeTargetBlock(block, { x: 0.12, y: 0.015, z: 0.16 });
+		expect(block.getWorldPosition(new THREE.Vector3()).toArray()).toEqual([0.12, 0.015, 0.16]);
+
+		placeTargetBlock(block, { x: -0.2, y: 0.2, z: 0.3 });
+		expect(block.getWorldPosition(new THREE.Vector3()).toArray()).toEqual([-0.2, 0.2, 0.3]);
+	});
+
+	it('缺省位置就是写死那一版的那个数（0.12, 0.015, 0.16），y 是方块高的一半——它坐在台面上', () => {
+		// 换个数就是「换了个缺省」：这不是顺手改的，所以钉住
+		expect(DEFAULT_TARGET_BLOCK).toEqual({ x: 0.12, y: 0.015, z: 0.16 });
+		// 方块高 0.03（见 createStage 里那个 box(...)），中心在 0.015 → 底面正好落在台面 y=0 上
+		expect(DEFAULT_TARGET_BLOCK.y * 2).toBe(0.03);
 	});
 });

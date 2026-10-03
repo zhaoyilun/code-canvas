@@ -16,13 +16,13 @@
  * 不必知道 three 的存在。
  */
 import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
-import type { CapabilityCatalog, CapabilitySpec, SkillPlan } from '@codecanvas/contracts';
+import { createStepGate, type CapabilityCatalog, type CapabilitySpec, type SkillPlan } from '@codecanvas/contracts';
 import { RoboFrameExecutor, type RunOutcome, type StepEvent } from './roboframe/executor';
-import { runPlan, type PlanRunner, type PlanStepReport } from './roboframe/plan';
+import { runPlan, type PlanRunner, type PlanStepGate, type PlanStepReport } from './roboframe/plan';
 import { SerialQueue } from './roboframe/queue';
 import { createKit } from './scene/kit';
 import { So101Rig } from './scene/so101';
-import { createStage, disposeStageResources } from './scene/stage';
+import { createStage, DEFAULT_TARGET_BLOCK, disposeStageResources } from './scene/stage';
 
 /**
  * 门口把执行侧的类型一起转出去：宿主（studio 的面板）要写 `onStep` 的回调、
@@ -30,12 +30,26 @@ import { createStage, disposeStageResources } from './scene/stage';
  * 让另一个应用去 deep import `roboframe/executor`，等于把内部路径写进它的 import 表。
  */
 export type { RunOutcome, StepEvent, StepState } from './roboframe/executor';
-export type { PlanRunOutcome, PlanStepReport, BranchArm } from './roboframe/plan';
+export type { PlanRunOutcome, PlanStepReport, BranchArm, PlanStepGate } from './roboframe/plan';
+/** 布景的缺省值：宿主（studio 面板的输入框与「复位」）要与场景同源，不能各写一份数。 */
+export { DEFAULT_TARGET_BLOCK } from './scene/stage';
+
+/** 待抓方块的位置（方块中心，单位米，坐标系与目录里的 `workspace_limits` 同源）。 */
+export interface TargetBlockPosition {
+	readonly x: number;
+	readonly y: number;
+	readonly z: number;
+}
 
 /** 舞台的最小动作面（真身是 `scene/stage.ts` 的 `createStage`；测试注入假的，别让单测去跑真 WebGL） */
 export interface StageHandle {
 	render(dt: number): void;
 	resize(): void;
+	/**
+	 * 把待抓的方块摆到给定位置（方块中心，单位米，基座系）。
+	 * 可选的：假舞台没有方块可摆——mount 那时只记账，不假装摆过了。
+	 */
+	setTargetBlock?(position: TargetBlockPosition): void;
 	/** 释放渲染器与 GPU 资源。可选的：假舞台没有东西要放。 */
 	dispose?(): void;
 }
@@ -88,8 +102,42 @@ export interface RunResult {
 export interface VirtualDevice {
 	/** 把一份技能计划跑一遍。失败即停，不自动重试（与 bridge 的纪律一致）。 */
 	run(plan: SkillPlan): Promise<RunOutcome>;
+	/**
+	 * **单步**：一次走一个顶层步（界面上「第 N 步」那一格，与流程画布的一张卡同一件事）。
+	 *
+	 * 开始一趟：走完**第一步**就停住等放行；之后每按一次 `releaseStep()` 再走一步。
+	 * 返回的 promise 是**整份计划跑完**时的结局（与 `run()` 同一套账）——调用方不必在每次放行时
+	 * 重新取一次结局，也不必自己数走到了第几步（步骤行是 `onPlanStep` 推的）。
+	 */
+	beginStepRun(plan: SkillPlan): Promise<RunOutcome>;
+	/**
+	 * 放行下一步。停着的那一趟当场走；没停着就记一次**预放行**（按几次走几步，不丢按）。
+	 * 没在单步跑时什么都不做（不是错：界面上那个按钮可能刚好在上一步跑完的那一刻被按下）。
+	 */
+	releaseStep(): void;
+	/** 这一趟单步跑还在进行吗（跑完 / 没开始 = `false`）。界面靠它分辨「按下去是开始还是走下一步」。 */
+	readonly stepping: boolean;
+	/**
+	 * 单步的停/续各推一次（`true` = 刚停住等放行）。
+	 * 为什么要有这个通知：停在闸上的那一刻没有任何别的事件——不推，界面看不出它是停住了还是在动。
+	 */
+	onStepGate(listener: (waiting: boolean) => void): () => void;
 	/** 回到初始姿态、清空步骤账本。 */
 	reset(): void;
+	/**
+	 * 把待抓的方块摆到 `position`（方块中心，单位米，坐标系与目录里的 `workspace_limits` 同源）。
+	 *
+	 * 这是**本机布景**，不是任务参数：真机上目标物是相机看见的（`pick_object` 的
+	 * `target_name` 是「红色方块」这种视觉查询），所以坐标不进声明、不进任务 JSON，
+	 * 只是「本机这一场里方块摆在哪」。
+	 *
+	 * 三个分量都得是**有限数**：`NaN` / `±Infinity` 会被拒（`RangeError`）——
+	 * three 收下这种值之后整个场景的包围盒变成 `Infinity`，方块自己也不再画得出来，
+	 * 而画面上没有任何东西说得出「是刚才那个输入把它弄坏的」。
+	 */
+	setTargetBlock(position: TargetBlockPosition): void;
+	/** 方块当前摆在哪（缺省就是 `DEFAULT_TARGET_BLOCK`）——界面的输入框显示的就是它。 */
+	readonly targetBlock: TargetBlockPosition;
 	/** 每走一步回调一次（state 为 'done'/'failed' 时才推，别把 'running' 也推）。 */
 	onStep(listener: (event: StepEvent) => void): () => void;
 	/**
@@ -113,8 +161,8 @@ export interface MountedVirtualDevice extends VirtualDevice {
 	readonly rig: So101Rig;
 	/** 排一个能力（点几次排几次，队列串行跑），返回它轮到自己跑完之后的结局 */
 	runCapability(capabilityRef: string, params?: Record<string, string>): Promise<RunResult | null>;
-	/** 排一条已经校验过的技能计划，返回跑完之后的结局 */
-	enqueuePlan(plan: SkillPlan): Promise<RunResult>;
+	/** 排一条已经校验过的技能计划，返回跑完之后的结局。给了放行闸就是单步模式（见 `VirtualDevice.beginStepRun`）。 */
+	enqueuePlan(plan: SkillPlan, options?: { readonly stepGate?: PlanStepGate }): Promise<RunResult>;
 	/** 取消当前这次执行（与 `main.ts` 的取消同义） */
 	cancel(): void;
 	/** 清空还在排队的指令（正在跑的那条不动） */
@@ -167,6 +215,12 @@ export function mountVirtualDevice(host: HTMLElement, options: VirtualDeviceMoun
 	const rig = new So101Rig(kit);
 	const stage = buildStage(canvas, rig, kit);
 
+	// 本机布景记在这一层（真舞台由 `createStage` 自己按同一个缺省摆好）；
+	// 舞台没带 `setTargetBlock`（测试里的假舞台）时，账照记，只是没有 mesh 可挪。
+	// 冻住：`targetBlock` 这个读出口给的是这一份，外面拿到手改一下就把设备里的账改了——
+	// 那正是「读到的值」与「真摆在哪」不一致的来源，冻结让它当场可见，而不是悄悄错开。
+	let targetBlock: TargetBlockPosition = Object.freeze({ ...DEFAULT_TARGET_BLOCK });
+
 	/**
 	 * 舞台没带 `dispose()` 时的兜底（测试里的假舞台就是这种）。
 	 *
@@ -186,6 +240,12 @@ export function mountVirtualDevice(host: HTMLElement, options: VirtualDeviceMoun
 	const stepEvents: StepEvent[] = [];
 	const stepListeners = new Set<(event: StepEvent) => void>();
 	const planStepListeners = new Set<(event: PlanStepReport) => void>();
+	/**
+	 * 单步那一趟的放行闸（`null` = 没在单步跑）。**一次只有一趟**：单步是人在看着走的东西，
+	 * 排队排两条「一步一步」的没有意义，而且「按一下」该放行哪一趟会变成猜。
+	 */
+	let activeGate: PlanStepGate | null = null;
+	const stepGateListeners = new Set<(waiting: boolean) => void>();
 	const queueListeners = new Set<(state: { running: string | null; queued: readonly string[] }) => void>();
 	const queueErrorListeners = new Set<(message: string) => void>();
 	const frameListeners = new Set<FrameListener>();
@@ -280,6 +340,19 @@ export function mountVirtualDevice(host: HTMLElement, options: VirtualDeviceMoun
 			executor.reset();
 			stepEvents.length = 0;
 		},
+		setTargetBlock(position) {
+			assertLive();
+			// 判据只有这一个入口，所以留在这里（真舞台与假舞台同一道闸）：非有限数一律拒，
+			// 免得把一场景变成 NaN 之后，界面上没有任何一句说得清是哪个输入干的
+			for (const [axis, value] of Object.entries(position)) {
+				if (!Number.isFinite(value)) throw new RangeError(`方块位置的 ${axis} 不是有限数：${String(value)}`);
+			}
+			targetBlock = Object.freeze({ x: position.x, y: position.y, z: position.z });
+			stage.setTargetBlock?.(targetBlock);
+		},
+		get targetBlock() {
+			return targetBlock;
+		},
 		onStep(listener) {
 			stepListeners.add(listener);
 			return () => stepListeners.delete(listener);
@@ -310,8 +383,9 @@ export function mountVirtualDevice(host: HTMLElement, options: VirtualDeviceMoun
 				return { kind: 'capability' as const, outcome: await executor.run(capability, params) };
 			});
 		},
-		enqueuePlan(plan) {
-			return enqueue(`计划 ${plan.description ?? '(未命名)'}`, async () => {
+		enqueuePlan(plan, options) {
+			const gate = options?.stepGate;
+			return enqueue(`计划 ${plan.description ?? '(未命名)'}${gate === undefined ? '' : '（单步）'}`, async () => {
 				executor.beginRun(); // 同上：连续执行，不回零
 				const runner: PlanRunner = executor;
 				const outcome = await runPlan(plan, {
@@ -321,6 +395,8 @@ export function mountVirtualDevice(host: HTMLElement, options: VirtualDeviceMoun
 					onPlanStep: (event) => {
 						for (const listener of planStepListeners) listener(event);
 					},
+					// 不给闸就是一口气跑完（默认那条路一个字没变）
+					...(gate === undefined ? {} : { stepGate: gate }),
 				});
 				return {
 					kind: 'plan' as const,
@@ -334,6 +410,36 @@ export function mountVirtualDevice(host: HTMLElement, options: VirtualDeviceMoun
 				};
 			});
 		},
+		beginStepRun(plan) {
+			const gate = createStepGate((waiting) => {
+				for (const listener of stepGateListeners) listener(waiting);
+			});
+			activeGate = gate;
+			/*
+			 * `activeGate` 在这一趟**跑完**之前一直是它：界面据此知道「再按是走下一步」。
+			 * 结束（跑完、失败停住、被取消）时清掉——那之后 `beginStepRun` 又是「开始新的一趟」。
+			 */
+			return device.enqueuePlan(plan, { stepGate: gate }).then(
+				(result) => {
+					if (activeGate === gate) activeGate = null;
+					return result.outcome;
+				},
+				(error: unknown) => {
+					if (activeGate === gate) activeGate = null;
+					throw error instanceof Error ? error : new Error(String(error));
+				},
+			);
+		},
+		releaseStep() {
+			activeGate?.release();
+		},
+		get stepping() {
+			return activeGate !== null;
+		},
+		onStepGate(listener) {
+			stepGateListeners.add(listener);
+			return () => stepGateListeners.delete(listener);
+		},
 		cancel() {
 			executor.cancel();
 		},
@@ -345,8 +451,18 @@ export function mountVirtualDevice(host: HTMLElement, options: VirtualDeviceMoun
 			disposed = true;
 			cancelFrame();
 			observer.disconnect();
+			/*
+			 * 停在放行闸上的那一趟没有别的出路：卸载之后没人再按得到「单步运行」，
+			 * 它就永远挂在闸上（那趟执行与它的 promise 都收不了摊）。取消它——那是执行侧唯一的打断手段。
+			 * 只管单步那一趟：整趟跑着时卸载不改变原来的行为。
+			 */
+			if (activeGate !== null) {
+				activeGate = null;
+				executor.cancel();
+			}
 			stepListeners.clear();
 			planStepListeners.clear();
+			stepGateListeners.clear();
 			queueListeners.clear();
 			queueErrorListeners.clear();
 			frameListeners.clear();

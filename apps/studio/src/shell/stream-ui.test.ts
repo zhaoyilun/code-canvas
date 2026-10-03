@@ -5,9 +5,15 @@
  * 这一组守的是三条边界（它们是这一版全部的风险所在）：
  *
  * 1. **原始文本与状态行是两件事**：一个说"我收到了什么"，一个说"我在干什么"，两句都要在；
- * 2. **幽灵卡不是真相**：生成途中画的是半成品（虚线 + 「未校验」），而 `store.declaration`
- *    与它的 digest 全程一个字节都不动——任务 JSON 面板那几行也必须还是**上一份定稿**；
- * 3. **切换是一次**：定稿一到（或失败一来），幽灵态整块消失，不逐块替换、不留残影。
+ * 2. **半成品不是真相**：生成途中解出来的那半份计划（`provisionalPlan`）只是**预览数据**，
+ *    而 `store.declaration` 与它的 digest 全程一个字节都不动——任务 JSON 面板那几行
+ *    也必须还是**上一份定稿**；
+ * 3. **切换是一次**：定稿一到（或失败一来），半成品整块清掉，不逐块替换、不留残影。
+ *
+ * ⚠ 这一版之后「流程画布上的幽灵卡」没有了：那三张画布改成画**模型给的教学规格**
+ * （第二次调用的产出），而规格要等整段 JSON 说完了才解析得出来——生成途中的半成品计划
+ * 不再有画布可上。所以这一组不再挂 `FlowView`，改量上面那条真正还在的边界：
+ * **半成品与真相是两处数据**。入口带那行原始文本照旧（见第一组）。
  *
  * ## 这一组的流为什么要"握手"
  *
@@ -25,10 +31,9 @@ import { computeWorkflowDigest } from '@codecanvas/contracts';
 import { loadSampleTask, useStudioDocument } from '../state/document';
 import { SAMPLE_SKILL_PLAN_JSON } from '../state/sample-skill-plan';
 import TaskJsonPanel from '../views/right/task-json/TaskJsonPanel.vue';
-import FlowView from '../views/flow/FlowView.vue';
 import TaskInputBand from './TaskInputBand.vue';
 import { setSelectedDevice } from './devices';
-import { provisionalGenerating } from './provisional-declaration';
+import { provisionalGenerating, provisionalPlan } from './provisional-declaration';
 
 const doc = useStudioDocument();
 
@@ -173,9 +178,6 @@ const truthFingerprint = (): string => {
 
 const rawRow = (wrapper: Wrapper) => wrapper.find('[data-testid="task-raw-stream"]');
 const rawText = (wrapper: Wrapper): string => wrapper.find('[data-testid="task-raw-text"]').text();
-const ghostCards = (wrapper: Wrapper) =>
-	wrapper.findAll('[data-testid="flow-node-card"][data-provisional="true"]');
-
 const say = async (wrapper: Wrapper, text: string): Promise<void> => {
 	await wrapper.get<HTMLInputElement>('[data-testid="instruction-input"]').setValue(text);
 };
@@ -240,12 +242,11 @@ describe('生成途中 · 入口带的原始文本', () => {
 	});
 });
 
-describe('生成途中 · 流程画布上的幽灵卡', () => {
-	it('步骤一闭合就长出幽灵卡：虚线标记 + 「未校验」，且它**不是**真相', async () => {
+describe('生成途中 · 半成品（幽灵态）不是真相', () => {
+	it('步骤一闭合就解出半成品；它**不是**真相，定稿一到就整块换掉', async () => {
 		const stream = linkedHand();
 		vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(stream.response)));
 		const band = mount(TaskInputBand);
-		const flow = mount(FlowView, { attachTo: document.body });
 		const json = mount(TaskJsonPanel);
 
 		const before = truthFingerprint();
@@ -262,51 +263,45 @@ describe('生成途中 · 流程画布上的幽灵卡', () => {
 			frame('{"schemaVersion":1,"robot":"so101_single_arm","description":"看一眼桌面","plan":['),
 		);
 		await settle();
-		expect(ghostCards(flow)).toHaveLength(0);
+		// 骨架期：`plan` 那个键已经出现，但一步都还没闭合。
+		expect(provisionalPlan.value?.stepCount ?? 0).toBe(0);
 		expect(truthFingerprint()).toBe(before);
 
-		// 第一个步骤闭合 → 第一张幽灵卡
+		// 第一个步骤闭合 → 半成品里有了第一步
 		await stream.write(frame('{"step":"skill","skill":"inspect_scene"}'));
 		await settle();
-		expect(ghostCards(flow)).toHaveLength(1);
-		expect(ghostCards(flow)[0]?.text()).toContain('未校验');
-		expect(ghostCards(flow)[0]?.text()).toContain('inspect_scene');
-		// 整块也有标记与那行字
-		expect(flow.get('[data-testid="flow-provisional"]').attributes('data-provisional')).toBe('true');
+		expect(provisionalPlan.value?.stepCount).toBe(1);
+		expect(JSON.stringify(provisionalPlan.value?.plan)).toContain('inspect_scene');
 
 		// 真相一个字节没动：digest 与节点数都不变，JSON 面板还是上一份定稿
 		expect(truthFingerprint()).toBe(before);
 		expect(totalNodesOf()).toBe(beforeNodes);
 		expect(json.get('[data-testid="task-json-scroll"]').text()).toBe(jsonBefore);
 
-		// 再来一步：幽灵卡跟着长出来（这是"随步骤长出来"那一条）
+		// 再来一步：半成品跟着长出来（这是"随步骤长出来"那一条）
 		await stream.write(frame(',{"step":"wait","seconds":2}'));
 		await settle();
-		expect(ghostCards(flow)).toHaveLength(2);
+		expect(provisionalPlan.value?.stepCount).toBe(2);
 		expect(totalNodesOf()).toBe(beforeNodes);
 
-		// 定稿：整块换掉，幽灵态一张不剩，真相换成新的
+		// 定稿：半成品整块清掉，真相换成新的
 		await stream.write(frame(']}'));
 		await stream.write(DONE);
 		stream.finish();
 		await settle();
 
-		expect(ghostCards(flow)).toHaveLength(0);
-		expect(flow.find('[data-testid="flow-provisional"]').exists()).toBe(false);
+		expect(provisionalPlan.value).toBeNull();
+		expect(provisionalGenerating.value).toBe(false);
 		expect(totalNodesOf()).toBe(2);
 		expect(truthFingerprint()).not.toBe(before);
-		// 定稿卡上没有任何"未校验"的字
-		expect(flow.get('[data-testid="flow-canvas"]').text()).not.toContain('未校验');
 
 		json.unmount();
-		flow.unmount();
 	});
 
-	it('半成品有非法内容也照画（这一步不校验）：查不到的技能照样是一张幽灵卡', async () => {
+	it('半成品有非法内容也照样解出来（这一步不校验）：查不到的技能也进半成品', async () => {
 		const stream = linkedHand();
 		vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(stream.response)));
 		const band = mount(TaskInputBand);
-		const flow = mount(FlowView, { attachTo: document.body });
 		const before = truthFingerprint();
 
 		await say(band, '一句话');
@@ -317,8 +312,8 @@ describe('生成途中 · 流程画布上的幽灵卡', () => {
 		);
 		await settle();
 
-		expect(ghostCards(flow)).toHaveLength(1);
-		expect(ghostCards(flow)[0]?.text()).toContain('目录里没有的技能');
+		expect(provisionalPlan.value?.stepCount).toBe(1);
+		expect(JSON.stringify(provisionalPlan.value?.plan)).toContain('目录里没有的技能');
 		// 校验真没发生：非法内容既没被拦、也没改真相
 		expect(truthFingerprint()).toBe(before);
 
@@ -327,7 +322,7 @@ describe('生成途中 · 流程画布上的幽灵卡', () => {
 		stream.finish();
 		await settle();
 
-		flow.unmount();
+		band.unmount();
 	});
 });
 
@@ -351,7 +346,6 @@ describe('失败路径 · 幽灵态清掉、真相不动、诊断照旧', () => 
 			}),
 		);
 		const band = mount(TaskInputBand);
-		const flow = mount(FlowView, { attachTo: document.body });
 		const before = truthFingerprint();
 		const beforeNodes = totalNodesOf();
 
@@ -364,7 +358,7 @@ describe('失败路径 · 幽灵态清掉、真相不动、诊断照旧', () => 
 			frame('{"schemaVersion":1,"robot":"so101_single_arm","plan":[{"step":"skill","skill":"inspect_scene"}]'),
 		);
 		await settle();
-		expect(ghostCards(flow)).toHaveLength(1);
+		expect(provisionalPlan.value?.stepCount).toBe(1);
 
 		// 断了：这一次读到的内容本身是合法的，但流"没说完就说不了了"
 		first.breaker(new TypeError('network error'));
@@ -376,8 +370,8 @@ describe('失败路径 · 幽灵态清掉、真相不动、诊断照旧', () => 
 		await settle();
 
 		// 幽灵态清掉，回到上一份定稿
-		expect(ghostCards(flow)).toHaveLength(0);
-		expect(flow.find('[data-testid="flow-provisional"]').exists()).toBe(false);
+		expect(provisionalGenerating.value).toBe(false);
+		expect(provisionalPlan.value).toBeNull();
 		expect(rawRow(band).exists()).toBe(false);
 		expect(truthFingerprint()).toBe(before);
 		expect(totalNodesOf()).toBe(beforeNodes);
@@ -394,9 +388,8 @@ describe('失败路径 · 幽灵态清掉、真相不动、诊断照旧', () => 
 		expect(salvaged).toContain('inspect_scene');
 		expect(salvaged.startsWith('{"schemaVersion"')).toBe(true);
 
-		// 两个都要拆：留着挂载的组件会在下一条用例里继续跑（它的 async 链还没结束）
+		// 要拆：留着挂载的组件会在下一条用例里继续跑（它的 async 链还没结束）
 		band.unmount();
-		flow.unmount();
 	});
 
 	it('HTTP 502：没有原文可交，幽灵态从没长出来，诊断说清是 502', async () => {
@@ -412,7 +405,6 @@ describe('失败路径 · 幽灵态清掉、真相不动、诊断照旧', () => 
 			),
 		);
 		const band = mount(TaskInputBand);
-		const flow = mount(FlowView, { attachTo: document.body });
 		const before = truthFingerprint();
 
 		await say(band, '一句话');
@@ -423,22 +415,21 @@ describe('失败路径 · 幽灵态清掉、真相不动、诊断照旧', () => 
 			'失败诊断出来',
 		);
 
-		expect(ghostCards(flow)).toHaveLength(0);
+		expect(provisionalGenerating.value).toBe(false);
+		expect(provisionalPlan.value).toBeNull();
 		expect(truthFingerprint()).toBe(before);
 		const diagnostics = band.findAll('[data-testid="task-input-diagnostic"]').map((row) => row.text());
 		expect(diagnostics.some((text) => text.includes('502'))).toBe(true);
 
 		band.unmount();
-		flow.unmount();
 	});
 });
 
 describe('入口带的兜底：粘贴一份 JSON 时幽灵态立刻退场', () => {
-	it('手工灌一份就不要再画在途那次的幽灵卡', async () => {
+	it('手工灌一份就把在途那次的半成品清掉', async () => {
 		const stream = linkedHand();
 		vi.stubGlobal('fetch', vi.fn(() => Promise.resolve(stream.response)));
 		const band = mount(TaskInputBand);
-		const flow = mount(FlowView, { attachTo: document.body });
 
 		await say(band, '一句话');
 		await generate(band);
@@ -446,19 +437,18 @@ describe('入口带的兜底：粘贴一份 JSON 时幽灵态立刻退场', () =
 			frame('{"schemaVersion":1,"robot":"so101_single_arm","plan":[{"step":"skill","skill":"inspect_scene"}]'),
 		);
 		await settle();
-		expect(ghostCards(flow)).toHaveLength(1);
+		expect(provisionalPlan.value?.stepCount).toBe(1);
 
 		await band.get('[data-testid="task-paste-toggle"]').trigger('click');
 		await band.get<HTMLTextAreaElement>('[data-testid="task-json-input"]').setValue(SAMPLE_SKILL_PLAN_JSON);
 		await band.get('[data-testid="task-convert"]').trigger('click');
 		await settle();
 
-		expect(ghostCards(flow)).toHaveLength(0);
+		expect(provisionalPlan.value).toBeNull();
 		// 手工那份进了真相（3 步）
 		expect(totalNodesOf()).toBe(3);
 		expect(provisionalGenerating.value).toBe(false);
 
 		band.unmount();
-		flow.unmount();
 	});
 });

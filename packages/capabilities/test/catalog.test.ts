@@ -308,6 +308,109 @@ describe('RoboFrame SO-101 目录的实情', () => {
 		expect(catalog.namedPoses).toEqual(['home', 'observe_table', 'zero']);
 	});
 
+	it('命名位姿还带上了**落在哪个坐标上**，数字与上游 YAML 逐字相同', () => {
+		// 名字列表只说得出「有个叫 observe_table 的位姿」。教学要的是那条调用落到哪儿，
+		// 所以坐标必须一起导进来——而且是**照抄**：0.02160863957360322 不许被四舍五入成 0.0216。
+		expect(catalog.namedPoseTargets?.map((target) => target.name)).toEqual(catalog.namedPoses);
+		expect(catalog.namedPoseTargets?.find((target) => target.name === 'observe_table')).toEqual({
+			name: 'observe_table',
+			position: { x: 0.02160863957360322, y: -0.1310933191355222, z: 0.33769602460194537 },
+			orientation: {
+				x: -0.35328551634048977,
+				y: -0.32020226597268203,
+				z: -0.5842845082802226,
+				w: 0.6567126207053827,
+			},
+		});
+		// 上游这个文件里没有给位姿声明参考系或单位，所以**不写**——「base 系」「米」都不许编。
+		expect(JSON.stringify(catalog.namedPoseTargets)).not.toContain('frame');
+	});
+
+	it('执行量（一步多远、方向映射、夹爪开合位）来自 embodied.execution，一个默认值都没补', () => {
+		expect(catalog.execution).toEqual({
+			relativeMotionStepM: 0.03,
+			relativeMotionReferenceFrame: 'base',
+			relativeMotionDirectionMapping: {
+				forward: [0, -1, 0],
+				backward: [0, 1, 0],
+				left: [1, 0, 0],
+				right: [-1, 0, 0],
+				up: [0, 0, 1],
+				down: [0, 0, -1],
+			},
+			// 注意这里是 0.15（这台设备的 YAML 写着 0.15），不是抓取那台的 0.0——
+			// 两台配置各有一份副本，抄错一边屏幕上就会多一个假数字。
+			gripperOpenPosition: 1,
+			gripperClosedPosition: 0.15,
+		});
+	});
+
+	it('轨迹模板的展开规则照上游代码抄：字段名、缺省、两种规则的区别', () => {
+		const rules = new Map(catalog.trajectoryTemplates?.map((rule) => [rule.templateType, rule]));
+		// wave_dance_v1 末尾补静止拍（上游 `zero_hold_count`），single_joint_wave_v1 没有这个字段。
+		expect(rules.get('wave_dance_v1')).toEqual({
+			templateType: 'wave_dance_v1',
+			rule: 'cycle_repeat_hold',
+			cycleField: 'active_waypoint_count',
+			repeatField: 'repeat_count',
+			repeatDefault: 1,
+			holdField: 'zero_hold_count',
+			holdDefault: 0,
+			durationField: 'waypoint_duration_sec',
+			durationDefaultSec: 0.08,
+		});
+		expect(rules.get('single_joint_wave_v1')).toEqual({
+			templateType: 'single_joint_wave_v1',
+			rule: 'cycle_repeat',
+			cycleField: 'active_waypoint_count',
+			// 上游这个生成器给了缺省 16；wave_dance_v1 给的是 0（等于「必须给」），所以上面没有 cycleDefault。
+			cycleDefault: 16,
+			repeatField: 'repeat_count',
+			repeatDefault: 1,
+			durationField: 'waypoint_duration_sec',
+			durationDefaultSec: 0.08,
+		});
+	});
+
+	it('原语参数的单位与范围是上游写的那些，没有的不编', () => {
+		// `motion_distance` 这条字段名在上游两处含义不同：位移是 meters，旋转是 degrees。
+		// 单位从模板的 `capability.parameters` 里读，`exclusiveMinimum` 是 `gateway_policy.py` 真在查的那条。
+		const parameters = (primitiveRef: string) =>
+			catalog.primitives.find((primitive) => primitive.primitiveRef === primitiveRef)?.parameters ?? [];
+		expect(parameters('move_relative_ee')).toEqual([
+			{ name: 'motion_direction', label: '移动方向', type: 'string' },
+			{ name: 'motion_distance', label: '移动距离（米）', unit: 'meters', exclusiveMinimum: 0, type: 'number' },
+		]);
+		expect(parameters('rotate_gripper_cw')).toEqual([
+			{ name: 'motion_distance', label: '旋转角度（度）', unit: 'degrees', exclusiveMinimum: 0, type: 'number' },
+		]);
+		// `duration_sec` 的「秒」只写在字段名里，上游没有声明 `unit` —— 所以它这里什么都不带。
+		expect(parameters('move_to_joint_positions')).toEqual([
+			{ name: 'joint_positions', label: '关节目标位置', type: 'json' },
+			{ name: 'duration_sec', label: '到位时间（秒）', type: 'number' },
+		]);
+	});
+
+	it('每条登记了落点的原语，说的那个实参真的是它自己的参数', () => {
+		// 设备事实里的 `poseNameArgument: 'pose_name'` 要是写成一个不存在的参数名，
+		// 渲染层查不到就什么都不写——那是**静默**失效。这条把它变成当场红。
+		let registered = 0;
+		for (const primitive of catalog.primitives) {
+			const facts = primitive.deviceFacts;
+			if (facts === undefined) continue;
+			registered += 1;
+			const declared = new Set(primitive.parameters.map((parameter) => parameter.name));
+			for (const argument of [facts.poseNameArgument, facts.directionArgument, facts.trajectoryArgument]) {
+				if (argument === undefined) continue;
+				expect(declared.has(argument), `${primitive.primitiveRef} 的 ${argument}`).toBe(true);
+			}
+		}
+		// 五条：move_to_named_pose / move_relative_ee / move_through_joint_positions / open_gripper / close_gripper。
+		expect(registered).toBe(5);
+		// 没登记的原语就是没登记：`move_to_pose` 的目标位姿是任务直接给的，不落在任何设备表上。
+		expect(catalog.primitives.find((primitive) => primitive.primitiveRef === 'move_to_pose')?.deviceFacts).toBeUndefined();
+	});
+
 	it('夹爪归一化照上游 resolver 的行为展开在最前面', () => {
 		// 上游 `initial_gripper_state: closed` 的技能，展开时会在序列最前面插一条 `close_gripper`。
 		for (const capabilityRef of ['wave_hello', 'dance_basic', 'celebrate', 'act_cute']) {
@@ -465,11 +568,94 @@ describe('RoboFrame 抓取目录的实情（第二台设备，实现在执行侧
  * （多改一个字段、换个遍历顺序、`.map` 时顺手补个默认值）。这一条就是那道栏杆——
  * 单臂目录的字节只应该因为"上游换了 commit、或有意的改动"而变化，那时把指纹一起更新，
  * 顺带被逼着看一眼 diff。目录本身对不对由上面那些断言管，这里只管"有没有被动过"。
+ *
+ * 2026 设备事实那一层进来时两份指纹都换过一次。那次 diff 是**纯新增**：
+ * 单臂 +129 行、抓取 +123 行，`-` 行 0 行——新键一律插在别的键**前面**，
+ * 所以连一个逗号都没碰到已有字节（判据写在 `import.mjs` 的 `parameterOf` 上）。
+ *
+ * 「执行侧接口名 + 原语的运行时能力」那两层进来时又换过一次，同样是纯新增：
+ * 单臂 +100 行、抓取 +101 行，`-` 行 0 行（`interfaces` 插在 `primitives` 前、
+ * `runtimeCapabilities` 插在 `parameters` 前）。
  */
+/**
+ * 2026 新补的两层：执行侧接口名（配置级）与原语的运行时能力（每条一份）。
+ *
+ * 这两层的判据只有一条：**逐字来自上游**。所以这里断言的是「值等于上游写的那个」，
+ * 而不是「有个字段」——「有个字段」那种断言在编一个默认值顶上去时照样绿。
+ */
+describe('执行侧接口名与运行时能力（新补的两层）', () => {
+	const RUNTIME_CAPABILITY_NAMES = ['validate_skill', 'task_executor', 'arm_trajectory', 'fresh_ee_pose'];
+
+	it('接口名表逐字来自上游 YAML，两台设备的差别就是上游的差别', () => {
+		expect(ROBOFRAME_SO101_CATALOG.interfaces).toEqual({
+			task_command_topic: '/embodied/task_command',
+			status_topic: '/embodied/task_status',
+			skill_action_name: '/embodied/execute_skill',
+			primitive_action_name: '/embodied/execute_primitive',
+			validate_skill_service: '/embodied/validate_skill',
+			task_executor_action_name: '/task_executor/execute_task_plan',
+		});
+		// 抓取那份多一条：move_configuration_service 只在它上游的 embodied.execution 里写着。
+		expect(ROBOFRAME_GRASP_CATALOG.interfaces).toEqual({
+			...ROBOFRAME_SO101_CATALOG.interfaces,
+			move_configuration_service: '/moveit_gateway/move_to_configuration',
+		});
+	});
+
+	it('两个 action 是分开的：技能走 execute_skill、原语走 execute_primitive', () => {
+		expect(ROBOFRAME_SO101_CATALOG.interfaces?.skill_action_name).toBe('/embodied/execute_skill');
+		expect(ROBOFRAME_SO101_CATALOG.interfaces?.primitive_action_name).toBe('/embodied/execute_primitive');
+	});
+
+	it('运行时能力：能力名与「缺了怎么说」都是上游 gateway_policy 的原文', () => {
+		const open = findPrimitive(ROBOFRAME_SO101_CATALOG, 'open_gripper');
+		expect(open?.runtimeCapabilities).toEqual([
+			{ name: 'validate_skill', unavailableMessage: 'validate skill service unavailable' },
+			{ name: 'task_executor', unavailableMessage: 'task executor action unavailable' },
+		]);
+		// 相对运动要多一条末端位姿的新鲜度——这正是上游那张表存在的理由。
+		const relative = findPrimitive(ROBOFRAME_SO101_CATALOG, 'move_relative_ee');
+		expect(relative?.runtimeCapabilities?.map((item) => item.name)).toEqual([
+			'validate_skill',
+			'task_executor',
+			'fresh_ee_pose',
+		]);
+	});
+
+	it('上游没登记的两条原语：字段整个不出现（空数组与「没说」不是一回事）', () => {
+		for (const catalog of [ROBOFRAME_SO101_CATALOG, ROBOFRAME_GRASP_CATALOG]) {
+			for (const primitiveRef of ['move_to_pose', 'move_to_configuration']) {
+				const primitive = findPrimitive(catalog, primitiveRef);
+				expect(primitive).toBeDefined();
+				expect('runtimeCapabilities' in (primitive ?? {})).toBe(false);
+			}
+		}
+	});
+
+	it('能力名不许是编的：每一个都在上游那四个字段里', () => {
+		for (const catalog of [ROBOFRAME_SO101_CATALOG, ROBOFRAME_GRASP_CATALOG]) {
+			for (const primitive of catalog.primitives) {
+				for (const capability of primitive.runtimeCapabilities ?? []) {
+					expect(RUNTIME_CAPABILITY_NAMES).toContain(capability.name);
+				}
+			}
+		}
+	});
+
+	it('两台设备里同一批原语的运行时能力必须一模一样（同一份 gateway_policy）', () => {
+		const byRef = (catalog: CapabilityCatalog): Map<string, unknown> =>
+			new Map(catalog.primitives.map((primitive) => [primitive.primitiveRef, primitive.runtimeCapabilities]));
+		const single = byRef(ROBOFRAME_SO101_CATALOG);
+		for (const [ref, capabilities] of byRef(ROBOFRAME_GRASP_CATALOG)) {
+			expect(capabilities).toEqual(single.get(ref));
+		}
+	});
+});
+
 describe('两份目录各自的产物稳定', () => {
 	const DIGESTS: Record<string, string> = {
-		'so101_single_arm.catalog.json': '8ed8cd93743ff55ebc9988115bc58060bb764d60d4385effe65463e67efe2c12',
-		'so101_handeye_realsense_grasp.catalog.json': '24ceca88e6a6b3740fb68146c5f0a76ccbbe95c4f28a1653c1912da51dbd2815',
+		'so101_single_arm.catalog.json': 'cae68d151f27a3768e3219b1928cadf748d5f483b7dac8eed8b7c312da61cafd',
+		'so101_handeye_realsense_grasp.catalog.json': '5e146f4d5a55f0468f147e9b8eb4de51a5e56fca1553b08751fd370082ca13e5',
 	};
 
 	it('每份产物的字节没动过', () => {

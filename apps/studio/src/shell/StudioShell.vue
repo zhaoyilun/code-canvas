@@ -18,7 +18,6 @@ import TaskInputBand from './TaskInputBand.vue';
 import BlocklyView from '../views/blockly/BlocklyView.vue';
 import FlowView from '../views/flow/FlowView.vue';
 import RightPanel from '../views/right/RightPanel.vue';
-import { LinkOverlay } from '../views/mapping';
 </script>
 
 <template>
@@ -40,12 +39,16 @@ import { LinkOverlay } from '../views/mapping';
 				</aside>
 
 				<!--
-					跨栏连线层（M3）：盖在三栏之上的绝对定位 SVG。
-					它只画线、只读锚点，不吃指针事件（`.mapping-overlay` 里写死了 `pointer-events: none`），
-					所以三栏的点击、滚动、拖积木一切照旧。三处锚点靠同一个 `[data-node-id]` 认出来，
-					它自己不认识任何一栏的内部实现。
+					跨栏连线层（M3 的 LinkOverlay）**已关掉**，连带它的三个测试文件（`views/mapping/`）。
+
+					为什么关：那三条箭头画的是「同一份声明的同一个节点，在王栏里分别长什么样」——
+					它靠「声明 + 目录」推位置。三个视图改成模型画规格之后，屏幕上那三样**不再从声明派生**：
+					流程图的节点是模型起的名字（与声明的 node id 没有对应关系，也不该由我们编一个），
+					积木画的是教学块树，代码是模型写的一段文本。这时再画那三条线，
+					画的就是一个**已经不存在的对应关系**——那比不画坏得多。
+					真要接回来，得先有一份「规格里的哪一块对应声明里的哪一步」的事实，
+					而那是模型没给、我们也不许编的东西。见 `views/mapping/index.ts` 的文件头。
 				-->
-				<LinkOverlay />
 			</main>
 		</div>
 	</div>

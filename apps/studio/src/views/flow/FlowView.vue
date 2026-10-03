@@ -1,143 +1,94 @@
 <script setup lang="ts">
 /**
- * 中栏：流程画布（spec §4.1）。
+ * 中栏：流程画布（spec §4.1）——**模型画的流程图**。
  *
- * 只回答三件事：顺序是什么、每步的参数落在什么范围里、哪一步带着诊断。
- * **这里没有一条写回路径**——真相只从 `useStudioDocument()` 读，改参数是积木画布的事。
+ * 画的是第二次调用的产出（`state/teaching.ts` 的 `spec.flow`）：节点 + 箭头 + 自动布局，
+ * 一笔一笔画出来。从前那种「从声明推出来的竖排卡片」不再是这里的东西——它讲不出
+ * 执行侧内部的管线（`inspect_scene` 在目录里只有一条原语），而那正是教学要讲的。
  *
- * 「顺序」不是声明里 `nodes` 的排列，而是 **`connections` 推出来的图**（见 `plan-structure.ts`）：
- * 链头（没有入边的节点）出发走到底，遇到分支节点就展开成两条臂（then / else），
- * 各自缩进一级；`main[2]` 的后续回到分支所在那一层的缩进继续。
- * 从前按声明顺序竖排一列，是因为那时只可能是一条链；分支一来，「声明顺序」与「执行的顺序」
- * 就不是同一件事了（臂里的节点在声明里排在分支后面，但它们在画布上属于臂里）。
+ * 三种状态各有各的字，**一种都不许含糊过去**：
+ * - 还没画（`idle`）：说清楚「还没有流程图」，并说明它从哪来；
+ * - 正在画（`drawing`）：说「正在画…」并带上已经收到的字数（长文生成时这是唯一的动静）；
+ * - 画不出来（`failed`）：照实说模型说了什么、逐条列出形状问题、把已经收到的原文放在折叠里
+ *   ——**不退回旧那套渲染顶上**（那套已经不是屏幕上的真相了，拿它顶上等于把这句话藏起来）。
  *
- * 图推不出来时（悬空引用、环、多个链头）不崩、也不静默少画：能画的照画，
- * 问题摆在画布顶上那一条里（`flow-graph-diagnostics`）。
+ * 这里没有一条写回路径，也没有任何「这是模型生成的」之类的标签：声明是声明，图是图，
+ * 两者对不上不拦、也不标注（导演定的「模型赢」）。
  */
 import { computed } from 'vue';
-import { LIMIT_LABELS, type NumericLimitName } from '@codecanvas/contracts';
-import { useStudioDocument } from '../../state/document';
-import { provisionalGenerating, provisionalPlan } from '../../shell/provisional-declaration';
-import FlowSequence from './FlowSequence.vue';
-import { declarationLimits, type NodeLimits } from './summary';
-import { planStructureOf } from '../shared/plan-structure';
-import { buildFlowRows } from './rows';
+import { useTeaching } from '../../state/teaching';
+import FlowChart from './FlowChart.vue';
 
-const store = useStudioDocument();
+const teaching = useTeaching();
 
-/**
- * 现在画的是不是**半成品**（生成途中、还没校验过的那份预览）。
- *
- * `provisionalGenerating` 与 `provisionalPlan` 两个条件都要：正在生成不等于已经解出了步骤
- * （可能还在写 `schemaVersion`），那时该画的是上一份定稿，而不是一张空画布。
- *
- * ⚠ 这条判断**只在这里**，而且它绝不写回 `store`：半成品没有过闸，也永远不进真相。
- * 定稿一到，`endProvisional()` 把生成标志放下，这个 computed 立刻变回 false——
- * 于是整块从幽灵态换回真相，**一次切换**（模板上是 `v-if` / `v-else`，不可能有一帧两套都在）。
- */
-const provisional = computed(() => provisionalGenerating.value && provisionalPlan.value !== null);
+const spec = teaching.spec;
 
-/**
- * 这一趟要渲染的那份声明。
- *
- * 幽灵态下用它（带 `data-provisional` 的那一块），否则用真相。两者**同型**，所以下面那套
- * 推导（结构 / 行 / 限值）原封不动地复用——幽灵卡与定稿卡于是必然长得一样，
- * 差别只有描边与那三个字（这是"预览"该有的样子：长出来的是同一件东西，只是还没落定）。
- */
-const shownDeclaration = computed(() =>
-	provisional.value ? (provisionalPlan.value?.declaration ?? null) : store.declaration.value,
-);
+/** 失败信息摊平成模板好用的一份（`null` = 没失败）；字数也在这一层算好。 */
+const failed = computed(() => {
+	const failure = teaching.failure.value;
+	if (failure === null) return null;
+	return {
+		message: failure.message,
+		issues: failure.issues,
+		text: failure.text,
+		characters: failure.text === null ? 0 : failure.text.length,
+	};
+});
 
-const limits = computed<NodeLimits>(() => declarationLimits(shownDeclaration.value?.meta));
+const flow = computed(() => spec.value?.flow ?? null);
 
-/** 声明的标题：任务里有 description 就用它（转换器就是这么起名的）。 */
-const taskTitle = computed(() => shownDeclaration.value?.name ?? '');
+/** 这一次画的是哪个任务（标题来自规格，规格还没到时空着——不拿声明的名字顶上）。 */
+const title = computed(() => spec.value?.title ?? '');
 
-/** 限值条：这几个数字决定参数摘要里的上界，摆在画布上比藏在声明里有用。名字同样取自协议描述表。 */
-const limitChips = computed<readonly string[]>(() =>
-	Object.entries(limits.value)
-		.filter((entry): entry is [NumericLimitName, number] => entry[1] !== undefined)
-		.map(([name, value]) => `${LIMIT_LABELS[name]} ≤ ${String(value)}`),
-);
-
-/** 这份声明的结构：一列步骤，分支自带两条臂。 */
-const plan = computed(() => planStructureOf(shownDeclaration.value));
-
-// 目录也从 store 取（声明出生时那台设备的）：卡头的中文名与参数名是**设备给**的，
-// 视图里写死任何一份都会在换设备之后显示成标识符。
-//
-// 幽灵态下目录给 null：那张卡上的技能名是**模型写的**，拿目录去认它就等于替它背了书
-// （而校验还没发生）。给 null 时卡片照出原名——与"技能在目录里查不到"是同一条路。
-const rows = computed(() =>
-	buildFlowRows(
-		plan.value.steps,
-		provisional.value ? [] : store.diagnostics.value,
-		limits.value,
-		provisional.value ? null : store.declarationCatalog.value,
-	),
-);
-
-/**
- * 图本身的问题（悬空引用、环、多个链头）。
- *
- * 幽灵态下**一条都不报**：半成品本来就没有连线（`buildDeclarationFromPlan` 只连它已经有的那几步），
- * 于是「有 N 个链头」「有节点走不到」这类话在半成品上必然成立、也必然没意义——
- * 它们是**生成途中的正常样子**，不是问题。真正的问题由定稿那一步的诊断说（那条路一个字没改）。
- */
-const graphDiagnostics = computed(() => (provisional.value ? [] : plan.value.diagnostics));
+/** 还在画：有格子没放出来。数一数给界面看，也是「它还在动」的证据。 */
+const drawnCount = computed(() => teaching.revealedFlowKeys.value.size);
+const totalCount = computed(() => {
+	const graph = flow.value;
+	if (graph === null) return 0;
+	// 节点 + 边：与 `flowDrawOrder` 铺开的总格数一致（每个节点一格、每条边一格）。
+	return graph.nodes.length + graph.edges.length;
+});
 </script>
 
 <template>
 	<section class="flow-view" data-testid="view-flow">
 		<header class="flow-header">
 			<span class="flow-title">流程画布</span>
-			<!--
-				幽灵态的整块标记：数据源、可见的字、以及 `data-provisional` 都有。
-				为什么不只靠卡片上的虚线：整块说一句「这些卡都还没校验」比逐张重复更准
-				（半成品是**一整份**东西，不是某几张卡的问题）。
-			-->
-			<span v-if="provisional" class="flow-provisional" data-testid="flow-provisional" data-provisional="true">
-				未校验 · 模型正在生成，这些卡片随时会变
-			</span>
-			<span v-if="shownDeclaration !== null" class="flow-task" data-testid="flow-task-name">
-				{{ taskTitle }}
-			</span>
+			<span v-if="title !== ''" class="flow-task" data-testid="flow-title">{{ title }}</span>
 		</header>
 
-		<div v-if="shownDeclaration !== null" class="flow-body" data-testid="flow-canvas">
-			<!--
-				图自己的毛病：说出来，但**不影响画**。下面能画的部分照画，
-				所以这条在画布顶上，而不是把整块替换成一句错误。
-			-->
-			<ul v-if="graphDiagnostics.length > 0" class="flow-graph" data-testid="flow-graph-diagnostics">
-				<li
-					v-for="diagnostic in graphDiagnostics"
-					:key="`${diagnostic.code}:${diagnostic.nodeId ?? ''}`"
-					class="graph-row"
-					:data-code="diagnostic.code"
-					:data-node-id="diagnostic.nodeId ?? undefined"
-				>
-					<span class="graph-code">{{ diagnostic.code }}</span>
-					{{ diagnostic.message }}
-				</li>
-			</ul>
-
-			<div class="flow-chain" role="list" data-testid="flow-chain">
-				<FlowSequence :rows="rows" :provisional="provisional" />
+		<div v-if="flow !== null" class="flow-body" data-testid="flow-canvas">
+			<p v-if="drawnCount < totalCount" class="flow-progress" data-testid="flow-progress">
+				正在画…（{{ drawnCount }} / {{ totalCount }}）
+			</p>
+			<div class="flow-scroll">
+				<FlowChart :graph="flow" :revealed="teaching.revealedFlowKeys.value" />
 			</div>
+		</div>
+
+		<!-- 画不出来：照实说，并把「哪儿不对」逐条摆出来。 -->
+		<div v-else-if="failed !== null" class="flow-failed" data-testid="flow-failed">
+			<p class="failed-line" data-testid="flow-failed-message">模型没画出来：{{ failed.message }}</p>
+			<ul v-if="failed.issues.length > 0" class="failed-issues" data-testid="flow-failed-issues">
+				<li v-for="issue in failed.issues" :key="issue">{{ issue }}</li>
+			</ul>
+			<details v-if="failed.text !== null" class="failed-raw">
+				<summary>已经收到的原文（{{ failed.characters }} 字）</summary>
+				<pre>{{ failed.text }}</pre>
+			</details>
+			<button type="button" class="retry" data-testid="flow-retry" @click="teaching.run()">重画</button>
+		</div>
+
+		<div v-else-if="teaching.status.value === 'drawing'" class="flow-empty" data-testid="flow-drawing">
+			<p class="empty-text">正在画…（已经收到 {{ teaching.streamedChars.value }} 字）</p>
 		</div>
 
 		<div v-else class="flow-empty" data-testid="flow-empty">
 			<p class="empty-text">
-				流程画布画的是那份 workflow 声明里的一串步骤：顺序、参数、哪一步有问题。<br />
-				现在还没有声明——导入一份任务 JSON，这条链就会出现在这里。
+				流程画布画的是一张真流程图：动作、条件分支、等待、开始与结束，节点之间是带箭头的连线。<br />
+				它由「任务 JSON + 这台设备的目录」讲出来——现在还没有这张图。
 			</p>
 		</div>
-
-		<!-- 限值芯片：声明里写了 meta.limits 才有；没有就不画这条页脚（空容器会白占一段栏间距） -->
-		<footer v-if="limitChips.length > 0" class="flow-footer">
-			<span v-for="chip in limitChips" :key="chip" class="footer-chip">{{ chip }}</span>
-		</footer>
 	</section>
 </template>
 
@@ -145,7 +96,7 @@ const graphDiagnostics = computed(() => (provisional.value ? [] : plan.value.dia
 .flow-view {
 	display: flex;
 	flex-direction: column;
-	gap: var(--cc-space-3);
+	gap: var(--cc-space-2);
 	height: 100%;
 	min-height: 0;
 	padding: var(--cc-space-4);
@@ -156,7 +107,7 @@ const graphDiagnostics = computed(() => (provisional.value ? [] : plan.value.dia
 	align-items: baseline;
 	gap: var(--cc-space-2);
 	flex-wrap: wrap;
-	padding-bottom: var(--cc-space-3);
+	padding-bottom: var(--cc-space-2);
 	border-bottom: 1px solid var(--cc-line);
 }
 
@@ -173,62 +124,81 @@ const graphDiagnostics = computed(() => (provisional.value ? [] : plan.value.dia
 	color: var(--cc-text-dim);
 }
 
-/*
- * 幽灵态的整块标注：虚线（与卡片上的描边同一套语言）+ 一行文字。
- * 不靠动画：`prefers-reduced-motion` 下这些字照旧在，信息一个不少。
- */
-.flow-provisional {
-	padding: 0 var(--cc-space-2);
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-chain-live);
-	border: 1px dashed var(--cc-line-strong);
-	border-radius: var(--cc-radius-sm);
-}
-
-/* 纵向滚动：链子长了就往下走，横向永远不滚（横向留给卡片自己撑满）。 */
+/* 图的容器：图比栏宽就横向滚（缩了字号那些数字就读不清了）。 */
 .flow-body {
+	display: flex;
+	flex-direction: column;
 	flex: 1 1 auto;
 	min-height: 0;
-	overflow-x: hidden;
-	overflow-y: auto;
+	overflow: hidden;
 	background: var(--cc-surface-sunken);
 	border: 1px solid var(--cc-line);
 	border-radius: var(--cc-radius);
 }
 
-/* 图的问题条：与卡片同一套语言，但用危险色的面与描边，摆在画布最上面一条。 */
-.flow-graph {
-	display: flex;
-	flex-direction: column;
-	gap: var(--cc-space-1);
-	margin: 0;
-	padding: var(--cc-space-2) var(--cc-space-3);
-	list-style: none;
-	background: var(--cc-danger-veil);
-	border-bottom: 1px solid var(--cc-danger);
+.flow-scroll {
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: auto;
+	padding: var(--cc-space-2);
 }
 
-.graph-row {
-	font-size: var(--cc-fs-sm);
-	line-height: 1.5;
+.flow-progress {
+	margin: 0;
+	padding: var(--cc-space-1) var(--cc-space-3);
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-dim);
+	border-bottom: 1px solid var(--cc-line);
+}
+
+.flow-failed {
+	display: flex;
+	flex-direction: column;
+	gap: var(--cc-space-2);
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: auto;
+	padding: var(--cc-space-3);
+	background: var(--cc-danger-veil);
+	border: 1px solid var(--cc-danger);
+	border-radius: var(--cc-radius);
+}
+
+.failed-line {
+	margin: 0;
 	color: var(--cc-text);
 	overflow-wrap: anywhere;
 }
 
-.graph-code {
-	display: block;
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-danger-strong);
+.failed-issues {
+	margin: 0;
+	padding-left: 1.2em;
+	color: var(--cc-text);
+	font-size: var(--cc-fs-sm);
 }
 
-/* 自上而下的链：卡片等宽撑满中栏，一条列排版。 */
-.flow-chain {
-	display: flex;
-	flex-direction: column;
-	align-items: stretch;
-	width: 100%;
-	padding: var(--cc-space-3);
+.failed-raw {
+	font-size: var(--cc-fs-sm);
+	color: var(--cc-text-dim);
+}
+
+.failed-raw pre {
+	max-height: 200px;
+	margin: var(--cc-space-1) 0 0;
+	overflow: auto;
+	font-size: var(--cc-fs-xs);
+	white-space: pre-wrap;
+}
+
+.retry {
+	align-self: flex-start;
+	padding: 2px var(--cc-space-3);
+	color: var(--cc-text);
+	background: var(--cc-surface);
+	border: 1px solid var(--cc-line-strong);
+	border-radius: var(--cc-radius-sm);
+	cursor: pointer;
 }
 
 .flow-empty {
@@ -245,25 +215,9 @@ const graphDiagnostics = computed(() => (provisional.value ? [] : plan.value.dia
 }
 
 .empty-text {
-	max-width: 40ch;
+	max-width: 44ch;
 	margin: 0;
 	color: var(--cc-text-dim);
 	line-height: 1.7;
-}
-
-.flow-footer {
-	display: flex;
-	align-items: center;
-	gap: var(--cc-space-2);
-	flex-wrap: wrap;
-	font-family: var(--cc-font-mono);
-	font-size: var(--cc-fs-sm);
-	color: var(--cc-text-faint);
-}
-
-.footer-chip {
-	padding: 1px var(--cc-space-2);
-	border: 1px solid var(--cc-line);
-	border-radius: var(--cc-radius-sm);
 }
 </style>
