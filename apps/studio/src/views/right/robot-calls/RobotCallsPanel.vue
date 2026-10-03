@@ -38,8 +38,8 @@
  * 跑的时候按钮变成「取消」（`AbortController`），取消是**请求**不是结论：执行器那句
  * 「第 X 步的请求已经发出去了，设备那边可能还在跑——我们不替它下结论」照原样摆出来。
  */
-import { computed, onBeforeUnmount, ref, watch } from 'vue';
-import { runCompiledPlan, type PlanRunEvent } from '@codecanvas/robot-bridge';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { probeBridge, runCompiledPlan, type BridgeProbe, type PlanRunEvent } from '@codecanvas/robot-bridge';
 import { findTaskFormat } from '@codecanvas/task-import';
 import IconBase from '../../../shell/IconBase.vue';
 import { useStudioDevices } from '../../../shell/devices';
@@ -59,6 +59,8 @@ import {
 	runStatesByStepPath,
 	runVerdictOf,
 	writeBridgeBaseUrl,
+	BRIDGE_IDENTITY_NOTE,
+	BRIDGE_IDENTITY_UNKNOWN,
 	type RowRun,
 	type RunVerdict,
 } from './plan-run';
@@ -290,6 +292,53 @@ onBeforeUnmount(() => {
 	inFlight = null;
 });
 
+// ---------------------------------------------------------------------------
+// 对面是谁（`GET /v1/health`）
+// ---------------------------------------------------------------------------
+
+/**
+ * 对面自报的身份。`null` ＝ 还没问过（第一次问出来之前那一行不摆）。
+ *
+ * 为什么值得单独探一次：`POST /v1/skills/execute` 的 202 与终态只说明**有人接了这件活**，
+ * 不说明接活的是谁。开发替身（`tools/fake-bridge`）没有机器人也没有夹爪，收到什么都会
+ * 按时回 `success=true`——那份「走完了」是真 HTTP 换回来的，却不是一次真的动作。
+ * 把对面自报的版本摆出来，看的人自己就能判断。
+ */
+const bridgeIdentity = ref<BridgeProbe | null>(null);
+let identityProbe: AbortController | null = null;
+/** 上一次问的结果对应哪个地址：地址改了但还没问出来时，屏幕上不许留着旧地址的答案。 */
+let probedUrl: string | null = null;
+
+const askWhoIsThere = async (): Promise<void> => {
+	identityProbe?.abort();
+	const controller = new AbortController();
+	identityProbe = controller;
+	const url = baseUrl.value.trim();
+	const result = await probeBridge({ baseUrl: url, signal: controller.signal });
+	// 期间地址又改了（或组件没了）：这一条答的是旧地址，丢掉，别摆上去
+	if (controller.signal.aborted || identityProbe !== controller) return;
+	probedUrl = url;
+	bridgeIdentity.value = result;
+};
+
+/** 地址变了就把旧答案收起来，再问一次——留着旧答案等于把另一台的身份按在这一台上。 */
+watch(baseUrl, () => {
+	if (probedUrl !== null && probedUrl !== baseUrl.value.trim()) bridgeIdentity.value = null;
+	void askWhoIsThere();
+});
+
+onMounted(() => {
+	void askWhoIsThere();
+});
+
+/** 那一行摆什么。没问出来时**什么都不摆**——空白比一句猜的话好。 */
+const bridgeIdentityLine = computed<string | null>(() => {
+	const known = bridgeIdentity.value;
+	if (known === null) return null;
+	if (!known.ok) return `${BRIDGE_IDENTITY_UNKNOWN}：${known.detail}`;
+	return `对面：${known.health.service} · ${known.health.version}`;
+});
+
 /** 一行 + 它现在的运行态。合成一对是为了让模板对同一个 map 只查一次，也不必写断言。 */
 interface RowWithRun {
 	readonly row: RobotCallRow;
@@ -366,6 +415,21 @@ const blockedRowNote = BLOCKED_ROW_RUN_NOTE;
 					下发
 				</button>
 			</div>
+
+			<!--
+				对面是谁：bridge 自报的服务名与版本，原样照抄。
+				为什么非摆不可——`202` 与终态只说明**有人接了这件活**：开发替身没有机器人，
+				收到什么都会按时回 `success=true`。不把这一行摆出来，「走完了 3 / 3」就会被
+				读成「机器人抓到了」，而那件事一次都没发生过。
+			-->
+			<p
+				v-if="bridgeIdentityLine !== null"
+				class="rc-identity"
+				data-testid="robot-calls-bridge-identity"
+				:title="BRIDGE_IDENTITY_NOTE"
+			>
+				{{ bridgeIdentityLine }}
+			</p>
 
 			<!--
 				按不动就说清为什么：灰按钮自己不会解释（五档理由各说各的，判据在 plan-run.ts）。
@@ -711,6 +775,16 @@ const blockedRowNote = BLOCKED_ROW_RUN_NOTE;
 }
 
 /* 按不动的理由：灰按钮自己不解释，所以这句要跟着它。 */
+.rc-identity {
+	margin: 0;
+	font-size: var(--cc-fs-xs);
+	line-height: 1.5;
+	/* 版本号是读数，用等宽体；它自报的名字照原样，一个字母都不改 */
+	font-family: var(--cc-font-mono, ui-monospace, monospace);
+	color: var(--cc-text-faint);
+	overflow-wrap: anywhere;
+}
+
 .rc-gate {
 	margin: 0;
 	font-size: var(--cc-fs-xs);

@@ -12,7 +12,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { SKILL_PLAN_SCHEMA_VERSION, type SkillPlan, type SkillPlanStep } from '@codecanvas/contracts';
 import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import {
+	BRIDGE_HEALTH_PATH,
 	compilePlanToCalls,
+	probeBridge,
 	runCompiledPlan,
 	type CompiledPlan,
 	type PlanRunResult,
@@ -516,5 +518,66 @@ describe('缺省值：轮询的间隔与余量来自编译产物那一份（旧�
 
 		expect(onStep).toHaveBeenCalledTimes(result.events.length);
 		expect(onStep.mock.calls.map(([event]) => event.state)).toEqual(['running', 'completed']);
+	});
+});
+
+/*
+ * 对面是谁：`GET /v1/health`。
+ *
+ * 这一条存在的理由很具体：`202` 与终态只说明**有人接了这件活**。开发替身
+ * （`tools/fake-bridge`）没有机器人也没有夹爪，收到什么都会按时回 `success=true`——
+ * 那份「走完了」是真 HTTP 换回来的，却不是一次真的动作。把对面**自报的**服务名与版本
+ * 摆到屏幕上，看的人自己就能判断那边是替身还是真身。
+ */
+describe('probeBridge', () => {
+	const respond = (body: string, status = 200): typeof fetch =>
+		(async () => new Response(body, { status })) as unknown as typeof fetch;
+
+	it('对面自报什么就报什么：服务名与版本一个字都不改', async () => {
+		const probe = await probeBridge({
+			baseUrl: 'http://127.0.0.1:8788/',
+			fetchImpl: respond(JSON.stringify({ status: 'ok', service: 'roboframe-bridge', version: 'fake-bridge-0' })),
+		});
+		expect(probe).toEqual({ ok: true, health: { status: 'ok', service: 'roboframe-bridge', version: 'fake-bridge-0' } });
+	});
+
+	it('打的是 /v1/health，尾部斜杠不影响', async () => {
+		const seen: string[] = [];
+		const spy = (async (url: string) => {
+			seen.push(String(url));
+			return new Response(JSON.stringify({ version: 'v1' }), { status: 200 });
+		}) as unknown as typeof fetch;
+		await probeBridge({ baseUrl: 'http://127.0.0.1:8788///', fetchImpl: spy });
+		expect(seen).toEqual([`http://127.0.0.1:8788${BRIDGE_HEALTH_PATH}`]);
+	});
+
+	it('探不到不是失败：连不上 / 非 200 / 不是 JSON / 不是一份 Health，各给一句实话', async () => {
+		const dead = (async () => {
+			throw new Error('ECONNREFUSED');
+		}) as unknown as typeof fetch;
+		const refused = await probeBridge({ baseUrl: 'http://127.0.0.1:9', fetchImpl: dead });
+		expect(refused.ok).toBe(false);
+		expect(refused.ok ? '' : refused.detail).toContain('连不上');
+
+		const notFound = await probeBridge({ baseUrl: 'http://x', fetchImpl: respond('nope', 404) });
+		expect(notFound.ok ? '' : notFound.detail).toContain('404');
+
+		const notJson = await probeBridge({ baseUrl: 'http://x', fetchImpl: respond('<html>') });
+		expect(notJson.ok ? '' : notJson.detail).toContain('读不懂');
+
+		// `version` 是必填：缺了就不是一份 Health（不编一个版本号出来）。
+		const notHealth = await probeBridge({ baseUrl: 'http://x', fetchImpl: respond('{"hello":1}') });
+		expect(notHealth.ok).toBe(false);
+	});
+
+	it('地址空着时不去发请求，直说还没填', async () => {
+		let called = 0;
+		const spy = (async () => {
+			called += 1;
+			return new Response('{}', { status: 200 });
+		}) as unknown as typeof fetch;
+		const probe = await probeBridge({ baseUrl: '   ', fetchImpl: spy });
+		expect(probe.ok).toBe(false);
+		expect(called).toBe(0);
 	});
 });

@@ -36,7 +36,7 @@ import {
 	type PlanCall,
 	type PollSpec,
 } from './compile';
-import { executeAcceptedSchema, taskResultSchema, type TaskResult } from './models';
+import { executeAcceptedSchema, healthSchema, taskResultSchema, type Health, type TaskResult } from './models';
 
 export interface RunOverHttpOptions {
 	/** bridge 的地址，例如 `http://127.0.0.1:8788`（尾部斜杠会被去掉）。 */
@@ -460,4 +460,71 @@ export const runCompiledPlan = async (
 
 	const reason = stop;
 	return reason === undefined ? { ok: true, events } : { ok: false, events, reason };
+};
+
+// ---------------------------------------------------------------------------
+// 对面是谁
+// ---------------------------------------------------------------------------
+
+/** `GET /v1/health` 的路径。它**不要 token**（bridge 那边唯一没挂守卫的端点）。 */
+export const BRIDGE_HEALTH_PATH = '/v1/health';
+
+export interface BridgeProbeOptions {
+	/** bridge 的地址，例如 `http://127.0.0.1:8788`（尾部斜杠会被去掉）。 */
+	readonly baseUrl: string;
+	/** 测试注入：换掉全局 `fetch`。 */
+	readonly fetchImpl?: typeof fetch;
+	/** 与下发同一批头（真身那边也认，见 `RunOverHttpOptions.headers`）。 */
+	readonly headers?: Record<string, string>;
+	readonly signal?: AbortSignal;
+}
+
+/** 探到的那句话：`service` 与 `version` 都是**它自己报的**，这里一个字都不改。 */
+export type BridgeProbe =
+	| { readonly ok: true; readonly health: Health }
+	| { readonly ok: false; readonly detail: string };
+
+/**
+ * 对面是谁：问一句 `GET /v1/health`。
+ *
+ * 为什么要有这个探针：`POST /v1/skills/execute` 的 202 与随后的终态只说明**有人接了这件活**，
+ * 不说明接活的是谁。开发替身（`tools/fake-bridge`）没有机器人、没有夹爪——它收到什么都会
+ * 按时回一个 `success=true`。那份「走完了」是真 HTTP 换回来的，可它不是一次真的抓取。
+ * 把对面**自己报的**服务名与版本摆到屏幕上，看的人自己就能判断那边是替身还是真身，
+ * 不必由我们替他下结论（也就不会有「界面说这是真机」这种我们自己编的话）。
+ *
+ * 探不到**不是失败**：有些部署不给 health，或者跨网段。所以它返回一句如实的话，不抛。
+ */
+export const probeBridge = async (options: BridgeProbeOptions): Promise<BridgeProbe> => {
+	const fetchImpl = options.fetchImpl ?? fetch;
+	// 先把两头空白去掉再判空：地址框里只剩空格与判空是同一件事（「还没填」）。
+	const base = options.baseUrl.trim().replace(/\/+$/, '');
+	if (base === '') return { ok: false, detail: '还没填 bridge 地址' };
+
+	let response: Response;
+	try {
+		response = await fetchImpl(
+			`${base}${BRIDGE_HEALTH_PATH}`,
+			options.signal === undefined
+				? { method: 'GET', headers: options.headers }
+				: { method: 'GET', headers: options.headers, signal: options.signal },
+		);
+	} catch (error) {
+		return { ok: false, detail: `连不上：${messageOf(error)}` };
+	}
+
+	const text = await response.text();
+	if (!response.ok) {
+		return { ok: false, detail: `${BRIDGE_HEALTH_PATH} 回了 ${String(response.status)}：${shorten(text.trim())}` };
+	}
+
+	let raw: unknown;
+	try {
+		raw = JSON.parse(text);
+	} catch {
+		return { ok: false, detail: `回的读不懂（不是 JSON）：${shorten(text.trim())}` };
+	}
+	const parsed = healthSchema.safeParse(raw);
+	if (!parsed.success) return { ok: false, detail: `回的不是一份 Health：${shorten(text.trim())}` };
+	return { ok: true, health: parsed.data };
 };
