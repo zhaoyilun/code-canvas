@@ -99,15 +99,14 @@ export function createStage(canvas: HTMLCanvasElement, rig: So101Rig, kit: Kit):
 	scene.background = new THREE.Color(0x0a121d);
 	scene.fog = new THREE.Fog(0x0a121d, 1.6, 4.2);
 
-	const camera = new THREE.PerspectiveCamera(42, 1, 0.02, 40);
-	camera.position.set(0.62, 0.48, 0.88);
+	const camera = new THREE.PerspectiveCamera(38, 1, 0.02, 40);
 
 	const controls = new OrbitControls(camera, canvas);
 	controls.enableDamping = true;
 	controls.dampingFactor = 0.08;
-	controls.target.set(0, 0.16, 0.10);
-	controls.minDistance = 0.18;
-	controls.maxDistance = 1.6;
+	// 上下限跟着取景距离走（在下面量完包围盒才定）：写死的话，换个尺寸的臂就推不近也拉不远。
+	controls.minDistance = 0.05;
+	controls.maxDistance = 3;
 	controls.maxPolarAngle = Math.PI * 0.495;
 
 	scene.add(new THREE.HemisphereLight(0x9dc0e0, 0x0a0f14, 0.5));
@@ -161,6 +160,33 @@ export function createStage(canvas: HTMLCanvasElement, rig: So101Rig, kit: Kit):
 		camera.updateProjectionMatrix();
 	}
 	resize();
+
+	/**
+	 * 机位**量出来**，不写死。
+	 *
+	 * 为什么：臂的尺寸与基座高度都是 `so101.ts` 里量出来的（`baseHeight` / `upperArm` /
+	 * `foreArm` / `palmTop` / `finger`），写死一串坐标的话，那边改一个数，腕部就顶到画面外
+	 * ——这一版之前正是这样（小窗里腕和夹爪被上沿切掉，台面却占了三分之二）。
+	 * 所以：静止姿态量一次包围盒（**含待抓的那块方块**——它是这一步的参照物，切掉它
+	 * 就看不出爪子够不够得着），把相机按包围球摆到看得全它的地方，再让出一成余量。
+	 *
+	 * 只量一次，之后画面完全交给鼠标（`OrbitControls`）——每帧重新取景会把用户拖出来的
+	 * 视角顶回去。
+	 */
+	const framed = new THREE.Box3().setFromObject(rig.group).union(new THREE.Box3().setFromObject(block));
+	const centre = framed.getCenter(new THREE.Vector3());
+	const radius = framed.getSize(new THREE.Vector3()).length() * 0.5;
+	const aspect = Number.isFinite(camera.aspect) && camera.aspect > 0 ? camera.aspect : 1;
+	const fitByHeight = radius / Math.tan((camera.fov * Math.PI) / 360);
+	// 画布比高窄时，横向才是卡住取景的那一头——所以两个方向都算，取大的那个。
+	const fitByWidth = fitByHeight / aspect;
+	const distance = Math.max(fitByHeight, fitByWidth) * 1.04;
+	// 一个偏左前上方的机位：看得到台面、也看得到爪子朝哪儿伸。
+	const eye = new THREE.Vector3(0.46, 0.30, 1.0).normalize().multiplyScalar(distance);
+	camera.position.copy(centre).add(eye);
+	controls.target.copy(centre);
+	controls.minDistance = distance * 0.25;
+	controls.maxDistance = distance * 2.2;
 
 	return {
 		camera,

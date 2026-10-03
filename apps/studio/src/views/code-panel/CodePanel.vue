@@ -476,6 +476,30 @@ watch(selectedStep, async (index) => {
 	color: var(--cc-accent-strong);
 }
 
+/*
+ * 换模块时的入场：代码行淡入一下，与流程卡、积木三处同一个口径（220ms、只动 opacity）。
+ * 不做逐行延迟——这几行是同一份实现同时到位的。
+ */
+.cp-line {
+	animation: cc-line-in 220ms ease-out 1 both;
+}
+
+@keyframes cc-line-in {
+	from {
+		opacity: 0;
+	}
+
+	to {
+		opacity: 1;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.cp-line {
+		animation: none;
+	}
+}
+
 .cp-line.is-unsupported .cp-src {
 	color: var(--cc-danger-strong);
 }

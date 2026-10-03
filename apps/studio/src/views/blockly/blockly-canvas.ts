@@ -546,6 +546,47 @@ export const renderPlanInto = (options: PlanRenderOptions): PlanRenderResult | n
 	};
 };
 
+/** 积木入场：一个块层一条计时器（连着换模块时，上一次那条收尾不许把这一次的类摘掉）。 */
+const enterTimers = new WeakMap<object, ReturnType<typeof setTimeout>>();
+
+/** 块层上那个类名：样式表按它放一段淡入（见 `BlocklyView.vue` 的 `:deep`）。 */
+export const BLOCKS_ENTER_CLASS = 'cc-blocks-enter';
+
+/** 淡入时长之外再留一点收尾余量，和样式表里那段 `220ms` 配套。 */
+const BLOCKS_ENTER_MS = 320;
+
+/**
+ * 让积木「落定」：给块层挂一个类，由样式表放一段淡入（见 `BlocklyView.vue` 的 `:deep`）。
+ *
+ * 为什么整层淡入而不是一块块来：**不做分批**——画面换模块时该做的是把「换了」讲清楚，
+ * 不是演一段生成；而块与块之间还有连接线，一块块落会把连线拉成一段一跳的动画。
+ *
+ * 只动 `opacity`：`transform` 会挪动 `blocklyBlockCanvas` 的坐标系，
+ * 而 Blockly 自己按内部坐标算命中区与连线——动画那两百毫秒里鼠标点下去可能落空。
+ *
+ * 放在模块层（不在 `useBlocklyCanvas` 的闭包里）是为了能拿一个假工作区单独量它——
+ * 计时器按块层记，所以语义与「每个画布自己一个」一样。
+ */
+export function playBlockEntrance(current: Blockly.WorkspaceSvg): void {
+	if (typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches === true) return;
+	const layer = current.getCanvas() as unknown as { classList?: DOMTokenList } | null;
+	const classes = layer?.classList;
+	if (layer == null || classes === undefined) return;
+	classes.remove(BLOCKS_ENTER_CLASS);
+	// 读一次布局把上一轮动画的收尾冲掉——不这样，连着换两个模块时第二次不会重放
+	void (layer as unknown as Element).getBoundingClientRect?.();
+	classes.add(BLOCKS_ENTER_CLASS);
+	const pending = enterTimers.get(layer);
+	if (pending !== undefined) clearTimeout(pending);
+	enterTimers.set(
+		layer,
+		setTimeout(() => {
+			enterTimers.delete(layer);
+			classes.remove(BLOCKS_ENTER_CLASS);
+		}, BLOCKS_ENTER_MS),
+	);
+}
+
 export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 	const store = useStudioDocument();
 
@@ -813,6 +854,7 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 				status.value = 'plan';
 				Blockly.svgResize(current);
 				requestFit(current);
+				playBlockEntrance(current);
 			} else {
 				const result = renderDeclaration({
 					workspace: current,
@@ -829,6 +871,7 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 				syncedDigest = declaration.digest;
 				status.value = writeSuspended.value ? 'broken' : 'synced';
 				Blockly.svgResize(current);
+				playBlockEntrance(current);
 				// 重画之后把这条实现链量一遍：按内容定一个装得下、又不会小到看不清的比例，并居中。
 				// 只在这里（以及第一次量到容器尺寸时）做——用户自己缩放/拖动过的视图不会被抢回去。
 				requestFit(current);

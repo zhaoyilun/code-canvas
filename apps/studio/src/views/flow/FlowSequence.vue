@@ -273,6 +273,39 @@ const connectorAfter = (position: number): boolean => {
 		box-shadow 0.15s ease;
 }
 
+/*
+ * 入场：卡片与连线一起淡入、轻微上移。
+ *
+ * **不做逐个延迟**：这几张卡是同一份数据同时到位的，一张张落下会变成一段演出，
+ * 而屏幕上没有一个字说得清那段时间在等什么。同时淡入只做一件事——把「换了」讲清楚。
+ *
+ * 只改 `opacity` 与 `transform`（都不触发布局）：映射栏那条逐帧测量量的是
+ * `getBoundingClientRect`，它会跟着这两样走，连线不会在动画里指错地方。
+ */
+.node-card,
+.node-connector {
+	animation: cc-node-in 220ms ease-out 1 both;
+}
+
+@keyframes cc-node-in {
+	from {
+		opacity: 0;
+		transform: translateY(-5px);
+	}
+
+	to {
+		opacity: 1;
+		transform: none;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.node-card,
+	.node-connector {
+		animation: none;
+	}
+}
+
 .node-card:hover {
 	border-color: var(--cc-line-strong);
 }

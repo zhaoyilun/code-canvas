@@ -170,6 +170,27 @@ const taskName = computed(() => store.declaration.value?.name ?? '');
  * 而且画布上本来就用 `filter` 画徽标那圈光（上面那条），同一套手段。
  * 动效关掉时只剩一个静态的淡辉光——「这一块在跑」照样看得出来。
  */
+/*
+ * 换模块时的入场：整层积木淡入一下（类由 `blockly-canvas.ts` 的 `playBlockEntrance` 挂/摘）。
+ *
+ * 只管 `opacity`：块层上做 `transform` 或 `scale` 会挪动 `blocklyBlockCanvas` 的坐标系，
+ * 而 Blockly 按内部坐标算命中区与连线——那两百毫秒里点下去会落空。
+ * 动效偏好关掉时这条整条不生效，画面直接换。
+ */
+.canvas-host :deep(.blocklyBlockCanvas.cc-blocks-enter) {
+	animation: cc-blocks-in 220ms ease-out 1 both;
+}
+
+@keyframes cc-blocks-in {
+	from {
+		opacity: 0;
+	}
+
+	to {
+		opacity: 1;
+	}
+}
+
 .canvas-host :deep([data-cc-step-running='true']) {
 	animation: cc-block-lit var(--cc-lit-flash-ms) ease-out 1 forwards;
 }
@@ -188,6 +209,10 @@ const taskName = computed(() => store.declaration.value?.name ?? '');
 	.canvas-host :deep([data-cc-step-running='true']) {
 		animation: none;
 		filter: drop-shadow(0 0 2px var(--cc-flow-settled));
+	}
+
+	.canvas-host :deep(.blocklyBlockCanvas.cc-blocks-enter) {
+		animation: none;
 	}
 }
 
