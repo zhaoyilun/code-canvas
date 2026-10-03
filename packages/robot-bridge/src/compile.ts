@@ -31,6 +31,7 @@ import {
 	type Diagnostic,
 	type JsonObject,
 	type SkillPlan,
+	type SkillPlanOnFailure,
 	type SkillPlanStep,
 } from '@codecanvas/contracts';
 // `TaskResult` / `ExecuteRequest` 是 **bridge 的形状**（`./models` 照 pydantic 镜像过来的），
@@ -96,6 +97,15 @@ export type PlanCall =
 			readonly pollPath: string;
 			readonly stepPath: string;
 			readonly poll: PollSpec;
+			/**
+			 * 这一步失败之后停不停——**给执行器读的**，不是给 bridge 的（`ExecuteRequest` 里没有这一栏，
+			 * 这一栏也不进请求体）。缺省（不带这个键）＝ `'stop'`：失败即停。
+			 *
+			 * 为什么必须跟着编译产物走：计划里写了 `onFailure: 'continue'`，而编译把计划压成了调用列
+			 * ——执行器手上只有这一列。不带这一栏，执行器就只能对每一步都按「停」来（`'continue'` 那半
+			 * 边计划永远走不到），或者反过来去猜。它是**加的一栏**：老读者不看它就还是老行为。
+			 */
+			readonly onFailure?: SkillPlanOnFailure;
 	  }
 	| { readonly kind: 'wait'; readonly seconds: number; readonly stepPath: string }
 	| { readonly kind: 'branch'; readonly condition: BranchCondition; readonly stepPath: string };
@@ -233,9 +243,11 @@ export const compilePlanToCalls = (plan: SkillPlan, options: CompilePlanOptions)
 						pollPath: taskPath(taskId),
 						stepPath,
 						poll: DEFAULT_POLL_SPEC,
+						// `onFailure` 刻意不进 `request`：bridge 的 ExecuteRequest 里没有这一栏，
+						// 「失败之后停不停」是客户端看着轮询结果拿的主意，不是发给设备的命令。
+						// 但它得进这条 call：执行器手上只有这一列调用（见 `PlanCall` 那一栏的说明）。
+						...(step.onFailure === undefined ? {} : { onFailure: step.onFailure }),
 					});
-					// `onFailure` 刻意不进请求：bridge 的 ExecuteRequest 里没有这一栏，
-					// 「失败之后停不停」是客户端看着轮询结果拿的主意，不是发给设备的命令。
 					break;
 				}
 				case 'primitive': {
