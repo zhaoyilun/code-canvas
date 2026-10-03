@@ -79,7 +79,12 @@ import {
 	type SkillPlanStep,
 	type StepGate,
 } from '@codecanvas/contracts';
-import { compilePlanToCalls, runCompiledPlan, type CompiledPlan, type PlanRunEvent } from '@codecanvas/robot-bridge';
+import {
+	compilePlanToCalls,
+	runCompiledPlan,
+	type CompiledPlan,
+	type PlanRunEvent,
+} from '@codecanvas/robot-bridge';
 import {
 	DEFAULT_TARGET_BLOCK,
 	mountVirtualDevice,
@@ -94,6 +99,7 @@ import type { StudioDevice } from '../../shell/devices';
 import { useStudioDocument } from '../../state/document';
 import { nodeAtPlanPath, primitiveLabelOf, waitLabelOf } from '../shared/plan-structure';
 import { DISPATCH_PATH_NOTE, readBridgeBaseUrl } from './robot-calls/plan-run';
+import { blockedStepCountOf } from './robot-calls/robot-calls';
 
 const props = defineProps<{
 	device: StudioDevice | null;
@@ -459,6 +465,15 @@ function openLedger(): number {
 	return runSeq;
 }
 
+
+/** 这份计划里有几步**编译期就编不出请求**（判据在 `robot-calls.ts`，与派发面板用的是同一个数）。 */
+function blockedStepCount(plan: SkillPlan): number {
+	return blockedStepCountOf(plan, {
+		catalog: props.device?.catalog ?? ROBOFRAME_SO101_CATALOG,
+		deviceRef: props.device?.deviceRef ?? 'unknown_device',
+	});
+}
+
 /** 起步那句话：虚拟设备说「执行中」；真机说「下发中」并把**发给谁**写出来（地址是这一趟的一部分）。 */
 function startLine(plan: SkillPlan): string {
 	return isVirtual.value
@@ -477,15 +492,30 @@ function startLine(plan: SkillPlan): string {
  * 「本机仿真演不了这一步」（实现在执行侧），真机上是「请求没发出去」（bridge 连不上 / 404）。
  * 拿一句话盖住两种事实，就会有一边的看的人去查一个并不存在的故障。
  */
-function outcomeLine(result: RunReport, plan: SkillPlan): string {
+function outcomeLine(result: RunReport, plan: SkillPlan, blocked: number): string {
 	const failed = stepLines.value.filter((line) => line.state === 'failed').length;
 	const unreachable = stepLines.value.filter((line) => line.state === 'unreachable').length;
 	const unreachableFace = isVirtual.value ? '本机仿真演不了（实现在执行侧）' : '发不出去（请求没到设备）';
 	const tail = unreachable === 0 ? '' : `另有 ${String(unreachable)} 步${unreachableFace}，`;
+	/*
+	 * `blocked` 是**编译期就没有请求可编**的那几步（`primitive` 步：bridge 只接技能）。
+	 *
+	 * 它必须单独数，理由与上面那条一样，只是更隐蔽：这种步**不产生运行事件**，
+	 * 于是 `stepLines` 里根本没有它那一行 —— 只看行的话它会整个消失，
+	 * 屏幕上于是写着「3 步都走通了」，而真正发出去的只有 2 条请求。
+	 * （实测撞到过：`open_gripper` 被模型生成成原语步，面板同一屏上「2 条请求 ·
+	 * 1 步送不出去」与「3 步都走通了」当场打架。）
+	 */
+	const blockedNote = blocked === 0 ? '' : `另有 ${String(blocked)} 步送不出去（编译期就编不出请求），`;
 	if (result.ok) {
-		if (failed === 0 && unreachable === 0) return `计划完成：${String(plan.plan.length)} 步都走通了。`;
-		if (failed === 0) return `计划跑完了：${String(unreachable)} 步${unreachableFace}，其余走通。`;
-		return `计划跑完了：有 ${String(failed)} 步失败（计划里标了失败也往下走），${tail}其余走通。`;
+		if (failed === 0 && unreachable === 0 && blocked === 0) {
+			return `计划完成：${String(plan.plan.length)} 步都走通了。`;
+		}
+		if (failed === 0 && unreachable === 0) {
+			return `计划跑完了：${blockedNote}其余走通。`;
+		}
+		if (failed === 0) return `计划跑完了：${unreachable} 步${unreachableFace}，${blockedNote}其余走通。`;
+		return `计划跑完了：有 ${String(failed)} 步失败（计划里标了失败也往下走），${tail}${blockedNote}其余走通。`;
 	}
 	return `计划中断：${result.reason ?? '某一步没做成'}（失败即停，不自动重试）`;
 }
@@ -548,7 +578,7 @@ async function runPlan(): Promise<void> {
 		// 步骤行由两条路各自订的监听器写（最终都走 `writeRow`），这里不再照着结果重画一遍：
 		// 两个来源写同一块地方，早晚会有一处忘了更新。
 		const result = await (isVirtual.value ? runOnDevice(plan) : runOverBridge(plan, null));
-		if (mine === runSeq) status.value = outcomeLine(result, plan);
+		if (mine === runSeq) status.value = outcomeLine(result, plan, blockedStepCount(plan));
 	} catch (error) {
 		// `run()` 的回绝（设备已卸载那种）在界面上要有一句人话，不许变成一个没人接的 rejection
 		if (mine === runSeq) status.value = `这一趟没跑起来：${messageOf(error)}`;
@@ -620,7 +650,7 @@ async function stepRun(): Promise<void> {
 				target.releaseStep();
 			};
 			const result = await target.beginStepRun(plan);
-			if (mine === runSeq) status.value = outcomeLine(result, plan);
+			if (mine === runSeq) status.value = outcomeLine(result, plan, blockedStepCount(plan));
 			return;
 		}
 		// 真机：同一个形状的闸，建在这一层（bridge 那条路每趟一个）
@@ -629,7 +659,7 @@ async function stepRun(): Promise<void> {
 			gate.release();
 		};
 		const result = await runOverBridge(plan, gate);
-		if (mine === runSeq) status.value = outcomeLine(result, plan);
+		if (mine === runSeq) status.value = outcomeLine(result, plan, blockedStepCount(plan));
 	} catch (error) {
 		if (mine === runSeq) status.value = `这一趟没跑起来：${messageOf(error)}`;
 	} finally {

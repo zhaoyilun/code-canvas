@@ -32,6 +32,7 @@ import {
 } from '@codecanvas/contracts';
 import {
 	BRIDGE_EXECUTE_PATH,
+	BRIDGE_PLAN_DIAGNOSTIC_CODES,
 	STEP_ROUTING,
 	compilePlanToCalls,
 	type CompiledPlan,
@@ -465,6 +466,22 @@ export const compileDeclarationToCalls = (input: RobotCallsInput): RobotCallsRes
 };
 
 /** 一句话说清「这一步会发到哪儿」——面板把路由清单里那句 note 原样展示。 */
+/**
+ * 这份计划里有几步**编译期就编不出请求**（现在只有一种：`primitive` 步——bridge 只接技能）。
+ *
+ * 为什么要单独数它：这种步**不产生运行事件**，所以步骤账本里根本没有它那一行 ——
+ * 只看行的话它会整个消失，屏幕上于是写着「3 步都走通了」，而真发出去的只有 2 条请求。
+ * 实测撞到过：模型把「张开夹爪」生成成原语步，同一屏上「2 条请求 · 1 步送不出去」
+ * 与「3 步都走通了」当场打架。判据取自编译器的诊断码，不是自己再数一遍计划。
+ */
+export const blockedStepCountOf = (
+	plan: SkillPlan,
+	context: { readonly catalog: CapabilityCatalog; readonly deviceRef: string },
+): number =>
+	compilePlanToCalls(plan, context).diagnostics.filter(
+		(diagnostic) => diagnostic.code === BRIDGE_PLAN_DIAGNOSTIC_CODES.primitiveUnsupported,
+	).length;
+
 export const routingNoteOf = (step: SkillPlanStep['step']): string => routingOfStep(step).note;
 
 /**

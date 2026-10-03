@@ -25,6 +25,7 @@ import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import {
 	SKILL_PLAN_SCHEMA_VERSION,
 	createDeterministicIdFactory,
+	validateSkillPlan,
 	type CapabilityCatalog,
 	type SkillPlan,
 	type WorkflowDeclaration,
@@ -36,7 +37,7 @@ import {
 	compilePlanToCalls,
 } from '@codecanvas/robot-bridge';
 import type { CompiledPlan, PlanRunEvent, PlanRunResult, RunOverHttpOptions } from '@codecanvas/robot-bridge';
-import { importSkillPlan } from '@codecanvas/task-import';
+import { declarationToSkillPlan, importSkillPlan } from '@codecanvas/task-import';
 import { loadSampleTask, useStudioDocument } from '../../../state/document';
 import { setSelectedDevice } from '../../../shell/devices';
 import RightPanel from '../RightPanel.vue';
@@ -64,6 +65,8 @@ import {
 	compileDeclarationToCalls,
 	robotCallsView,
 	type RobotCallRow,
+	blockedStepCountOf,
+
 } from './robot-calls';
 
 /**
@@ -1216,5 +1219,51 @@ describe('发给机器人 · 按下去真的发（组件）', () => {
 		expect(orphan.text()).toContain('9.then.7');
 		expect(orphan.text()).toContain('确实发生过');
 		wrapper.unmount();
+	});
+});
+
+/*
+ * 「编译期就编不出请求」的那几步要数得出来。
+ *
+ * 为什么这条要有：这种步**不产生运行事件**，步骤账本里没有它那一行 ——
+ * 只看行的话它会整个消失。设备面板的状态语就这么撒过一次谎：屏幕上写着
+ * 「3 步都走通了」，而同一屏的派发摘要写着「2 条请求 · 1 步送不出去」。
+ */
+describe('blockedStepCountOf：几步是编译期就编不出请求的', () => {
+	const countOf = (text: string): number => {
+		const imported = importSkillPlan(JSON.parse(text), { catalog: DEMO_CATALOG, idFactory: createDeterministicIdFactory() });
+		if (!imported.ok) throw new Error('夹具计划应当能导入');
+		// 过一道校验拿回**有类型的**计划（`declarationToSkillPlan` 交的是不透明对象）
+		const checked = validateSkillPlan(declarationToSkillPlan(imported.declaration), { catalog: DEMO_CATALOG });
+		if (!checked.ok) throw new Error('夹具计划应当合法');
+		return blockedStepCountOf(checked.plan, { catalog: DEMO_CATALOG, deviceRef: 'demo_device' });
+	};
+
+	it('全是技能步 → 0', () => {
+		expect(
+			countOf(
+				JSON.stringify({ schemaVersion: SKILL_PLAN_SCHEMA_VERSION, robot: DEMO_ROBOT, plan: [{ step: 'skill', skill: DEMO_SKILL }] }),
+			),
+		).toBe(0);
+	});
+
+	it('夹了一条原语步 → 1（这就是「都走通了」会撒谎的那种计划）', () => {
+		expect(
+			countOf(
+				JSON.stringify({
+					schemaVersion: SKILL_PLAN_SCHEMA_VERSION,
+					robot: DEMO_ROBOT,
+					plan: [
+						{ step: 'skill', skill: DEMO_SKILL },
+						{ step: 'primitive', primitive: DEMO_PRIMITIVE },
+						{ step: 'skill', skill: DEMO_SKILL },
+					],
+				}),
+			),
+		).toBe(1);
+	});
+
+	it('等待与分支不算：它们没有请求，但那是**本地做**，不是送不出去', () => {
+		expect(countOf(ONLY_LOCAL_PLAN_TEXT)).toBe(0);
 	});
 });
