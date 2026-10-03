@@ -18,6 +18,26 @@ export const stableReferenceSchema = z
 	.max(STABLE_REFERENCE_MAX_LENGTH)
 	.regex(STABLE_REFERENCE_PATTERN, 'must match /^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/');
 
+/**
+ * **执行侧接口**的稳定引用（ROS action / service 名，例如 `/manipulation/execute_pick`）。
+ *
+ * 与 `stableReferenceSchema` 同一口径，只放宽一处：允许一个首斜杠，以及路径分段用的 `/`。
+ * 为什么不能直接用它：`stableReferenceSchema` 管的是 id 与键，字符集里没有 `/`——
+ * 而这类名字在设备侧就是**绝对路径**，首斜杠是名字的一部分
+ * （`/manipulation/execute_pick` 与 `manipulation/execute_pick` 不是一个接口）。
+ * 拿 id 的规则去卡接口名，只会把真名字拒掉，然后逼着人把名字改短——那是伪造。
+ *
+ * 收紧的部分照旧：不许空白、不许以非字母数字开头（首个 `/` 之后必须是名字）、
+ * 不许 `//` 或结尾 `/`（空分段不是合法 ROS 名）、长度 1–128。
+ */
+export const INTERFACE_REFERENCE_PATTERN = /^\/?[a-zA-Z0-9](?:[a-zA-Z0-9._:-]|\/[a-zA-Z0-9._:-])*$/;
+
+export const interfaceReferenceSchema = z
+	.string()
+	.min(STABLE_REFERENCE_MIN_LENGTH)
+	.max(STABLE_REFERENCE_MAX_LENGTH)
+	.regex(INTERFACE_REFERENCE_PATTERN, 'must be an interface name like /manipulation/execute_pick');
+
 export const isStableReference = (value: unknown): value is string =>
 	typeof value === 'string' &&
 	value.length >= STABLE_REFERENCE_MIN_LENGTH &&

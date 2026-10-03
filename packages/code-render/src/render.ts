@@ -4,12 +4,13 @@
  * 粒度是「工作流上的一个模块 = 一个函数」：节点的 `parameters.action` 就是 `capabilityRef`，
  * 代码面板显示这个能力在目录里的 `implementation`——机器为了执行它具体做了什么。
  *
- * **实现是一棵语句树**（`call` / `set` / `if`，见 `@codecanvas/contracts` 的 `capability.ts`），
+ * **实现是一棵语句树**（`call` / `set` / `if` / `delegate`，见 `@codecanvas/contracts` 的 `capability.ts`），
  * 所以这里是**递归**渲染：语句 → 表达式 → 语句。`if` 展开成多行、给子语句加缩进，
  * 因为「一串平铺的调用」看不出这是一段程序——数据形状改好了，渲染就得跟上。
  *
  * 四条不许破的规矩：
- * - **参数名与顺序来自 `catalog.primitives`**（原语定义），这里一个参数名都不手写；
+ * - **参数名与顺序来自目录**（`call` 看 `catalog.primitives`，`delegate` 看本能力的参数表），
+ *   这里一个参数名都不手写；
  * - 目录里没有的能力/原语不假装认识：给诊断 + 说明行，节点名照样显示；
  * - 行 ↔ 步骤的映射**在这里产出**（`lines[].stepPath` / `lines[].stepIndex` / `steps[]`），界面只读不重算；
  * - **缩进是文本的一部分**（4 个空格），不靠 CSS——复制的文本和面板上看到的必须是同一段程序。
@@ -24,6 +25,7 @@ import {
 	jsonDetail,
 	type CapabilityCatalog,
 	type CapabilitySpec,
+	type CatalogParameter,
 	type Diagnostic,
 	type ImplArgument,
 	type ImplExpression,
@@ -45,19 +47,24 @@ export interface RenderedLine {
 	readonly text: string;
 	/** 缩进档数（0 = 顶层）。 */
 	readonly indent: number;
-	/** `call`/`set` = 一条语句；`if`/`else` = 分支头；`unsupported` = 目录里查不到；`comment` = 节点自身的注记。 */
 	/**
 	 * `call`/`set` = 一条语句；`if`/`else` = 分支头；`unsupported` = 目录里查不到；
 	 * `comment` = 节点自身的注记；`argument` = 一条**续行**——
 	 * 实参是结构化载荷、摊位摊不下时才摊开的那几行。它属于上面那条语句，
-	 * 所以不计入「几个原语」，也不单独占一步。
+	 * 所以不计入「几个原语」，也不单独占一步；`delegate` = 交给执行侧接口的那一行，
+	 * 它**不是**原语调用（`primitiveRef` 是 null），所以同样不进原语计数。
 	 */
-	readonly kind: 'call' | 'set' | 'if' | 'else' | 'unsupported' | 'comment' | 'argument';
-	/** 这一行所属的**顶层**语句下标（0 基）；注释行是 null。界面联动只认它。 */
+	readonly kind: 'call' | 'set' | 'if' | 'else' | 'unsupported' | 'comment' | 'argument' | 'delegate';
+	/** 这一行所属的**顶层**语句下标（0 基）；不属于任何一步的注记（节点自身的说明行）是 null。界面联动只认它。 */
 	readonly stepIndex: number | null;
-	/** 这一行精确对应的树路径，例如 `"1"`、`"1.then.0"`、`"1.else.2"`；注释行是 null。 */
+	/**
+	 * 这一行精确对应的树路径，例如 `"1"`、`"1.then.0"`、`"1.else.2"`；不属于任何一步的注记是 null。
+	 *
+	 * `delegate` 的说明行带着**同一条**路径：它讲的就是这一步，高亮时要跟委托行一起亮，
+	 * 不能因为「它是注释」就掉出联动之外。
+	 */
 	readonly stepPath: string | null;
-	/** 这一行调的原语名；赋值/分支/注释行是 null。 */
+	/** 这一行调的原语名；赋值/分支/注释行、以及**委托行**（它调的不是本目录里的原语）都是 null。 */
 	readonly primitiveRef: string | null;
 	/** 这一行调的原语在目录里查得到（说明行是 false）。 */
 	readonly known: boolean;
@@ -71,9 +78,9 @@ export interface RenderedStepSpan {
 	readonly path: string;
 	/** 该顶层语句的种类；界面据此决定这一步长什么样。 */
 	readonly kind: ImplStatement['kind'];
-	/** 顶层语句直接调的那个原语；`set` / `if` 没有就是 null。 */
+	/** 顶层语句直接调的那个原语；`set` / `if` / `delegate` 没有就是 null。 */
 	readonly primitiveRef: string | null;
-	/** 渲染到第几行（1 基）——这一行的**头**（`if` 的条件行就是头）。 */
+	/** 渲染到第几行（1 基）——这一行的**头**（`if` 的条件行、`delegate` 的说明行就是头）。 */
 	line: number;
 	/** 它渲染出的最后一行（1 基）；`if` 含整个 then/else 体。渲染完后回填。 */
 	lastLine: number;
@@ -144,6 +151,24 @@ const isImplExpression = (argument: ImplArgument): argument is ImplExpression =>
 	typeof argument === 'object' && argument !== null && !Array.isArray(argument);
 
 type Kind = RenderedLine['kind'];
+
+/**
+ * 实参表的**来源**：谁的参数名与顺序说了算。
+ *
+ * 两种语句各有一个来源——`call` 看原语定义（`catalog.primitives`），
+ * `delegate` 看**本能力的参数表**（委托出去的是这个能力的入参，中间没有原语那一层）。
+ * 两者渲染起来一模一样，所以只在这里分一次，别在渲染里分叉出两套写法。
+ */
+interface ArgumentOwner {
+	/** 诊断消息里报的名字：原语名，或者执行侧接口名。 */
+	readonly ref: string;
+	readonly parameters: readonly CatalogParameter[];
+}
+
+const primitiveOwner = (primitive: PrimitiveSpec): ArgumentOwner => ({
+	ref: primitive.primitiveRef,
+	parameters: primitive.parameters,
+});
 
 /** 压一行（行号 = 已产出行数 + 1），返回它的行号。 */
 type PushLine = (
@@ -380,7 +405,7 @@ const renderStatement = (
 		// 续行标成 `argument`——它们属于同一步，不该被算成新的原语调用。
 		const [head, ...rest] = `${statement.primitiveRef}(${renderArguments(
 			state,
-			primitive,
+			primitiveOwner(primitive),
 			statement.arguments,
 			path,
 			true,
@@ -398,6 +423,43 @@ const renderStatement = (
 		// 赋值的右值永远加括号：孤立看也认得出这是一整个取值。
 		const value = renderExpression(state, statement.value, path, true);
 		push(`${statement.target} = ${value}`, 'set', depth, topIndex, path, null, true);
+		return;
+	}
+
+	if (statement.kind === 'delegate') {
+		// 实现在执行侧：这里能写的只有「交给哪个接口、带什么实参」。
+		// **不编步骤**——上游的委托型技能（`pick_object` → `/manipulation/execute_pick`）
+		// 运行时才生成候选，模板里根本没有可渲染的调用序列。
+		//
+		// 实参名取自**本能力的参数表**，不是原语表：委托出去的是这个能力的入参，
+		// 中间没有原语这一层。`{kind:'param'}` 照旧解析到能力参数上，
+		// 于是「同一个技能被不同 `target_name` 复用」在代码里是看得见的。
+		push(
+			`# 实现在执行侧，不在模板里：${singleLine(statement.interfaceRef)}`,
+			'comment',
+			depth,
+			topIndex,
+			path,
+			null,
+			true,
+		);
+		// 实参名与顺序取自**本能力的参数表**，但**只渲染真的交出去的那些**：
+		// 执行侧接口的签名不在目录里，能力参数只是它的超集——某个参数由同棵树里的
+		// `call` 用掉、并不转发给接口，那是正常的，不能给它编一个占位符。
+		const handedOver = new Set(Object.keys(statement.arguments));
+		const owner: ArgumentOwner = {
+			ref: statement.interfaceRef,
+			parameters: capability.parameters.filter((parameter) => handedOver.has(parameter.name)),
+		};
+		push(
+			`delegate ${statement.interfaceRef}(${renderArguments(state, owner, statement.arguments, path, true)})`,
+			'delegate',
+			depth,
+			topIndex,
+			path,
+			null,
+			true,
+		);
 		return;
 	}
 
@@ -454,33 +516,33 @@ const unknownPrimitive = (state: RenderState, primitiveRef: string, path: string
 /**
  * 实参表文本：`参数名=值` 用 `, ` 连接。
  *
- * **参数名与顺序逐字来自原语定义**——实现里多给的实参不渲染（静默丢掉等于骗人，所以给警告），
+ * **参数名与顺序逐字来自 `owner.parameters`**——实现里多给的实参不渲染（静默丢掉等于骗人，所以给警告），
  * 缺的实参渲染成占位符（`null`/`[]`）并给警告，绝不猜。
  */
 const renderArguments = (
 	state: RenderState,
-	primitive: PrimitiveSpec,
+	owner: ArgumentOwner,
 	args: Readonly<Record<string, ImplArgument>>,
 	path: string,
 	multiline = false,
 ): string => {
 	const { node, collector } = state;
-	const declared = new Set(primitive.parameters.map((parameter) => parameter.name));
+	const declared = new Set(owner.parameters.map((parameter) => parameter.name));
 
 	for (const name of Object.keys(args)) {
 		if (declared.has(name)) continue;
 		collector.warning({
 			code: 'code_render.argument.undeclared',
-			message: `${at(node, path)} 的 ${primitive.primitiveRef} 多给了实参 ${name}，原语定义里没有它，不渲染`,
+			message: `${at(node, path)} 的 ${owner.ref} 多给了实参 ${name}，参数表里没有它，不渲染`,
 			path: `nodes.${node.id}.parameters.action`,
 			ref: node.id,
-			details: { primitive: primitive.primitiveRef, argument: name, parameters: [...declared], stepPath: path },
+			details: { owner: owner.ref, argument: name, parameters: [...declared], stepPath: path },
 		});
 	}
 
-	return primitive.parameters
+	return owner.parameters
 		.map((parameter) =>
-			`${parameter.name}=${renderArgument(state, primitive, parameter, args[parameter.name], path, multiline)}`,
+			`${parameter.name}=${renderArgument(state, owner, parameter, args[parameter.name], path, multiline)}`,
 		)
 		.join(', ');
 };
@@ -492,14 +554,14 @@ const isStringArray = (value: unknown): value is readonly string[] =>
 /** 一个实参 → 文本。缺省 / 取值不符都给警告 + 占位符，不静默编一个值。 */
 const renderArgument = (
 	state: RenderState,
-	primitive: PrimitiveSpec,
-	parameter: PrimitiveSpec['parameters'][number],
+	owner: ArgumentOwner,
+	parameter: CatalogParameter,
 	raw: ImplArgument | undefined,
 	path: string,
 	multiline = false,
 ): string => {
 	const { node, collector } = state;
-	const where = `${at(node, path)} 的 ${primitive.primitiveRef}.${parameter.name}`;
+	const where = `${at(node, path)} 的 ${owner.ref}.${parameter.name}`;
 
 	if (raw === undefined) {
 		collector.warning({
@@ -507,7 +569,7 @@ const renderArgument = (
 			message: `${where} 没有实参，渲染成占位符`,
 			path: `nodes.${node.id}.parameters.${parameter.name}`,
 			ref: node.id,
-			details: { primitive: primitive.primitiveRef, parameter: parameter.name, stepPath: path },
+			details: { owner: owner.ref, parameter: parameter.name, stepPath: path },
 		});
 		return renderByType(parameter.type, undefined, parameter.integer === true).text;
 	}
@@ -530,7 +592,7 @@ const renderArgument = (
 				message: `${where} 的传感器实参不是一个非空字符串数组，照原样写出`,
 				path: `nodes.${node.id}.parameters.${parameter.name}`,
 				ref: node.id,
-				details: { primitive: primitive.primitiveRef, parameter: parameter.name, stepPath: path },
+				details: { owner: owner.ref, parameter: parameter.name, stepPath: path },
 			});
 		}
 		return text;
@@ -544,7 +606,7 @@ const renderArgument = (
 		path: `nodes.${node.id}.parameters`,
 		ref: node.id,
 		details: {
-			primitive: primitive.primitiveRef,
+			owner: owner.ref,
 			parameter: parameter.name,
 			expected: parameter.type,
 			value: jsonDetail(raw),
@@ -605,7 +667,7 @@ const renderExpression = (
 	expression: ImplExpression,
 	path: string,
 	alwaysParen: boolean,
-	declaredParameter?: PrimitiveSpec['parameters'][number],
+	declaredParameter?: CatalogParameter,
 ): string => {
 	const { node, collector } = state;
 
@@ -656,7 +718,7 @@ const renderExpression = (
 			}
 			state.expressionCalls += 1;
 			// 调用是叶子里最紧的：`x = read_status()` 不该变成 `x = (read_status())`。
-			return `${expression.primitiveRef}(${renderArguments(state, primitive, expression.arguments, path)})`;
+			return `${expression.primitiveRef}(${renderArguments(state, primitiveOwner(primitive), expression.arguments, path)})`;
 		}
 
 		case 'binary': {
@@ -682,7 +744,7 @@ const renderOperand = (
 	expression: ImplExpression,
 	path: string,
 	parentPrecedence: number,
-	declaredParameter?: PrimitiveSpec['parameters'][number],
+	declaredParameter?: CatalogParameter,
 ): string => {
 	const text = renderExpression(state, expression, path, false, declaredParameter);
 	return wrap(text, precedenceOf(expression), parentPrecedence, false);
@@ -714,7 +776,7 @@ const renderParam = (
 	state: RenderState,
 	expression: ImplExpression & { kind: 'param' },
 	path: string,
-	declaredParameter?: PrimitiveSpec['parameters'][number],
+	declaredParameter?: CatalogParameter,
 ): string => {
 	const { node, collector, capability, locals } = state;
 	const name: string = expression.name;

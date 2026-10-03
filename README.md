@@ -22,8 +22,11 @@
 ROBOFRAME_SRC=/path/to/IB_Robot node tools/import-roboframe/import.mjs
 ```
 
-上游是 `gitcode.com/openeuler/IB_Robot` 的 `RoboFrame` 分支。转出来的是 16 个技能、
-`skill_library` 的 10 个原语白名单、命名位姿与中文别名，每个技能的
+上游是 `gitcode.com/openeuler/IB_Robot` 的 `RoboFrame` 分支，`srcRoot` 要是一份**克隆**
+（脚本在那边跑 `git rev-parse` 取 commit）。不点名就转两台：单臂那份 16 个技能，
+抓取那份 7 个技能（其中 `pick_object` 的实现在执行侧——它的 `primitive_sequence` 是空的，
+转出来是一条 `delegate`，指向 `/manipulation/execute_pick`）。两份共用
+`skill_library` 的 10 个原语白名单、命名位姿与中文别名；其余技能的
 `primitive_sequence` 就是它的实现。转换脚本读不懂的地方当场报错，不猜；
 `provenance` 里记着是哪一次 commit。
 

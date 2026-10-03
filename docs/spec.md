@@ -400,10 +400,15 @@ interface TraceEntry {
 实现来自**能力目录**（`capabilities[].implementation`），由设备侧提供；
 底盘和机械臂各自的原语集不同，但结构一样（见 §5）。
 
-实现是一棵**语句树**——调用、赋值、条件，表达式由字面量、引用、调用、比较算术与取反组成——
+实现是一棵**语句树**——调用、赋值、条件、**委托**，表达式由字面量、引用、调用、比较算术与取反组成——
 不是一串平铺的步骤。理由很实际：函数体是**程序**，有「如果……那么」这样的结构；
 只有树才长得成 C 形积木、才渲染得出带缩进的代码。原语是这棵树的词汇表，
 其中声明了 `returns` 的才能出现在表达式里。
+
+**委托**（`delegate`）是第四种语句，说的是「这一步的实现在执行侧，模板里没有步骤」：
+它带一个执行侧接口名（`/manipulation/execute_pick`）与交出去的实参。
+少了它，上游那种 `primitive_sequence` 为空的技能只能被拒之门外，或者被编一条假的实现——
+两条都是错。接口名**不是原语**，不进 `catalog.primitives`；本机仿真演不了它。
 
 | 视图 | 读 | 写 | 它回答什么 |
 | --- | --- | --- | --- |
@@ -532,20 +537,23 @@ interface CapabilityCatalog {
 
 真实目录不是手写的。`tools/import-roboframe/import.mjs` 从上游 RoboFrame 仓库
 （`gitcode.com/openeuler/IB_Robot`，分支 `RoboFrame`）机械地转出
-`packages/capabilities/src/roboframe/<robot>.catalog.json`：
+`packages/capabilities/src/roboframe/<robot>.catalog.json`（不点名就转单臂与抓取两台，
+同一个 `srcRoot` 所以 `provenance.commit` 必然相同——出处是仓库级的）：
 
 | 目录里的东西 | 上游出处 |
 | --- | --- |
 | 技能（capabilities） | `src/robot_config/config/robots/<robot>.yaml` 的 `skill_templates` |
 | 实现（`implementation`） | 同一个技能的 `primitive_sequence`，逐条转成语句树 |
+| 委托（`delegate`） | `primitive_sequence` 为空、且 `executor` 是已知委托型的技能：接口名取 `robot.<executor 所在段>.action_name` |
 | 原语白名单 | `src/skill_library/README.md` §3（上游自己维护的「有限原语」表） |
 | 命名位姿 | 同一份 YAML 的 `named_poses` |
 | 中文名 | 技能的 `description.aliases_zh[0]` |
 
-三处翻译写在脚本头上，一条都不藏：`initial_gripper_state` 会在序列最前面插一条夹爪动作
+四处翻译写在脚本头上，一条都不藏：`initial_gripper_state` 会在序列最前面插一条夹爪动作
 （照抄上游 resolver 的行为）；`<字段>_from_request: true` 落成参数引用而不是写死的值；
 上游模板层与 ROS action 层的字段名不同（`duration_sec` vs `primitive_duration_sec`），
-目录记的是**模板层**——技能作者写的那一层。
+目录记的是**模板层**——技能作者写的那一层；空实现的委托型技能落成一条 `delegate`，
+实参按技能自己声明的参数逐个映射（`target_name` 在上游就是运行时的视觉文本查询）。
 
 转换脚本读不懂的地方**当场报错**，不猜。所以目录里每一个字都能追到上游某一行，
 `provenance` 里记着是哪一次 commit。手抄一遍迟早与上游分叉，而且分叉了没人知道。

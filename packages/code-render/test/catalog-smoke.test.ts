@@ -13,7 +13,7 @@
  * （例如实参引用的名字在本节点取不到值，渲染器会如实说并给占位符，而不是编一个数）。
  */
 import { describe, expect, it } from 'vitest';
-import { PHASE1_ROBOT_CATALOG, ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
+import { PHASE1_ROBOT_CATALOG, ROBOFRAME_GRASP_CATALOG, ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import { capabilityCatalogSchema, type CapabilityCatalog, type JsonObject } from '@codecanvas/contracts';
 import { renderImplementation } from '../src/index';
 import { FIXTURE_CATALOG, fixtureDeclarationOf, fixtureNode } from './fixtures';
@@ -21,6 +21,7 @@ import { FIXTURE_CATALOG, fixtureDeclarationOf, fixtureNode } from './fixtures';
 const CATALOGS: readonly { readonly name: string; readonly catalog: CapabilityCatalog }[] = [
 	{ name: 'phase1_robot（示意实现）', catalog: PHASE1_ROBOT_CATALOG },
 	{ name: 'roboframe_so101_single_arm（上游 RoboFrame 真实技能库）', catalog: ROBOFRAME_SO101_CATALOG },
+	{ name: 'roboframe_so101_handeye_realsense_grasp（含委托型抓取技能）', catalog: ROBOFRAME_GRASP_CATALOG },
 ];
 
 /** 按能力参数表造一个「参数齐全」的节点，让实现里的每个 `param` 都取得到值。 */

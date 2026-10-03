@@ -93,6 +93,8 @@ export const REFERENCE_FIELD_NAME = 'name';
 export const SET_TARGET_FIELD_NAME = 'target';
 /** 「未知原语 <名字>」里那个名字的字段名。 */
 export const UNKNOWN_PRIMITIVE_FIELD_NAME = 'primitive';
+/** 「委托执行侧 <接口名>」里那个接口名的字段名（没有实参可摆时才用；有实参时接口名写在 message 里）。 */
+export const DELEGATE_INTERFACE_FIELD_NAME = 'interface';
 
 /** 值输入/语句口的 Blockly input 名（大写，与目录里的参数名天然分得开）。 */
 export const VALUE_INPUT_NAME = 'VALUE';
@@ -136,6 +138,7 @@ export type ImplementationNodeRole =
 	| 'set'
 	| 'if'
 	| 'if-else'
+	| 'delegate'
 	| 'literal-number'
 	| 'literal-text'
 	| 'literal-boolean'
@@ -155,6 +158,7 @@ export const ROLE_TAG: Readonly<Record<ImplementationNodeRole, string>> = {
 	set: 'set',
 	if: 'if',
 	'if-else': 'if_else',
+	delegate: 'delegate',
 	'literal-number': 'lit_num',
 	'literal-text': 'lit_text',
 	'literal-boolean': 'lit_bool',
@@ -386,7 +390,7 @@ export const resolveImplementationPath = (
 			expression = statement.value;
 			continue;
 		}
-		if (statement.kind === 'call' && segment === 'arguments') {
+		if ((statement.kind === 'call' || statement.kind === 'delegate') && segment === 'arguments') {
 			const name = segments[index + 1];
 			const argument = name === undefined ? undefined : statement.arguments[name];
 			if (!isExpressionArgument(argument)) return null;
@@ -678,27 +682,30 @@ const unknownShape = (
 };
 
 /**
- * 一个原语调用 → 一块积木的行。
+ * 实参表 → 积木的行（`call` 与 `delegate` 共用这一段）。
+ *
+ * `slots` 是**这个位置认的参数表**：原语调用看 `catalog.primitives[].parameters`，
+ * 委托看本能力的参数表（委托出去的是这个能力的入参，中间没有原语那一层）。
  *
  * 每个参数一行：实参是「能力参数」或目录里写死的字面量时给字段控件；
  * 实参是一棵表达式（嵌套调用、比较、算术、引用局部变量）时给一个**值输入**，
  * 子块由 `describeExpression` 递归长出来。
  */
-const describeCall = (
+const describeArgumentRows = (
 	context: DescribeContext,
 	path: string,
-	primitiveRef: string,
+	slots: readonly CatalogParameter[],
 	args: Readonly<Record<string, ImplArgument>>,
-	position: 'statement' | 'value',
-): ImplementationBlockShape => {
-	const primitive = findPrimitive(context.catalog, primitiveRef);
-	if (primitive === undefined) return unknownShape(context, path, primitiveRef, position);
-
+): {
+	readonly widgets: ImplementationWidget[];
+	readonly rows: ImplementationBlockRow[];
+	readonly valueInputs: ImplementationValueInput[];
+} => {
 	const rows: ImplementationBlockRow[] = [];
 	const widgets: ImplementationWidget[] = [];
 	const valueInputs: ImplementationValueInput[] = [];
 
-	for (const parameter of primitive.parameters) {
+	for (const parameter of slots) {
 		const argument = args[parameter.name];
 		const argumentPath = childPath(childPath(path, 'arguments'), parameter.name);
 		// 协议描述按**供值的那个名字**取：`wait(seconds ← $duration)` 的单位/范围/缺省
@@ -752,6 +759,24 @@ const describeCall = (
 		rows.push({ parameter: parameter.name, label, widgets: [widget] });
 	}
 
+	return { widgets, rows, valueInputs };
+};
+
+/**
+ * 一个原语调用 → 一块积木的行。
+ */
+const describeCall = (
+	context: DescribeContext,
+	path: string,
+	primitiveRef: string,
+	args: Readonly<Record<string, ImplArgument>>,
+	position: 'statement' | 'value',
+): ImplementationBlockShape => {
+	const primitive = findPrimitive(context.catalog, primitiveRef);
+	if (primitive === undefined) return unknownShape(context, path, primitiveRef, position);
+
+	const { widgets, rows, valueInputs } = describeArgumentRows(context, path, primitive.parameters, args);
+
 	const detail = `${primitive.label}（${primitive.primitiveRef}）`;
 	const base = shapeBase(
 		context,
@@ -771,6 +796,43 @@ const describeCall = (
 		valueInputs,
 		statementInputs: [],
 		tooltip: blockTooltipFor(base, primitive, widgets),
+	};
+};
+
+/**
+ * 一条**委托**语句 → 一块积木：实现在执行侧，模板里只有接口名与交出去的实参。
+ *
+ * 为什么长成一块正经积木而不是「未知语句」：它不是缺陷。上游的委托型技能
+ * （`pick_object` → `/manipulation/execute_pick`）就是如此——运行时才生成候选，
+ * 模板给不出步骤。所以这块积木**如实说自己是什么**（接口名写在块上），
+ * 并且照旧把实参做成可写字段：改 `target_name` 就是改这个节点的 `parameters`，
+ * 结构本身（交给哪个接口）不归画布管。
+ *
+ * 实参表用**本能力的参数**而不是原语表——委托出去的是这个能力的入参，中间没有原语那一层。
+ * 只渲染真的交出去的那些：能力参数可能被同棵树里的别的语句用掉。
+ */
+const describeDelegate = (
+	context: DescribeContext,
+	path: string,
+	interfaceRef: string,
+	args: Readonly<Record<string, ImplArgument>>,
+): ImplementationBlockShape => {
+	const handedOver = new Set(Object.keys(args));
+	const slots = context.capability.parameters.filter((parameter) => handedOver.has(parameter.name));
+	const { widgets, rows, valueInputs } = describeArgumentRows(context, path, slots, args);
+
+	const detail = `委托执行侧 ${interfaceRef}`;
+	const base = shapeBase(context, path, 'delegate', ROLE_TAG.delegate, detail, interfaceRef);
+	return {
+		...base,
+		primitiveRef: null,
+		primitiveLabel: null,
+		parameters: slots.map((parameter) => parameter.name),
+		widgets,
+		rows,
+		valueInputs,
+		statementInputs: [],
+		tooltip: `${context.capability.label} 的这一步交给执行侧 ${interfaceRef}——实现在那边，模板里没有步骤（路径 ${path}）`,
 	};
 };
 
@@ -928,6 +990,10 @@ const describeStatement = (
 ): ImplementationBlockShape => {
 	if (statement.kind === 'call') {
 		return describeCall(context, path, statement.primitiveRef, statement.arguments, 'statement');
+	}
+
+	if (statement.kind === 'delegate') {
+		return describeDelegate(context, path, statement.interfaceRef, statement.arguments);
 	}
 
 	if (statement.kind === 'set') {
@@ -1094,7 +1160,14 @@ export const buildBlockDefinition = (shape: ImplementationBlockShape): Record<st
 			args.push({ type: 'input_value', name: row.input });
 		}
 		// 第一行左边先写这一步的显示名，其余每行左边是这一行的参数标签。
-		const head = rowIndex === 0 ? `${shape.primitiveLabel ?? ''} ` : '';
+		// 委托没有原语名可写（它调的不是本目录里的东西），那就写清**交给谁**——
+		// 一块只写「目标物 [框]」的积木会让人以为这是本机的一步。
+		const head =
+			rowIndex === 0
+				? shape.role === 'delegate'
+					? `委托执行侧 ${shape.atom} `
+					: `${shape.primitiveLabel ?? ''} `
+				: '';
 		definition[`message${rowIndex}`] = `${head}${row.label} ${parts.join(' ')}`.trim();
 		definition[`args${rowIndex}`] = args;
 		rowIndex += 1;
@@ -1128,6 +1201,10 @@ export const buildBlockDefinition = (shape: ImplementationBlockShape): Record<st
 			case 'unknown-statement':
 			case 'unknown-value':
 				message = `未知原语 ${placeholder({ type: 'field_label', name: UNKNOWN_PRIMITIVE_FIELD_NAME, text: shape.atom })}`;
+				break;
+			case 'delegate':
+				// 没有实参可摆的委托：整块只写「交给谁」。
+				message = `委托执行侧 ${placeholder({ type: 'field_label', name: DELEGATE_INTERFACE_FIELD_NAME, text: shape.atom })}`;
 				break;
 			default: {
 				// 字面量与引用：一块一个只读字段，值就在块面上。

@@ -12,7 +12,7 @@
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as Blockly from 'blockly';
-import { PHASE1_ROBOT_CATALOG, ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
+import { PHASE1_ROBOT_CATALOG, ROBOFRAME_GRASP_CATALOG, ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import {
 	capabilityCatalogSchema,
 	computeWorkflowDigest,
@@ -89,6 +89,7 @@ const declarationForCatalog = (catalog: CapabilityCatalog): WorkflowDeclaration 
 const CATALOGS: readonly { readonly name: string; readonly catalog: CapabilityCatalog }[] = [
 	{ name: 'phase1_robot（示意实现）', catalog: PHASE1_ROBOT_CATALOG },
 	{ name: 'roboframe_so101_single_arm（上游 RoboFrame 真实技能库）', catalog: ROBOFRAME_SO101_CATALOG },
+	{ name: 'roboframe_so101_handeye_realsense_grasp（含委托型抓取技能）', catalog: ROBOFRAME_GRASP_CATALOG },
 ];
 
 describe.each(CATALOGS)('$name 的冒烟：改了内容也站得住', ({ catalog }) => {

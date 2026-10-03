@@ -140,6 +140,10 @@ const statementUsesParam = (statement: ImplStatement, name: string): boolean => 
 				statement.then.some((child) => statementUsesParam(child, name)) ||
 				(statement.else?.some((child) => statementUsesParam(child, name)) ?? false)
 			);
+		case 'delegate':
+			// 委托步也是参数的去处：`target_name` 交给执行侧那个接口，箭头照样指向这一步。
+			// 少了这一支，委托型技能的参数在映射表里会变成「哪儿都没用到」。
+			return Object.values(statement.arguments).some((argument) => argumentUsesParam(argument, name));
 	}
 };
 

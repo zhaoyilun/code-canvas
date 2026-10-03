@@ -4,12 +4,13 @@
  * 两层结构：
  * - `primitives` 是这台设备支持的基础操作，是实现的**词汇表**——`set_velocity`、`read_scan`、
  *   `open_gripper` 这类原子动作，有的**有返回值**（读传感器），有的没有（下发速度）。
- * - `capabilities` 是对外可见的动作，每个带一棵 **`implementation` 语句树**：由原语组成的程序。
+ * - `capabilities` 是对外可见的动作，每个带一棵 **`implementation` 语句树**：由原语组成的程序，
+ *   或者一条 **`delegate`**——实现在执行侧，模板里只有一个接口引用（见下）。
  *
  * 为什么是树而不是一串步骤：函数体是**程序**，有赋值、有分支、有嵌套。
  * 扁平的调用清单既长不出「如果……那么」这样的积木，也渲染不出有结构的代码。
  * 形状借鉴前作的 `LogicStatementV1` / `LogicExpressionV1`（见 docs/inherited.md），
- * 但只保留这里够用的：调用、赋值、条件；字面量、引用、比较/算术、取反。
+ * 但只保留这里够用的：调用、赋值、条件、委托；字面量、引用、比较/算术、取反。
  *
  * 教学上的意义：`capabilities` 是流程画布上的模块（函数调用点），`implementation` 是函数体
  * ——点开一个模块，看到的就是「机器为了执行它具体做了哪些事」。
@@ -20,7 +21,7 @@
  */
 import { z } from 'zod';
 import { jsonValueSchema, type JsonValue } from './json';
-import { stableReferenceSchema } from './stable-ids';
+import { interfaceReferenceSchema, stableReferenceSchema } from './stable-ids';
 
 /**
  * 参数与返回值的取值类型。
@@ -191,12 +192,38 @@ export const implStatementSchema: z.ZodType<ImplStatement> = z.lazy(() =>
 				else: z.array(z.lazy(() => implStatementSchema)).min(1).optional(),
 			})
 			.strict(),
+		/**
+		 * **委托**：这一步的实现在执行侧，不在模板里。
+		 *
+		 * 为什么需要它：上游有「实现不在模板里」的技能。`pick_object` 的 `primitive_sequence`
+		 * 是空的——它把能力委托给 `/manipulation/execute_pick`，GraspGen 在运行时才生成
+		 * 6-DOF 候选，模板给不出步骤（上游 `skill_library/README.md` §4 末尾就是这么写的）。
+		 * 没有这一种语句，那种技能只能被拒之门外，或者被编一条假的实现——两条都是错。
+		 *
+		 * `interfaceRef` 是那个**执行侧接口**的稳定引用（ROS action / service 名），
+		 * **不是原语名**：它不进 `catalog.primitives`——那 10 个是上游 `skill_library` 的白名单，
+		 * 往里塞一个设备上并不存在的原语，就把它污染了。
+		 *
+		 * `arguments` 与 `call` 同一套（`ImplArgument`），于是 `{kind:'param', name}` 能表达
+		 * 「这一步的取值来自这个技能的参数」——同一份技能被不同参数复用，这条链不断。
+		 *
+		 * 本机仿真演不了它；bridge 那边能不能执行，由技能自己决定。
+		 */
+		z
+			.object({
+				kind: z.literal('delegate'),
+				interfaceRef: interfaceReferenceSchema,
+				arguments: z.record(z.string(), implArgumentSchema),
+			})
+			.strict(),
 	]),
 );
 export type ImplStatement =
 	| { kind: 'call'; primitiveRef: string; arguments: Record<string, ImplArgument> }
 	| { kind: 'set'; target: string; value: ImplExpression }
-	| { kind: 'if'; condition: ImplExpression; then: ImplStatement[]; else?: ImplStatement[] };
+	| { kind: 'if'; condition: ImplExpression; then: ImplStatement[]; else?: ImplStatement[] }
+	/** 实现在执行侧：`interfaceRef` 是那边的接口名，不是本目录里的原语。 */
+	| { kind: 'delegate'; interfaceRef: string; arguments: Record<string, ImplArgument> };
 
 /** 一个对外可见的动作：流程画布上的一个模块。 */
 export const capabilitySpecSchema = z

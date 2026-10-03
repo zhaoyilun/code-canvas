@@ -9,7 +9,7 @@
  * 等 RoboFrame 给出真实实现就整份替换（数据结构不变）。这里的用例断言的是「积木从目录推导」这条规则，
  * 跟设备写了什么无关——挂到真实目录上，目录一改断言就集体失效。真实目录只留冒烟断言，见 `catalog-smoke.test.ts`。
  *
- * 夹具钉住的是**形状**：三种语句（`call` / `set` / `if`，含 `else` 与嵌套）、五种表达式
+ * 夹具钉住的是**形状**：四种语句（`call` / `set` / `if`，含 `else` 与嵌套 / `delegate`）、五种表达式
  * （`literal` / `param` / `call` / `binary` / `unary`）、有 `returns` 与没有的原语、标了 `integer` 的字段，
  * 以及一个「三步调用、最后一步是无参数原语」的能力（`move`）。
  *
@@ -309,6 +309,50 @@ export const FIXTURE_CATALOG: CapabilityCatalog = {
 									},
 								},
 							],
+						},
+					],
+				},
+			],
+		},
+		{
+			/**
+			 * **委托**：实现在执行侧，模板里只有接口名与交出去的实参
+			 * （上游 `pick_object` 的 `executor` 是 `grasp_pipeline`，`primitive_sequence` 是空的）。
+			 */
+			capabilityRef: 'pick_object',
+			label: '抓取物体',
+			kind: 'skill',
+			parameters: [{ name: 'target_name', label: '目标物', type: 'string', required: true }],
+			implementation: [
+				{
+					kind: 'delegate',
+					interfaceRef: '/manipulation/execute_pick',
+					arguments: { target_name: { kind: 'param', name: 'target_name' } },
+				},
+			],
+		},
+		{
+			/**
+			 * 委托**嵌在 `else` 里**，且能力参数比交出去的实参多一个（`confirm` 由条件用掉）：
+			 * 路径（`0.else.0`）、缩进、以及「只把交出去的参数摆成字段」三件事一起钉住。
+			 */
+			capabilityRef: 'guarded_pick',
+			label: '确认后抓取',
+			kind: 'skill',
+			parameters: [
+				{ name: 'target_name', label: '目标物', type: 'string' },
+				{ name: 'confirm', label: '已确认', type: 'boolean' },
+			],
+			implementation: [
+				{
+					kind: 'if',
+					condition: { kind: 'unary', operator: 'not', value: { kind: 'param', name: 'confirm' } },
+					then: [{ kind: 'call', primitiveRef: 'brake', arguments: {} }],
+					else: [
+						{
+							kind: 'delegate',
+							interfaceRef: '/manipulation/execute_pick',
+							arguments: { target_name: { kind: 'param', name: 'target_name' } },
 						},
 					],
 				},

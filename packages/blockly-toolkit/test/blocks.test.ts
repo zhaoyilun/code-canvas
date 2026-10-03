@@ -48,7 +48,7 @@ import {
 	type ImplementationBlockShape,
 	type ImplementationWidget,
 } from '../src/blocks';
-import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
+import { ROBOFRAME_GRASP_CATALOG, ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import { BROKEN_CATALOG, FIXTURE_CATALOG } from './fixtures';
 
 const capabilityOf = (catalog: CapabilityCatalog, ref: string): CapabilitySpec => {
@@ -566,5 +566,77 @@ describe('结构化载荷：画得下，且截断是明说的', () => {
 		expect(widget.binding.value).toMatchObject({ type: 'single_joint_wave_v1', joint: '5', amplitude: 0.35 });
 		// 积木上写的是原语名，不是整坨 JSON。
 		expect(call.detail).toContain('move_through_joint_positions');
+	});
+});
+
+describe('委托积木：实现在执行侧，积木上就写清楚交给谁', () => {
+	it('委托块的类型名走同一套推导，角色标签是 delegate', () => {
+		const shape = shapeAt('pick_object', '0');
+		expect(shape.role).toBe('delegate');
+		expect(shape.tag).toBe('delegate');
+		expect(shape.type).toBe(
+			implementationBlockType(FIXTURE_CATALOG.catalogRef, 'pick_object', 'delegate', '0'),
+		);
+		// 它不是「未知原语」——那一种说的是目录缺陷，这一种是目录写明的边界。
+		expect(isUnknownShape(shape)).toBe(false);
+		// 接口名是**执行侧的接口**，不是本目录里的原语：这一栏必须留空，
+		// 否则下游会拿着一根不存在的原语去查目录。
+		expect(shape.primitiveRef).toBeNull();
+		expect(shape.atom).toBe('/manipulation/execute_pick');
+	});
+
+	it('块面上写着「委托执行侧 <接口名>」——不写这一句，一块只带「目标物」的积木会像本机的一步', () => {
+		const shape = shapeAt('pick_object', '0');
+		const definition = buildBlockDefinition(shape);
+		expect(definition['message0']).toBe('委托执行侧 /manipulation/execute_pick 目标物 %1');
+		// 实参照旧是可写字段：改它等于改节点的 parameters，结构本身不归画布管。
+		expect(writable(shape).map((widget) => widget.fieldName)).toEqual(['target_name']);
+		expect(shape.rows.map((row) => row.parameter)).toEqual(['target_name']);
+	});
+
+	it('没有实参的委托也写得出来：整块只有一句「委托执行侧 <接口名>」', () => {
+		const bare: CapabilitySpec = {
+			capabilityRef: 'bare_delegate',
+			label: '裸委托',
+			kind: 'skill',
+			parameters: [],
+			implementation: [{ kind: 'delegate', interfaceRef: '/manipulation/execute_pick', arguments: {} }],
+		};
+		const catalog: CapabilityCatalog = { ...FIXTURE_CATALOG, capabilities: [bare] };
+		const shape = shapeAt('bare_delegate', '0', catalog);
+		expect(shape.rows).toEqual([]);
+		const definition = buildBlockDefinition(shape);
+		expect(definition['message0']).toBe('委托执行侧 %1');
+	});
+
+	it('能力参数只是接口签名的超集：没交出去的参数不摆成字段', () => {
+		const shape = shapeAt('guarded_pick', '0.else.0');
+		expect(shape.role).toBe('delegate');
+		expect(shape.stepPath).toBe('0.else.0');
+		// 顶层只有那条 `if`，所以它是嵌套节点，不是「第几步」。
+		expect(shape.topLevel).toBe(false);
+		// `confirm` 由条件用掉，没交给接口——摆成字段就等于给接口编了一个实参。
+		expect(shape.rows.map((row) => row.parameter)).toEqual(['target_name']);
+		expect(shape.parameters).toEqual(['target_name']);
+	});
+
+	it('路径能反查回目录里的那个节点（写回靠它把形状找回来）', () => {
+		const capability = capabilityOf(FIXTURE_CATALOG, 'guarded_pick');
+		expect(resolveImplementationPath(capability, '0.else.0')?.kind).toBe('statement');
+		// 委托的实参也能按路径取到（它是表达式时会被递归画成子块）。
+		expect(resolveImplementationPath(capability, '0.else.0.arguments.target_name')).toMatchObject({
+			kind: 'expression',
+			expression: { kind: 'param', name: 'target_name' },
+		});
+	});
+
+	it('上游那份真目录里的抓取技能，画的也是同一块积木', () => {
+		const shape = shapeAt('pick_object', '0', ROBOFRAME_GRASP_CATALOG);
+		expect(shape.role).toBe('delegate');
+		expect(shape.atom).toBe('/manipulation/execute_pick');
+		const definition = buildBlockDefinition(shape);
+		expect(String(definition['message0'])).toContain('委托执行侧 /manipulation/execute_pick');
+		// 目录里的原语是上游 `skill_library` 的白名单，接口名**不冒充**原语。
+		expect(ROBOFRAME_GRASP_CATALOG.primitives.some((item) => item.primitiveRef.includes('/'))).toBe(false);
 	});
 });

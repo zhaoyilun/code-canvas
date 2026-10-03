@@ -7,7 +7,8 @@
  * 3. 树真的长成了程序：赋值一行、`if` 一行 + **缩进**的子语句；括号按优先级加，宁可多也不能错；
  * 4. 行 ↔ 步骤的正反映射（顶层下标 + 精确树路径），含注释行与 `if` 造成的偏移；
  * 5. 数字**不失真**——渲染出的字面量读回来必须还是原值；任务级限值照旧看得见；
- * 6. 目录里查不到的东西（能力 / 原语 / 引用）不假装认识。
+ * 6. 目录里查不到的东西（能力 / 原语 / 引用）不假装认识；
+ * 7. **委托**（`delegate`）照实说「实现在执行侧」，不编步骤、不冒充原语、不占原语计数。
  *
  * 这一版把老形状（`implementation: [{step, arguments}]`）的断言改成了语句树，
  * **一条用例都没删**：能平移的都平移，只属于老形状的那条（多给实参）换了构造方式。
@@ -30,6 +31,7 @@ import {
 	type WorkflowNode,
 } from '@codecanvas/contracts';
 import { importTaskJson } from '@codecanvas/task-import';
+import { ROBOFRAME_GRASP_CATALOG } from '@codecanvas/capabilities';
 import {
 	INDENT_UNIT,
 	callLines,
@@ -1144,5 +1146,86 @@ describe('结构化载荷：短的就地写，长的摊开，续行仍属于同�
 		// 正向查询取到的是**头一行**（不是某条续行）——界面据此把整段高亮起来。
 		expect(lineOfStep(program, '1')).toBe(lines[0]?.line);
 		expect(lineText(program, lines[0]?.line ?? 0)?.trimEnd().endsWith('joint_positions={')).toBe(true);
+	});
+});
+
+describe('委托：实现在执行侧，就照实说，不编步骤', () => {
+	const pick = (overrides: JsonObject = {}): RenderedImplementation =>
+		render({ step_id: 's1', action: 'pick_object', target_name: '红色方块', ...overrides });
+
+	it('渲染成说明行 + 委托行两行，接口名与实参逐字写出', () => {
+		const program = pick();
+		expect(texts(program)).toEqual([
+			'# 实现在执行侧，不在模板里：/manipulation/execute_pick',
+			'delegate /manipulation/execute_pick(target_name="红色方块")',
+		]);
+		expect(program.lines.map((line) => line.kind)).toEqual(['comment', 'delegate']);
+	});
+
+	it('实参名与顺序来自**本能力的参数表**，不是原语表', () => {
+		const program = pick();
+		// 能力只有一个参数；原语表里没有任何原语叫 target_name。
+		expect(argsOf(program.lines[1]?.text ?? '').get('target_name')).toBe('"红色方块"');
+		expect(FIXTURE_CATALOG.primitives.some((primitive) => primitive.parameters.some((p) => p.name === 'target_name'))).toBe(false);
+	});
+
+	it('委托**不算**一次原语调用：调用行数为 0，但这一步照样占一步', () => {
+		const program = pick();
+		expect(callLines(program)).toEqual([]);
+		expect(program.callCount).toBe(0);
+		expect(program.steps).toHaveLength(1);
+		expect(program.steps[0]).toMatchObject({ path: '0', kind: 'delegate', primitiveRef: null, known: true, lineCount: 2 });
+	});
+
+	it('说明行与委托行同属一步：联动高亮不会把说明行落下', () => {
+		const program = pick();
+		for (const line of program.lines) {
+			expect(line.stepIndex).toBe(0);
+			expect(line.stepPath).toBe('0');
+			// 委托行不冒充原语：它调的不是本目录里的任何东西。
+			expect(line.primitiveRef).toBeNull();
+		}
+		expect(stepIndexAtLine(program, 1)).toBe(0);
+		expect(stepIndexAtLine(program, 2)).toBe(0);
+		// 正向查询给的是**头一行**（说明行）——整段一起高亮。
+		expect(lineOfStep(program, '0')).toBe(1);
+	});
+
+	it('嵌在 else 里也照旧：缩进一档、路径是 0.else.0、顶层仍只有一步', () => {
+		const program = render({ step_id: 's1', action: 'guarded_pick', target_name: '方块', confirm: false });
+		const delegate = program.lines.find((line) => line.kind === 'delegate');
+		expect(delegate?.stepPath).toBe('0.else.0');
+		expect(delegate?.indent).toBe(1);
+		expect(delegate?.text).toBe(`${INDENT_UNIT}delegate /manipulation/execute_pick(target_name="方块")`);
+		// 顶层一条 `if`，所以只占一步；里面那个 `brake()` 才是唯一的原语调用。
+		expect(program.steps).toHaveLength(1);
+		expect(callLines(program).map((line) => line.text.trim())).toEqual(['brake()']);
+	});
+
+	it('实参取不到值时给占位符 + 警告，不静默写一个空串', () => {
+		const program = render({ step_id: 's1', action: 'pick_object' });
+		expect(program.lines[1]?.text).toBe('delegate /manipulation/execute_pick(target_name=null)');
+		expect(program.diagnostics.map((diagnostic) => diagnostic.code)).toContain('code_render.param.unresolved');
+	});
+
+	it('能力参数只是接口签名的**超集**：没交出去的参数不编占位符', () => {
+		// `guarded_pick.confirm` 由同棵树里的 `if` 用掉，并不转发给接口——
+		// 渲染成 `confirm=null` 就是凭空给接口加了一个它没有的实参。
+		const program = render({ step_id: 's1', action: 'guarded_pick', target_name: '方块', confirm: true });
+		const delegate = program.lines.find((line) => line.kind === 'delegate');
+		expect(delegate?.text).toBe(`${INDENT_UNIT}delegate /manipulation/execute_pick(target_name="方块")`);
+	});
+
+	it('接上上游那份真目录：抓取技能的委托就是 /manipulation/execute_pick', () => {
+		const grasp = ROBOFRAME_GRASP_CATALOG;
+		const program = renderImplementation({
+			node: nodeOf({ step_id: 's1', action: 'pick_object', target_name: '方块' }),
+			catalog: grasp,
+			declaration: declarationOf([nodeOf({})]),
+		});
+		expect(program.lines.some((line) => line.text.includes('delegate /manipulation/execute_pick('))).toBe(true);
+		// 目录里的 10 个原语是上游 skill_library 的白名单，委托的接口名**不在**里面。
+		expect(grasp.primitives.some((primitive) => primitive.primitiveRef.includes('/'))).toBe(false);
+		expect(program.diagnostics.filter((diagnostic) => diagnostic.severity === 'error')).toEqual([]);
 	});
 });

@@ -6,7 +6,8 @@
  * 不是「一期设备的实现写了什么」——挂到真实目录上，目录一改断言就集体失效，那不是测试该有的耦合。
  *
  * 夹具钉住的是**形状**（这是它存在的理由）：
- * - 三种语句：`call` / `set` / `if`，其中 `if` 有带 `else` 的、也有嵌套的（`arm_guard`）；
+ * - 四种语句：`call` / `set` / `if`（有带 `else` 的、也有嵌套的，`arm_guard`）/ `delegate`
+ *   （顶层一条 `pick_object`，嵌在 `else` 里一条 `guarded_pick`）；
  * - 五种表达式：`literal` / `param` / `call` / `binary` / `unary`；
  * - 有 `returns` 的原语（`read_scan` / `read_status`）与没有的（`set_velocity` / `wait` / `stop_motion` / `brake` / `drive_*`）；
  * - 标了 `integer` 的字段（`drive_joint.joint_id` / `drive_joint.time` / `drive_joints.time`）；
@@ -369,6 +370,54 @@ export const FIXTURE_CATALOG: CapabilityCatalog = {
 						},
 						duration_sec: { kind: 'literal', value: 2 },
 					},
+				},
+			],
+		},
+		{
+			/**
+			 * **委托**：实现在执行侧，模板里只有接口名与实参（上游 `pick_object` 就是这个形状——
+			 * 它的 `executor` 是 `grasp_pipeline`，`primitive_sequence` 是空的）。
+			 *
+			 * 实参名取自**本能力的参数表**：委托出去的是这个能力的入参，中间没有原语那一层。
+			 */
+			capabilityRef: 'pick_object',
+			label: '抓取物体',
+			kind: 'skill',
+			parameters: [{ name: 'target_name', label: '目标物', type: 'string', required: true }],
+			implementation: [
+				{
+					kind: 'delegate',
+					interfaceRef: '/manipulation/execute_pick',
+					arguments: { target_name: { kind: 'param', name: 'target_name' } },
+				},
+			],
+		},
+		{
+			/**
+			 * 委托**嵌在分支里**：缩进、树路径（`"0.else.0"`）与「这一步算第几步」都得对。
+			 *
+			 * 顶层只有一条语句，但真实语句有两条——`steps.length` 认的是顶层，
+			 * `callCount` 只认原语调用（委托不算），两条判据在这里会分叉，正是要钉住的地方。
+			 */
+			capabilityRef: 'guarded_pick',
+			label: '确认后抓取',
+			kind: 'skill',
+			parameters: [
+				{ name: 'target_name', label: '目标物', type: 'string' },
+				{ name: 'confirm', label: '已确认', type: 'boolean' },
+			],
+			implementation: [
+				{
+					kind: 'if',
+					condition: { kind: 'unary', operator: 'not', value: { kind: 'param', name: 'confirm' } },
+					then: [{ kind: 'call', primitiveRef: 'brake', arguments: {} }],
+					else: [
+						{
+							kind: 'delegate',
+							interfaceRef: '/manipulation/execute_pick',
+							arguments: { target_name: { kind: 'param', name: 'target_name' } },
+						},
+					],
 				},
 			],
 		},

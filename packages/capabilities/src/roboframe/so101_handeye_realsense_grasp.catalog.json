@@ -1,0 +1,290 @@
+{
+	"provenance": {
+		"upstream": "https://gitcode.com/openeuler/IB_Robot",
+		"branch": "RoboFrame",
+		"commit": "8f364c3ffdc08dd31b510ff78011b2b960e42be3",
+		"robotConfig": "src/robot_config/config/robots/so101_handeye_realsense_grasp.yaml",
+		"generatedBy": "tools/import-roboframe/import.mjs"
+	},
+	"catalog": {
+		"catalogRef": "roboframe_so101_handeye_realsense_grasp",
+		"robotName": "so101_handeye_realsense_grasp",
+		"displayName": "SO-101 抓取（腕装 RealSense，RoboFrame 技能库）",
+		"revisionRef": "roboframe-so101_handeye_realsense_grasp-8f364c3f",
+		"namedPoses": [
+			"home",
+			"observe_table",
+			"zero"
+		],
+		"primitives": [
+			{
+				"primitiveRef": "move_to_named_pose",
+				"label": "移动到命名位姿",
+				"summary": "移动到命名位姿",
+				"parameters": [
+					{
+						"name": "pose_name",
+						"label": "命名位姿",
+						"type": "pose"
+					}
+				]
+			},
+			{
+				"primitiveRef": "move_to_pose",
+				"label": "移动到经过安全校验的动态 base-frame 位姿",
+				"summary": "移动到经过安全校验的动态 base-frame 位姿",
+				"parameters": [
+					{
+						"name": "target_pose",
+						"label": "目标位姿（base 系）",
+						"type": "json"
+					}
+				]
+			},
+			{
+				"primitiveRef": "move_to_configuration",
+				"label": "经 MoveIt 移动到经过校验的完整机械臂关节配置",
+				"summary": "经 MoveIt 移动到经过校验的完整机械臂关节配置",
+				"parameters": [
+					{
+						"name": "joint_positions",
+						"label": "关节配置",
+						"type": "json"
+					}
+				]
+			},
+			{
+				"primitiveRef": "move_relative_ee",
+				"label": "相对当前末端位姿做笛卡尔增量移动",
+				"summary": "相对当前末端位姿做笛卡尔增量移动",
+				"parameters": [
+					{
+						"name": "motion_direction",
+						"label": "移动方向",
+						"type": "string"
+					},
+					{
+						"name": "motion_distance",
+						"label": "移动距离（米）",
+						"type": "number"
+					}
+				]
+			},
+			{
+				"primitiveRef": "move_to_joint_positions",
+				"label": "按完整手臂关节顺序移动到单个关节目标",
+				"summary": "按完整手臂关节顺序移动到单个关节目标",
+				"parameters": [
+					{
+						"name": "joint_positions",
+						"label": "关节目标位置",
+						"type": "json"
+					},
+					{
+						"name": "duration_sec",
+						"label": "到位时间（秒）",
+						"type": "number"
+					}
+				]
+			},
+			{
+				"primitiveRef": "move_through_joint_positions",
+				"label": "按完整手臂关节顺序执行多路点关节轨迹",
+				"summary": "按完整手臂关节顺序执行多路点关节轨迹",
+				"parameters": [
+					{
+						"name": "trajectory_template",
+						"label": "轨迹模板",
+						"type": "json"
+					}
+				]
+			},
+			{
+				"primitiveRef": "open_gripper",
+				"label": "张开夹爪",
+				"summary": "张开夹爪",
+				"parameters": []
+			},
+			{
+				"primitiveRef": "close_gripper",
+				"label": "闭合夹爪",
+				"summary": "闭合夹爪",
+				"parameters": []
+			},
+			{
+				"primitiveRef": "rotate_gripper_cw",
+				"label": "绕当前末端局部 Z 轴顺时针旋转",
+				"summary": "绕当前末端局部 Z 轴顺时针旋转",
+				"parameters": [
+					{
+						"name": "motion_distance",
+						"label": "旋转角度（度）",
+						"type": "number"
+					}
+				]
+			},
+			{
+				"primitiveRef": "rotate_gripper_ccw",
+				"label": "绕当前末端局部 Z 轴逆时针旋转",
+				"summary": "绕当前末端局部 Z 轴逆时针旋转",
+				"parameters": [
+					{
+						"name": "motion_distance",
+						"label": "旋转角度（度）",
+						"type": "number"
+					}
+				]
+			}
+		],
+		"capabilities": [
+			{
+				"capabilityRef": "inspect_scene",
+				"label": "inspect_scene",
+				"summary": "Move to observe_table and acquire a scene view for planning.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_named_pose",
+						"arguments": {
+							"pose_name": {
+								"kind": "literal",
+								"value": "observe_table"
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "recover_safe_pose",
+				"label": "recover_safe_pose",
+				"summary": "Return the arm to the home safe pose.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_named_pose",
+						"arguments": {
+							"pose_name": {
+								"kind": "literal",
+								"value": "home"
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "recover_zero_pose",
+				"label": "recover_zero_pose",
+				"summary": "Return the arm to the calibration zero pose.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "move_to_named_pose",
+						"arguments": {
+							"pose_name": {
+								"kind": "literal",
+								"value": "zero"
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "move_relative_ee",
+				"label": "move_relative_ee",
+				"summary": "Translate the end-effector by a requested direction and distance.",
+				"kind": "skill",
+				"parameters": [
+					{
+						"name": "motion_direction",
+						"label": "motion_direction",
+						"type": "string",
+						"required": true
+					},
+					{
+						"name": "motion_distance",
+						"label": "motion_distance",
+						"type": "number",
+						"unit": "meters",
+						"required": true
+					}
+				],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "move_relative_ee",
+						"arguments": {
+							"motion_direction": {
+								"kind": "param",
+								"name": "motion_direction"
+							},
+							"motion_distance": {
+								"kind": "param",
+								"name": "motion_distance"
+							}
+						}
+					}
+				]
+			},
+			{
+				"capabilityRef": "open_gripper_skill",
+				"label": "open_gripper_skill",
+				"summary": "Open the gripper.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "open_gripper",
+						"arguments": {}
+					}
+				]
+			},
+			{
+				"capabilityRef": "close_gripper_skill",
+				"label": "close_gripper_skill",
+				"summary": "Close the gripper.",
+				"kind": "skill",
+				"parameters": [],
+				"implementation": [
+					{
+						"kind": "call",
+						"primitiveRef": "close_gripper",
+						"arguments": {}
+					}
+				]
+			},
+			{
+				"capabilityRef": "pick_object",
+				"label": "抓取物体",
+				"summary": "Detect, grasp, verify, and lift the requested object.",
+				"kind": "skill",
+				"parameters": [
+					{
+						"name": "target_name",
+						"label": "target_name",
+						"type": "string",
+						"required": true
+					}
+				],
+				"implementation": [
+					{
+						"kind": "delegate",
+						"interfaceRef": "/manipulation/execute_pick",
+						"arguments": {
+							"target_name": {
+								"kind": "param",
+								"name": "target_name"
+							}
+						}
+					}
+				]
+			}
+		]
+	}
+}

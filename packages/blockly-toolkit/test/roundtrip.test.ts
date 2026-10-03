@@ -10,7 +10,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import * as Blockly from 'blockly';
 import type { WorkflowDeclaration } from '@codecanvas/contracts';
-import { declarationToTask, findTaskFormat } from '@codecanvas/task-import';
+import { declarationToSkillPlan, declarationToTask, findTaskFormat, importSkillPlan } from '@codecanvas/task-import';
 import { compileWorkspace } from '../src/compile';
 
 /**
@@ -519,5 +519,69 @@ describe('只读块不参与写回', () => {
 		});
 		// 这份工作区是按目录渲染出来的，所以本来就没问题；这里钉的是「没给判据时行为不变」。
 		expect(result.diagnostics.map((item) => item.code)).not.toContain('blockly.compile.unknown_block');
+	});
+});
+
+describe('委托步也能往返：参数可改，结构碰不到', () => {
+	/**
+	 * 委托步的第二道闸是**技能计划**那把尺子（委托型技能只出现在 RoboFrame 系设备上），
+	 * 不是一期协议那把——这正是「闸由调用方给」的用处。
+	 */
+	const skillPlanGate = (declaration: Parameters<typeof declarationToTask>[0]) =>
+		findTaskFormat('skill_plan').validateDeclaration(declaration, { catalog: FIXTURE_CATALOG });
+
+	const delegateDeclaration = (): WorkflowDeclaration => {
+		const imported = importSkillPlan(
+			{
+				schemaVersion: 1,
+				robot: 'fixture_robot',
+				plan: [{ step: 'skill', skill: 'pick_object', params: { target_name: '红色方块' } }],
+			},
+			{ catalog: FIXTURE_CATALOG, idFactory: FIXTURE_ID_FACTORY },
+		);
+		if (!imported.ok) throw new Error(`夹具技能计划应当合法：${imported.diagnostics.map((d) => d.message).join('; ')}`);
+		return imported.declaration;
+	};
+
+	it('画成一块「委托执行侧」的积木，字段是可写的目标物', () => {
+		const declaration = delegateDeclaration();
+		const result = renderDeclaration({
+			workspace,
+			declaration,
+			catalog: FIXTURE_CATALOG,
+			selectedNodeId: declaration.nodes[0]?.id ?? null,
+			idFactory: FIXTURE_ID_FACTORY,
+		});
+		expect(result.diagnostics).toEqual([]);
+		expect(chain().map((block) => block.type)).toEqual([typeOf('pick_object', 'delegate', '0')]);
+		expect(blockAt(0).getFieldValue('target_name')).toBe('红色方块');
+	});
+
+	it('改字段 → 节点的 parameters 跟着变；结构（委托给谁）一个字都改不了', () => {
+		base = delegateDeclaration();
+		renderSelected(base.nodes[0]?.id ?? null);
+		blockAt(0).setFieldValue('蓝色杯子', 'target_name');
+
+		const compiled = compileWorkspace({
+			workspace,
+			base,
+			catalog: FIXTURE_CATALOG,
+			validateDeclaration: skillPlanGate,
+		});
+		expect(compiled.diagnostics).toEqual([]);
+		const declaration = compiled.declaration;
+		if (declaration === null) throw new Error('改出合法值时应当编译出声明');
+
+		expect(declaration.nodes[0]?.parameters['target_name']).toBe('蓝色杯子');
+		// 结构不进声明：接口名不在 nodes 里，它在目录里——画布上没有能改它的入口。
+		expect(Object.keys(declaration.nodes[0]?.parameters ?? {})).not.toContain('interfaceRef');
+		// 身份、位置、名字照旧原文。
+		expect(declaration.nodes[0]?.id).toBe(base.nodes[0]?.id);
+		expect(declaration.nodes[0]?.position).toEqual(base.nodes[0]?.position);
+
+		// 还原成技能计划仍是同一步，只是参数换了值——这就是「真机吃的那份 JSON」。
+		expect(declarationToSkillPlan(declaration).plan).toEqual([
+			{ step: 'skill', skill: 'pick_object', params: { target_name: '蓝色杯子' } },
+		]);
 	});
 });
