@@ -23,7 +23,7 @@ import {
 	type WorkflowNode,
 } from '@codecanvas/contracts';
 import { findTaskFormat, type TaskFormatRef } from '@codecanvas/task-import';
-import { DEVICES, useStudioDevices } from '../shell/devices';
+import { useStudioDevices } from '../shell/devices';
 import { SAMPLE_BY_FORMAT } from './sample-task';
 
 const declaration = shallowRef<WorkflowDeclaration | null>(null);
@@ -36,6 +36,16 @@ const diagnostics = ref<Diagnostic[]>([]);
  * `null` = 还没导入过任何东西（这个窗口一开机就是 `loadSampleTask`，所以正常路径上它很快就有值）。
  */
 const declarationFormatRef = shallowRef<TaskFormatRef | null>(null);
+
+/**
+ * 当前这份声明出生时用的那份**目录**。
+ *
+ * 为什么格式之外还要记目录：**格式认不出目录**（两台 RoboFrame 设备都是 `skill_plan`，
+ * 目录却不同）。只记格式的话，第二道闸与三个视图会去登记表里「按格式挑第一条」，
+ * 那台恰好是单臂——抓取那份声明于是被拿到别人的目录里查，「查不到 pick_object」
+ * 这种错话就出来了。见 `activeCatalog`。
+ */
+const declarationCatalogRef = shallowRef<CapabilityCatalog | null>(null);
 
 /** 选中项：节点与积木是一对，映射表负责把一侧推成另一侧（M3）。 */
 const selectedNodeId = ref<string | null>(null);
@@ -54,19 +64,17 @@ const deviceMissingDiagnostic = (): Diagnostic => ({
 /**
  * 第二道闸拿哪份**目录**：声明出生时那台设备的。
  *
- * 为什么不能只按格式挑一份常量目录：判据（技能名、参数名、类型）全在目录里，而目录是设备属性
+ * 为什么不能只按格式挑一份：判据（技能名、参数名、类型）全在目录里，而目录是设备属性
  * ——同一份技能计划换到一台目录不同的设备上，参数名一个都对不上。尺子和尺子上的刻度必须来自
  * 同一台设备，否则「按出生时的格式量」只做了一半。
  *
- * 按 `formatRef` 在登记表里取**第一条**：同一格式的设备共用一份技能库（真机与仿真就是同一份
- * `ROBOFRAME_SO101_CATALOG`），取哪条都是同一份目录。找不到才退回当前选中那台——只有
- * 「格式不在登记表里了」才走得到那儿，那时当前设备是唯一还拿得到的目录。
+ * **格式认不出目录**：这一版之前这里按 `formatRef` 在登记表里取第一条，理由写的是
+ * 「同一格式的设备共用一份技能库」。那句话在只有一个 RoboFrame 设备时碰巧成立，
+ * 加了抓取那台之后就不成立了——两台都是 `skill_plan`，目录却不同（抓取那份多一条
+ * `pick_object` 的委托）。按格式取第一条，会把抓取那份声明拿去单臂的目录里查，
+ * 于是 `pick_object` 变成「目录里没有这个技能」：一句指向并不存在的缺失的错话。
+ * 所以目录**跟着声明走**（`declarationCatalogRef`，与格式同一个来源、同一个写入点）。
  */
-function catalogForFormat(formatRef: TaskFormatRef): CapabilityCatalog | null {
-	const born = DEVICES.find((device) => device.formatRef === formatRef);
-	if (born !== undefined) return born.catalog;
-	return devices.selectedDevice.value?.catalog ?? null;
-}
 
 /** 载入任务 JSON。成功才换真相；失败只留诊断，界面保持原样。 */
 function loadTaskJson(text: string): boolean {
@@ -82,7 +90,9 @@ function loadTaskJson(text: string): boolean {
 
 	declaration.value = result.declaration;
 	// 「出生时的尺子」在这一刻定下来：写回的第二道闸只认它（见文件头）。
+	// 格式与目录一起记：格式说「用哪把尺子」，目录说「尺子上的刻度是什么」，两者缺一不可。
 	declarationFormatRef.value = device.formatRef;
+	declarationCatalogRef.value = device.catalog;
 	selectedNodeId.value = null;
 	selectedBlockId.value = null;
 	return true;
@@ -163,8 +173,8 @@ const activeFormatRef = computed<TaskFormatRef | null>(
 );
 
 const activeCatalog = computed<CapabilityCatalog | null>(() => {
-	const formatRef = activeFormatRef.value;
-	return formatRef === null ? null : catalogForFormat(formatRef);
+	if (declaration.value !== null) return declarationCatalogRef.value;
+	return devices.selectedCatalog.value;
 });
 
 export function useStudioDocument() {

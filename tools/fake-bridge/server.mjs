@@ -20,6 +20,9 @@
  * 环境变量 / 命令行参数（命令行优先）：
  *   FAKE_BRIDGE_PORT=8788           --port        监听端口；0 = 让系统挑一个（测试用），
  *                                                 挑中的端口会打在 `listening http://127.0.0.1:<port>`
+ *   FAKE_BRIDGE_ROBOT=so101_single_arm --robot    冒充哪一台的配置；决定 robot_name 与技能表。
+ *                                                 另一份是 so101_handeye_realsense_grasp（含抓取）。
+ *                                                 想冒充两台就起两个进程、两个端口——上游一份配置一台机器
  *   FAKE_BRIDGE_STEP_MS=800         --step-ms     一步「走」多久才落终态（这之前轮询读到 executing）
  *   FAKE_BRIDGE_FAIL_SKILLS=a,b     --fail-skills 名单里的技能落 failed（默认全成功）
  *   FAKE_BRIDGE_UNKNOWN_SKILLS=a,b  --unknown-skills 名单里的技能**从目录里摘掉**：
@@ -43,7 +46,7 @@ import {
 	validateRequestSchema,
 	validateResultSchema,
 } from '../../packages/robot-bridge/src/models.ts';
-import { ROBOFRAME_SO101_CATALOG } from '../../packages/capabilities/src/index.ts';
+import { ROBOFRAME_GRASP_CATALOG, ROBOFRAME_SO101_CATALOG } from '../../packages/capabilities/src/index.ts';
 
 // ---------------------------------------------------------------------------
 // 配置
@@ -84,12 +87,27 @@ const FAKE_VERSION = 'fake-bridge-0';
 // ---------------------------------------------------------------------------
 
 /**
+ * 这个替身替的是**一台机器人配置**，所以目录要能挑：上游的 robot_config 一份配置一台机器，
+ * 一台机器一个 bridge。两份真实配置（单臂 / 抓取）技能集不同，一个进程同时冒充两台
+ * 只会让 `robot_name` 与技能表打架——想两台就起两个进程、两个端口。
+ */
+const CATALOGS = {
+	so101_single_arm: ROBOFRAME_SO101_CATALOG,
+	so101_handeye_realsense_grasp: ROBOFRAME_GRASP_CATALOG,
+};
+
+const ROBOT = configOf('robot', 'FAKE_BRIDGE_ROBOT') ?? 'so101_single_arm';
+const CATALOG = CATALOGS[ROBOT];
+if (CATALOG === undefined) {
+	console.error(`不认识的机器人配置 ${ROBOT}（已知：${Object.keys(CATALOGS).join('、')}）`);
+	process.exit(2);
+}
+
+/**
  * 「bridge 认识的技能」＝ 真目录里的 `capabilities[].capabilityRef`，减掉被要求装不认识的那些。
  * 手写一份假技能清单就失去了这次的意义——那样测出来的只是「假服务收了我编的东西」。
  */
-const SKILLS = ROBOFRAME_SO101_CATALOG.capabilities.filter(
-	(capability) => !UNKNOWN_SKILLS.has(capability.capabilityRef),
-);
+const SKILLS = CATALOG.capabilities.filter((capability) => !UNKNOWN_SKILLS.has(capability.capabilityRef));
 const SKILL_BY_NAME = new Map(SKILLS.map((capability) => [capability.capabilityRef, capability]));
 
 /**
@@ -101,8 +119,8 @@ const SKILL_BY_NAME = new Map(SKILLS.map((capability) => [capability.capabilityR
  */
 const catalogPayload = () =>
 	catalogSchema.parse({
-		robot_name: ROBOFRAME_SO101_CATALOG.robotName,
-		config_digest: ROBOFRAME_SO101_CATALOG.revisionRef,
+		robot_name: CATALOG.robotName,
+		config_digest: CATALOG.revisionRef,
 		skills: SKILLS.map((capability) => ({
 			name: capability.capabilityRef,
 			summary: capability.summary,

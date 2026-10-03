@@ -243,6 +243,7 @@ watch(selectedStep, async (index) => {
 							'is-set': line.kind === 'set',
 							'is-branch': line.kind === 'if' || line.kind === 'else',
 							'is-unsupported': line.kind === 'unsupported',
+							'is-delegate': line.kind === 'delegate',
 							'is-selected': isSelectedStep(line),
 							'is-running': isRunningLine(line),
 							'is-clickable': isClickable(line),
@@ -477,6 +478,18 @@ watch(selectedStep, async (index) => {
 
 .cp-line.is-unsupported .cp-src {
 	color: var(--cc-danger-strong);
+}
+
+/*
+ * 委托那一行（`delegate /manipulation/execute_pick(...)`）：它不是本机的一步。
+ *
+ * 用青色系 + 虚线下划线，与 `unsupported` 的红色明确分开——红字说的是「这里有问题」，
+ * 而委托是**边界**：目录明写着这一步交给执行侧。画成红字会让人去查一个并不存在的故障。
+ * 与 3D 面板里那种「本机演不了」的行是同一个态度。
+ */
+.cp-line.is-delegate .cp-src {
+	border-bottom: 1px dashed var(--cc-border);
+	color: var(--cc-accent-strong);
 }
 
 .cp-warnings {

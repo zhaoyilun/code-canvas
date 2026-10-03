@@ -17,6 +17,7 @@ FAKE_BRIDGE_PORT=0 node tools/fake-bridge/start.mjs   # 让系统挑端口（挑
 | 环境变量 | 命令行 | 缺省 | 意思 |
 | --- | --- | --- | --- |
 | `FAKE_BRIDGE_PORT` | `--port` | `8788` | 监听端口。`0` = 系统挑一个，会在 `listening http://127.0.0.1:<port>` 那一行报出来 |
+| `FAKE_BRIDGE_ROBOT` | `--robot` | `so101_single_arm` | 冒充哪一台的配置：决定 `robot_name` 与技能表。另一份是 `so101_handeye_realsense_grasp`（多一个 `pick_object`）。想冒充两台就起两个进程、两个端口——上游一份 `robot_config` 一台机器 |
 | `FAKE_BRIDGE_STEP_MS` | `--step-ms` | `800` | 一步「走」多久才落终态。这之前轮询读到 `state: "executing"` |
 | `FAKE_BRIDGE_FAIL_SKILLS` | `--fail-skills` | 空（全成功） | 逗号分隔。名单里的技能落 `failed` / `success:false` |
 | `FAKE_BRIDGE_UNKNOWN_SKILLS` | `--unknown-skills` | 空 | 逗号分隔。名单里的技能**从目录里摘掉**：`execute` 回 404、`validate` 回 `valid:false` |

@@ -185,3 +185,60 @@ describe('第二道闸的尺子来自声明出生时那台设备', () => {
 		expect(measured.diagnostics.some((diagnostic) => diagnostic.code.includes('action'))).toBe(true);
 	});
 });
+
+/**
+ * 「格式认不出目录」——两台设备都是 `skill_plan`，目录却不同。
+ *
+ * 这一条曾经是错的：第二道闸与三个视图按 `formatRef` 在登记表里取**第一条**，
+ * 而那条恰好是单臂那台。抓取那份声明于是被拿到别人的目录里查，
+ * `pick_object` 变成「目录里没有这个技能」——一句指向并不存在的缺失的错话。
+ */
+describe('目录跟着声明走，不只跟着格式走', () => {
+	const GRASP_PLAN = JSON.stringify({
+		schemaVersion: 1,
+		robot: 'so101_handeye_realsense_grasp',
+		plan: [
+			{ step: 'skill', skill: 'inspect_scene' },
+			{ step: 'skill', skill: 'pick_object', params: { target_name: '红色方块' } },
+		],
+	});
+
+	it('抓取那台下导入，出生目录就是抓取那份——不按格式退回登记表第一条', () => {
+		setSelectedDevice('so101_grasp_sim');
+		expect(doc.loadTaskJson(GRASP_PLAN)).toBe(true);
+		expect(doc.declarationFormatRef.value).toBe('skill_plan');
+		// 两份目录的 catalogRef 不同，所以这一条真的能分辨「拿对了没有」。
+		expect(doc.declarationCatalog.value?.catalogRef).toBe('roboframe_so101_handeye_realsense_grasp');
+		expect(
+			doc.declarationCatalog.value?.capabilities.some((capability) => capability.capabilityRef === 'pick_object'),
+		).toBe(true);
+	});
+
+	it('导入之后换成单臂那台，目录不跟着换：写回仍按出生那份判', () => {
+		setSelectedDevice('so101_grasp_sim');
+		expect(doc.loadTaskJson(GRASP_PLAN)).toBe(true);
+
+		setSelectedDevice('so101_robot');
+		expect(doc.declarationCatalog.value?.catalogRef).toBe('roboframe_so101_handeye_realsense_grasp');
+
+		// 改委托那一步的实参：过得去（拿单臂那把尺子会报「没有 pick_object」）。
+		const index = doc.nodes.value.findIndex((node) => node.parameters['action'] === 'pick_object');
+		expect(index).toBeGreaterThanOrEqual(0);
+		expect(doc.applyDeclaration(withNodeParameter(index, { target_name: '蓝色杯子' }))).toBe(true);
+		expect(paramsAt(index)['target_name']).toBe('蓝色杯子');
+		expect(doc.diagnostics.value).toEqual([]);
+	});
+
+	it('反证：同一份声明拿单臂那把尺子量是过不去的——所以要的是目录，不是一个格式名', () => {
+		setSelectedDevice('so101_grasp_sim');
+		expect(doc.loadTaskJson(GRASP_PLAN)).toBe(true);
+
+		const single = DEVICES.find((device) => device.deviceRef === 'so101_sim');
+		if (single === undefined) throw new Error('单臂那台应当在册');
+		const measured = findTaskFormat('skill_plan').validateDeclaration(currentDeclaration(), {
+			catalog: single.catalog,
+		});
+		expect(measured.ok).toBe(false);
+		expect(measured.diagnostics.map((diagnostic) => diagnostic.code)).toContain('plan.step.skill.unknown');
+	});
+});
