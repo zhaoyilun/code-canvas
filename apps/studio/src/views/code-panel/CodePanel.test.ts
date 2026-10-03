@@ -15,9 +15,10 @@
 import { mount } from '@vue/test-utils';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeWorkflowDigest, type WorkflowDeclaration, type WorkflowNode } from '@codecanvas/contracts';
 import { TASK_BRANCH_NODE_TYPE, TASK_PRIMITIVE_NODE_TYPE, TASK_WAIT_NODE_TYPE } from '@codecanvas/task-import';
+import { clearRunningPlanPath, setRunningPlanPath } from '../../shell/device-run';
 import { setSelectedDevice } from '../../shell/devices';
 import { loadSampleTask, useStudioDocument } from '../../state/document';
 import FlowView from '../flow/FlowView.vue';
@@ -717,5 +718,129 @@ describe('CodePanel · 原语步显示的是计划层那一行原语调用', () 
 		await panel.vm.$nextTick();
 
 		expect(lineTexts(panel)).toEqual(['open_gripper()']);
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 动线在代码这一侧的落点：设备正在跑的那一步
+// ---------------------------------------------------------------------------
+
+/**
+ * 判据是**执行路径**（`shell/device-run.ts` 里那一个 ref，由右栏面板在每一步的
+ * `running` 事件里写），不是「选中」——两者共用 `data-node-id` 那个锚点口径，
+ * 于是「连线连到哪一行」与「哪一行在跑」必然是同一行。
+ *
+ * 与选中是**两件事**（两个属性、两种观感）：跟随开着时正好重合，用户手点别处时就分开。
+ */
+describe('CodePanel · 动线（设备正在这一步）', () => {
+	const runningLines = (panel: ReturnType<typeof mount>): number[] =>
+		panel
+			.findAll('li.cp-line')
+			.filter((line) => line.attributes('data-running') === 'true')
+			.map((line) => Number(line.attributes('data-line')));
+
+	beforeEach(() => {
+		clearRunningPlanPath();
+	});
+
+	afterEach(() => {
+		// 这个 ref 是模块级的（跨用例活着的），用完必须清掉，否则下一个用例开局就带着标记。
+		clearRunningPlanPath();
+	});
+
+	it('没在跑时：一行都不带标记（连属性都不出现）', async () => {
+		selectBranch(BRANCH_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		expect(runningLines(panel)).toEqual([]);
+		expect(panel.findAll('li.cp-line').map((line) => line.attributes('data-running'))).toEqual(
+			Array.from({ length: lineTexts(panel).length }, () => undefined),
+		);
+	});
+
+	it('计划层：跑 then 臂里那一步 → 只有那一行在跑，分支头与 else 臂都不动', async () => {
+		selectBranch(BRANCH_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		// 面板上是四行：if / then 臂那一步 / else / else 臂那一步
+		expect(lineTexts(panel)).toEqual([
+			'if last.success == False:',
+			'    close_gripper_skill()',
+			'else:',
+			'    open_gripper_skill()',
+		]);
+
+		setRunningPlanPath('1.then.0');
+		await panel.vm.$nextTick();
+
+		expect(runningLines(panel)).toEqual([2]);
+		expect(panel.findAll('li.cp-line')[1]?.classes()).toContain('is-running');
+		expect(panel.findAll('li.cp-line')[0]?.attributes('data-running')).toBeUndefined();
+
+		// 与「选中」各写各的：把选中的那一步换到 `if` 头（两臂展开的那几行都属于它，全亮），
+		// 「在跑」仍钉在 then 臂那一步上——第 1 行 `data-selected=true` 而 `data-running` 根本没有。
+		doc.selectStep(0);
+		await panel.vm.$nextTick();
+		expect(selectedLines(panel)).toEqual([1, 2, 3, 4]);
+		expect(runningLines(panel)).toEqual([2]);
+		expect(panel.findAll('li.cp-line')[0]?.attributes('data-selected')).toBe('true');
+		expect(panel.findAll('li.cp-line')[0]?.attributes('data-running')).toBeUndefined();
+	});
+
+	it('换到 else 臂那一步 → 标记跟着走，上一步那一行退出', async () => {
+		selectBranch(BRANCH_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		setRunningPlanPath('1.then.0');
+		await panel.vm.$nextTick();
+		setRunningPlanPath('1.else.0');
+		await panel.vm.$nextTick();
+
+		expect(runningLines(panel)).toEqual([4]);
+		expect(panel.findAll('li.cp-line.is-running')).toHaveLength(1);
+	});
+
+	it('清掉路径（跑完 / 复位）→ 全部退出', async () => {
+		selectBranch(BRANCH_PLAN_JSON);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		setRunningPlanPath('1.then.0');
+		await panel.vm.$nextTick();
+		clearRunningPlanPath();
+		await panel.vm.$nextTick();
+
+		expect(runningLines(panel)).toEqual([]);
+		expect(panel.findAll('li.cp-line.is-running')).toHaveLength(0);
+	});
+
+	it('跑的是技能步（模块就是这一步）→ 这个模块的每一行都在跑；别的模块不受影响', async () => {
+		setSelectedDevice('so101_robot');
+		expect(doc.loadTaskJson(BRANCH_PLAN_JSON)).toBe(true);
+		const skill = declaration().nodes[4];
+		if (skill === undefined) throw new Error('素材里应当有第五步');
+		doc.select(skill.id);
+		const panel = mount(CodePanel);
+		await panel.vm.$nextTick();
+
+		// 面板上只有这个模块的实现，所以「在跑」= 它的每一行（注释行不算：它不占步号，也没在执行）
+		setRunningPlanPath('2');
+		await panel.vm.$nextTick();
+
+		expect(runningLines(panel).length).toBeGreaterThan(0);
+		expect(runningLines(panel)).toEqual(
+			panel
+				.findAll('li.cp-line')
+				.filter((line) => line.attributes('data-kind') !== 'comment')
+				.map((line) => Number(line.attributes('data-line'))),
+		);
+
+		// 换成另一步（不是这个模块）→ 标记整块退出，不挂在别人的行上
+		setRunningPlanPath('1.then.0');
+		await panel.vm.$nextTick();
+		expect(runningLines(panel)).toEqual([]);
 	});
 });

@@ -49,8 +49,10 @@ import {
 	type ThemePalette,
 } from '@codecanvas/blockly-toolkit';
 import { DEVICES } from '../../shell/devices';
+import { runningPlanPath } from '../../shell/device-run';
 import { findTaskFormat } from '@codecanvas/task-import';
 import { useStudioDocument } from '../../state/document';
+import { nodeAtPlanPath } from '../shared/plan-structure';
 import {
 	branchPlanOf,
 	conditionViewOf,
@@ -85,6 +87,18 @@ export const STEP_PATH_ATTRIBUTE = 'data-cc-step-path';
 export const NODE_TAG_ATTRIBUTE = 'data-cc-node-tag';
 /** 当前选中步的那块顶层积木上的标记（高亮语言与另外两栏同源）。 */
 export const STEP_ACTIVE_ATTRIBUTE = 'data-cc-step-active';
+/**
+ * 「设备正在跑这一步」的标记，挂在**这个模块的顶层积木**上。
+ *
+ * 它守在另一个属性上、用另一种观感（一圈刚点亮的辉光，见 `BlocklyView.vue`）——
+ * 与「选中」那条不是一回事：跟随开着时两者重合，用户手点别处时就分开，
+ * 那时画布上要能同时看出「机器在这儿」与「我在看那儿」。
+ *
+ * 粒度说明：画布一次只画**一个模块的实现**，而计划里的「一步」就是一个模块，
+ * 所以这里标的是「这个模块在跑」——它内部第几条语句没有对应的计划步可言
+ * （那正是 `STEP_ACTIVE_ATTRIBUTE` 管的事，两者的坐标不是同一个）。
+ */
+export const STEP_RUNNING_ATTRIBUTE = 'data-cc-step-running';
 
 export type CanvasStatus = 'idle' | 'plan' | 'synced' | 'written' | 'rejected' | 'broken' | 'failed';
 
@@ -648,6 +662,18 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 		return block === null ? null : (identityPayload(block)?.stepIndex ?? null);
 	});
 
+	/**
+	 * 设备**正在跑**的那一步是哪个节点（`shell/device-run.ts` 的那个 ref）。
+	 *
+	 * 判据走 `nodeAtPlanPath`，与流程卡、右栏面板同一份：路径说的是「在计划的哪一格」，
+	 * 而画布画的是「哪个模块」，中间那一步换算只有这一份实现。
+	 * 与选中的 `activeNodeId` 是**两件事**——跟随开着时正好相等，用户手点别处时就分开。
+	 */
+	const runningNodeId = computed<string | null>(() => {
+		const path = runningPlanPath.value;
+		return path === null ? null : (nodeAtPlanPath(store.declaration.value, path)?.id ?? null);
+	});
+
 	/** 现在高亮/亮徽标的是哪一块：选中那一步的**顶层**积木，其次选中的那块，再其次模块的第一块。 */
 	const highlightTarget = (): string | null => {
 		const index = blockIndex.value;
@@ -667,7 +693,10 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 	 *      验收与调试读它，不用靠肉眼认；
 	 *   3. 只给**顶层语句**挂/更新序号徽标（徽标数的是「实现里的第几步」，嵌套节点不数步），
 	 *      亮的是当前选中那一步的那块；
-	 *   4. 摘掉已经不在画布上的积木留下的徽标。
+	 *   4. 摘掉已经不在画布上的积木留下的徽标；
+	 *   5. 给**正在跑**的那个模块的顶层积木挂 `data-cc-step-running`（M4 的动线在积木这一侧的落点）。
+	 *      它写在这一个遍历里，与另外四个标记同一份幂等逻辑：谁变了都只是重跑一遍这个函数，
+	 *      不必为「在跑」另开一条会跟别处打架的路径。
 	 */
 	function syncDecorations(): void {
 		const current = workspace.value;
@@ -676,6 +705,7 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 		if (palette === null) return;
 		const active = highlightTarget();
 		const activeStep = activeStepIndex.value;
+		const running = runningNodeId.value;
 		const seen = new Set<Element>();
 		const rows: DecoratedBlock[] = [];
 
@@ -692,6 +722,13 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 				element.setAttribute(STEP_ACTIVE_ATTRIBUTE, 'true');
 			} else {
 				element.removeAttribute(STEP_ACTIVE_ATTRIBUTE);
+			}
+			// 「设备正在跑这一步」只挂顶层积木上（嵌套的引用块不是「一步」），
+			// 与上面那条各判各的：跟随开着时两者落在同一块上，手点别处时就分开。
+			if (identity.topLevel && running !== null && identity.nodeId === running) {
+				element.setAttribute(STEP_RUNNING_ATTRIBUTE, 'true');
+			} else {
+				element.removeAttribute(STEP_RUNNING_ATTRIBUTE);
 			}
 			seen.add(element);
 
@@ -1018,6 +1055,16 @@ export function useBlocklyCanvas(): UseBlocklyCanvasResult {
 	// 选中「步」变了（点代码面板某一行也是这条）：高亮那一步的顶层积木，不重画。
 	watch(store.selectedStepIndex, () => {
 		syncSelectionFromStore();
+	});
+
+	/**
+	 * 设备换了一步（唯一来源是 `runningPlanPath`，见 `shell/device-run.ts`）：
+	 * 只挪 `data-cc-step-running` 这一个标记，**不重画画布**——在跑的模块与画布上
+	 * 画着的模块不是同一个时，那个标记自然落在零块上（模块没画出来，就没有它的积木可标）。
+	 * 与选中那条路一样只排队，标记跟 Blockly 自己的渲染排在同一帧之后。
+	 */
+	watch(runningPlanPath, () => {
+		scheduleDecorations();
 	});
 
 	return {

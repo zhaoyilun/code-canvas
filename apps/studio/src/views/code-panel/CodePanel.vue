@@ -23,7 +23,9 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import { renderImplementation, type RenderedImplementation, type RenderedLine } from '@codecanvas/code-render';
 import { useStudioDocument } from '../../state/document';
+import { runningPlanPath } from '../../shell/device-run';
 import { stepNumbersOf } from '../shared/sequence-badge';
+import { nodeAtPlanPath } from '../shared/plan-structure';
 import SequenceBadge from '../shared/SequenceBadge.vue';
 import { PLAN_LAYER_NOTE, lineNodeId, planProgramOf, type PlanLine, type PlanProgram } from './branch-code';
 
@@ -82,6 +84,35 @@ const selectedStep = computed(() => doc.selectedStepIndex.value);
 /** 这一行属不属于当前选中步：属于就整行高亮（一个 `if` 的每一行都亮）。 */
 const isSelectedStep = (line: PanelLine): boolean =>
 	selectedStep.value !== null && line.stepIndex === selectedStep.value;
+
+// ---------------------------------------------------------------------------
+// 动线在代码这一侧的落点：设备正在跑的那一步
+// ---------------------------------------------------------------------------
+
+/**
+ * 设备**正在跑**的那一步是哪个节点。
+ *
+ * 判据与流程卡、积木那侧同一份（`runningPlanPath` + `nodeAtPlanPath`）**不是**同一份状态：
+ * 「选中」是人在看哪一步（`selectedStepIndex` / `selectedNodeId`），这里是机器在哪一步。
+ * 跟随开着时两者重合，用户手点别处时就分开——所以它们是两个独立的东西，不合成一个。
+ */
+const runningNodeId = computed<string | null>(() => {
+	const path = runningPlanPath.value;
+	return path === null ? null : (nodeAtPlanPath(doc.declaration.value, path)?.id ?? null);
+});
+
+/**
+ * 这一行属不属于**正在跑**的那一步（不计注释行：它不占步号，也没在执行）。
+ *
+ * 判据是这一行指的那个节点（计划行是它自己那一步，实现行是这个模块）——
+ * 与挂 `data-node-id` 用的是同一个函数，于是「连线连到哪一行」与「哪一行在跑」必然是同一行。
+ * 计划层里臂内那一行因此只亮它自己；实现层里亮的是这个模块的每一行
+ * （画布一次只画一个模块，模块就是计划里的一步，它内部没有更细的计划步可言）。
+ */
+const isRunningLine = (line: PanelLine): boolean =>
+	runningNodeId.value !== null &&
+	line.kind !== 'comment' &&
+	(lineNodeId(line) ?? activeNode.value?.id ?? null) === runningNodeId.value;
 
 /**
  * 每一行的**行号 → 顶层语句头行号**。徽标只挂在头上：
@@ -213,6 +244,7 @@ watch(selectedStep, async (index) => {
 							'is-branch': line.kind === 'if' || line.kind === 'else',
 							'is-unsupported': line.kind === 'unsupported',
 							'is-selected': isSelectedStep(line),
+							'is-running': isRunningLine(line),
 							'is-clickable': isClickable(line),
 						}"
 						:data-line="line.line"
@@ -223,6 +255,7 @@ watch(selectedStep, async (index) => {
 						:data-step-head="isStepHead(line) ? (line.stepIndex ?? undefined) : undefined"
 						:data-primitive="line.primitiveRef ?? undefined"
 						:data-selected="isSelectedStep(line) ? 'true' : 'false'"
+						:data-running="isRunningLine(line) ? 'true' : undefined"
 						:data-node-id="lineAnchorId(line)"
 						:role="isClickable(line) ? 'button' : undefined"
 						:tabindex="isClickable(line) ? 0 : undefined"
@@ -359,6 +392,41 @@ watch(selectedStep, async (index) => {
 .cp-line.is-selected {
 	background: var(--cc-accent-veil);
 	border-left-color: var(--cc-highlight);
+}
+
+/*
+ * 「设备正在跑这一步」（M4 的动线在代码这一侧的落点）。
+ *
+ * 与上面那条**选中**是两种观感，缺一种就分不清「机器在这儿」与「我在看那儿」：
+ *   选中 → 左边一条实心强调色 + 一层 veil 底色（静态，一直在）
+ *   在跑 → 一行**内描边**从亮到弱地亮一下，最后停在一条很淡的圈上
+ *
+ * 只动 `box-shadow`、不动 `background`：两者会同时出现（跟随开着时正好同一行），
+ * 动画若占了 `background` 就会把选中那层底色盖掉——两个信号不该互相吃掉。
+ * `box-shadow` 不触发布局，行高与文字位置一个像素不动。
+ */
+.cp-line.is-running {
+	animation: cc-line-lit var(--cc-lit-flash-ms) ease-out 1 forwards;
+}
+
+@keyframes cc-line-lit {
+	0% {
+		box-shadow:
+			inset 0 0 0 var(--cc-highlight-border-width) var(--cc-highlight),
+			0 0 10px var(--cc-lit-flash-glow);
+	}
+
+	100% {
+		box-shadow: inset 0 0 0 1px var(--cc-flow-settled);
+	}
+}
+
+/* 不动效的人也看得见「这一行在跑」：只剩那个静态的淡圈，信息一个不少。 */
+@media (prefers-reduced-motion: reduce) {
+	.cp-line.is-running {
+		animation: none;
+		box-shadow: inset 0 0 0 1px var(--cc-flow-settled);
+	}
 }
 
 /*

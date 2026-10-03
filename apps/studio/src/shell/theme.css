@@ -172,6 +172,33 @@
 	--cc-col-gap-tight: 16px;
 
 	/*
+	 * 动线（**仅追加**，上面已有的变量一个没动）。
+	 *
+	 * 连线回答「这三处说的是同一件事」，但看不出「这句话正怎么流到机械臂上」。
+	 * 动线就是那件事：设备跑到某一步时，属于那一步的线上跑一道光。
+	 * **起点是真实的步骤事件**（`shell/device-run.ts` 的 `runningPlanPath`），不是定时器演的。
+	 *
+	 * 色值全部从连线那三档派生（`--cc-link-*`），只多两个**时间**：
+	 * 光跑一趟多快、收住那一趟多快。收住比流动短——「停」不该拖得比「跑」还久。
+	 *
+	 * `--cc-flow-dash` 是那道光的形状（`0.2 0.8` = 两成亮、八成空，一个周期正好 1）。
+	 * 周期取 1 是有意的：`<path>` 上挂着 `pathLength="1"`，于是**不管这条线多长**，
+	 * 光跑一趟都是把 `stroke-dashoffset` 从 0 推到 1——一条关键帧就够，不必按长度算数。
+	 */
+	--cc-flow-ms: 640ms;
+	--cc-flow-settle-ms: 380ms;
+	/* 同一路的回响：卡片那段先走，另一段慢半拍跟上来（顺序见 LinkOverlay.vue） */
+	--cc-flow-echo-delay-ms: 90ms;
+	--cc-flow-dash: 0.2 0.8;
+	/* 收到「已跑过」的那一档：还是强调色，但压暗、不发光、不再动 */
+	--cc-flow-settled: var(--cc-accent);
+	--cc-flow-settled-opacity: 0.42;
+	/* 刚被点亮的那一下（积木块与代码行）：与「选中」的描边是两种观感 */
+	--cc-lit-flash-veil: var(--cc-accent-veil);
+	--cc-lit-flash-glow: var(--cc-accent-glow);
+	--cc-lit-flash-ms: 900ms;
+
+	/*
 	 * 转译链的状态色（**仅追加**，上面已有的变量一个没动）。
 	 *
 	 * 那条链原先只是静态装饰。现在它要回答两个问题——「在不在干活」「干完没有」——

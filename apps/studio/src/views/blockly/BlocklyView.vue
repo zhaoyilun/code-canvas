@@ -158,6 +158,39 @@ const taskName = computed(() => store.declaration.value?.name ?? '');
 	filter: drop-shadow(0 0 4px var(--cc-accent-glow));
 }
 
+/*
+ * 「设备正在跑这一步」（M4 的动线在积木这一侧的落点）。
+ *
+ * 与上面那条**选中**是两种观感，缺一种就分不清「机器在这儿」与「我在看那儿」
+ * （跟随开着时两者落在同一块上，那时要能同时看出来）：
+ *   选中 → 徽标反白 + Blockly 自己那圈高亮描边
+ *   在跑 → 这一块整体亮一下：`filter` 的辉光从强到弱，停在很淡的一圈上
+ *
+ * 用 `filter` 而不是改几何：它不触发布局（积木的形状、位置、命中区一个像素没动），
+ * 而且画布上本来就用 `filter` 画徽标那圈光（上面那条），同一套手段。
+ * 动效关掉时只剩一个静态的淡辉光——「这一块在跑」照样看得出来。
+ */
+.canvas-host :deep([data-cc-step-running='true']) {
+	animation: cc-block-lit var(--cc-lit-flash-ms) ease-out 1 forwards;
+}
+
+@keyframes cc-block-lit {
+	0% {
+		filter: drop-shadow(0 0 3px var(--cc-accent-strong)) drop-shadow(0 0 12px var(--cc-lit-flash-glow));
+	}
+
+	100% {
+		filter: drop-shadow(0 0 2px var(--cc-flow-settled));
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.canvas-host :deep([data-cc-step-running='true']) {
+		animation: none;
+		filter: drop-shadow(0 0 2px var(--cc-flow-settled));
+	}
+}
+
 .canvas-failure {
 	position: absolute;
 	inset: auto var(--cc-space-3) var(--cc-space-3) var(--cc-space-3);

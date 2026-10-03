@@ -17,3 +17,10 @@ export {
 	type LinkRow,
 } from './measure';
 export { anchorFrom, curveOf, toLocal, type AnchorPoint, type LinkGeometry, type RectLike } from './geometry';
+export {
+	EMPTY_RUN_TRACE,
+	phaseOf,
+	traceAfter,
+	type RunPhase,
+	type RunTrace,
+} from './run-trace';
