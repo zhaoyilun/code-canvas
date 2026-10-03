@@ -111,7 +111,11 @@ const linkNote = computed(() => linkage.note.value);
 		<p v-else-if="teaching.status.value === 'drawing'" class="cp-state" data-testid="code-panel-drawing">
 			正在写…（已经收到 {{ teaching.streamedChars.value }} 字）
 		</p>
-		<p v-else class="cp-state" data-testid="code-panel-empty">
+		<!--
+			空态只在**一行都还没有**时说话：链尾的 `v-else` 会把「有行、只是没别的话要说」
+			也接住，于是四十二行代码底下挂着一句「还没有代码」（录屏里就是这么露的）。
+		-->
+		<p v-else-if="revealed.length === 0" class="cp-state" data-testid="code-panel-empty">
 			还没有代码。这一栏显示的是「这件事怎么做」的一整段教学代码，由任务 JSON 与这台设备的目录讲出来。
 		</p>
 

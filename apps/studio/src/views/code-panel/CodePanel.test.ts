@@ -105,6 +105,14 @@ describe('代码到手之后', () => {
 		expect(wrapper.findAll('li.cp-line').length).toBeGreaterThan(0);
 	});
 
+	it('有行了就不再念空态那句（链尾的 v-else 会把「没别的话要说」也接住）', () => {
+		const wrapper = mountPanel();
+		expect(wrapper.findAll('[data-testid="code-line"]').length).toBeGreaterThan(0);
+		expect(wrapper.find('[data-testid="code-panel-empty"]').exists()).toBe(false);
+		expect(wrapper.find('[data-testid="code-panel-drawing"]').exists()).toBe(false);
+		expect(wrapper.find('[data-testid="code-panel-failed"]').exists()).toBe(false);
+	});
+
 	it('这一栏一个字都不写回声明：挂载前后 digest 与节点一模一样', async () => {
 		const before = doc.declaration.value;
 		const digestBefore = before === null ? '' : computeWorkflowDigest(before);
