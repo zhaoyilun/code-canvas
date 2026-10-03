@@ -38,6 +38,7 @@ import { clearRunningPlanPath, setRunningPlanPath } from '../../shell/device-run
 import type { StudioDevice } from '../../shell/devices';
 import { useStudioDocument } from '../../state/document';
 import { nodeAtPlanPath, primitiveLabelOf, waitLabelOf } from '../shared/plan-structure';
+import { DISPATCH_PATH_NOTE } from './robot-calls/plan-run';
 
 /** 目录出处按 `catalogRef` 认：认不着就不显示（编一个出处比不显示更坏） */
 const SO101_CATALOG_REF = ROBOFRAME_SO101_CATALOG.catalogRef;
@@ -377,6 +378,16 @@ onBeforeUnmount(() => {
 				</p>
 				<p v-else class="device-note" data-testid="virtual-device-status">{{ status }}</p>
 			</div>
+
+			<!--
+				这一句是**防误读**的：这个按钮跑的是本机仿真（`@codecanvas/robot3d` 的执行器，
+				一个网络请求都不发），与下面「发给机器人」那个 tab 的「下发」（真的 HTTP 发给 bridge）
+				是两件事。不写它，人会把「这里跑通了」当成「机器人收到了」。
+				摆的是**一行版**（那一行的高度是从 3D 画面里让出来的），全句在 `title` 里。
+			-->
+			<p v-if="isVirtual" class="device-path-note" data-testid="virtual-device-path-note" :title="DISPATCH_PATH_NOTE">
+				本机仿真（我们的执行器），不发网络请求；真下发在下面「发给机器人」
+			</p>
 			<p v-else class="device-note" data-testid="virtual-device-blocked">{{ blockedReason }}</p>
 
 			<!-- 校验诊断原样显示：哪个技能、哪个参数、哪条路径 -->
@@ -615,6 +626,22 @@ onBeforeUnmount(() => {
 	flex: 1 1 auto;
 	min-width: 0;
 	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-dim);
+}
+
+/* 两条路那句：单占一行，虚线跟运行那一行分开——它不是控件，是一句要说清的话 */
+.device-path-note {
+	margin: 0;
+	padding-top: var(--cc-space-1);
+	flex: 0 0 auto;
+	min-width: 0;
+	font-size: var(--cc-fs-xs);
+	line-height: 1.5;
+	color: var(--cc-text-faint);
+	border-top: 1px dashed var(--cc-line-strong);
+}
+
+.device-path-note strong {
 	color: var(--cc-text-dim);
 }
 

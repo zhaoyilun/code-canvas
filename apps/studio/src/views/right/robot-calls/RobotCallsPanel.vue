@@ -23,13 +23,45 @@
  * （一期设备那份不是这台设备产出的，编译不出请求，不硬套）、**计划过不了校验**（诊断原样摆出来）。
  * 与右栏「虚拟设备」按下运行时的拒接是同一套判据（同一个 `buildPlanFromDeclaration`）。
  *
- * 只读：这一屏没有一条写回路径——要改计划去积木画布，要重下发得先有端点（这版不发请求）。
+ * 这一屏**只读**：没有一条写回路径——要改计划去积木画布。
+ *
+ * ## 下发：在那一列请求**旁边**加的一层，不是改那一列
+ *
+ * 上面那半（`robot-calls.ts`）说的是「会发出去的是什么」——那是**契约**，一个字节都不改。
+ * 这一半把请求**真发一次**（`runCompiledPlan`），每一步的真实结果落在**它自己那一行**上：
+ * 与那一步的请求并排，看得见一条条走完，而不是另开一个列表（另开一个列表，人和他对不上账）。
+ *
+ * 两条路必须一眼分得开（`DISPATCH_PATH_NOTE` 就挂在按钮旁边）：
+ * 上面那块 3D 的「在虚拟设备上运行」跑的是**我们自己的仿真执行器**，一个网络请求都不发；
+ * 这里的「下发」是**真的 HTTP** 发给 bridge 的基地址。一个是本机仿真，一个是真下发。
+ *
+ * 跑的时候按钮变成「取消」（`AbortController`），取消是**请求**不是结论：执行器那句
+ * 「第 X 步的请求已经发出去了，设备那边可能还在跑——我们不替它下结论」照原样摆出来。
  */
-import { computed } from 'vue';
+import { computed, onBeforeUnmount, ref, watch } from 'vue';
+import { runCompiledPlan, type PlanRunEvent } from '@codecanvas/robot-bridge';
 import { findTaskFormat } from '@codecanvas/task-import';
 import IconBase from '../../../shell/IconBase.vue';
 import { useStudioDevices } from '../../../shell/devices';
 import { useStudioDocument } from '../../../state/document';
+import {
+	BLOCKED_ROW_RUN_NOTE,
+	DEFAULT_BRIDGE_BASE_URL,
+	DISPATCH_PATH_NOTE,
+	DISPATCH_PATH_SHORT,
+	RUN_STATE_FACE,
+	RUN_STATE_MEANING,
+	RUN_STATE_TONE,
+	compiledOf,
+	dispatchGateOf,
+	orphanRunPaths,
+	readBridgeBaseUrl,
+	runStatesByStepPath,
+	runVerdictOf,
+	writeBridgeBaseUrl,
+	type RowRun,
+	type RunVerdict,
+} from './plan-run';
 import {
 	ROUTING_FACE,
 	compileDeclarationToCalls,
@@ -112,6 +144,131 @@ const describe = (row: RobotCallRow): string => {
 /** `timeout_sec` 这一栏在不在：在，说明计划里写了；不在，说明按缺省算。轮询那行要说清是哪种。 */
 const hasTimeout = (row: Extract<RobotCallRow, { kind: 'execute' }>): boolean =>
 	row.body.some((field) => field.field === 'timeout_sec');
+
+// ---------------------------------------------------------------------------
+// 下发
+// ---------------------------------------------------------------------------
+
+/**
+ * bridge 的基地址记在本地（照 `shell/TaskInputBand.vue` 那个 LLM 地址输入的做法：
+ * 联调时反反复复要填，刷新一次就没了最烦人；但它不是真相的一部分，所以只进 localStorage）。
+ */
+const baseUrl = ref(readBridgeBaseUrl());
+watch(baseUrl, (value) => {
+	writeBridgeBaseUrl(value);
+});
+
+/** 这一次下发要发的那一份。`null`＝按不动（原因见 `gate`）。 */
+const compiled = computed(() => compiledOf(result.value));
+
+/**
+ * 按不按得动、按不动为什么。判据在 `plan-run.ts` 里（纯函数，五档各有各的说法），
+ * 这里只把 store 里那三样东西喂进去。
+ */
+const gate = computed(() =>
+	dispatchGateOf({
+		hasDeclaration: doc.hasDeclaration.value,
+		result: result.value,
+		baseUrl: baseUrl.value,
+	}),
+);
+
+/** `null`＝没有在途的那一次。它同时是「按钮是不是取消」的判据与打断连接的那只手。 */
+let inFlight: AbortController | null = null;
+const running = ref(false);
+/** 用户按过取消没有。它是「已请求取消」那句话的判据（取消是**请求**，不是结论）。 */
+const cancelRequested = ref(false);
+/** 这一次下发收到的全部事件，**按到达顺序**——行上只留最后一条，流水账在这里。 */
+const runEvents = ref<readonly PlanRunEvent[]>([]);
+const verdict = ref<RunVerdict | null>(null);
+
+/** 每一行现在是什么样：按 `stepPath` 对号（见 `plan-run.ts`）。 */
+const runStates = computed<ReadonlyMap<string, RowRun>>(() => runStatesByStepPath(runEvents.value));
+
+/** 对不上任何一行的事件路径。正常是空的——不空就说明下发途中上面换了一份声明，也不许咽掉。 */
+const orphanPaths = computed(() => orphanRunPaths(runEvents.value, rows.value.map((row) => row.stepPath)));
+
+/** 走完了几步（有终态的行数）。跑的时候用它说「进行到哪儿了」。 */
+const settledCount = computed(
+	() => [...runStates.value.values()].filter((state) => state.state !== 'running').length,
+);
+
+/**
+ * 按下去：把**这一屏摆着的那一列调用**真的发出去。
+ *
+ * 一次性条件在按之前就挡住了（`gate`），这里再兜一道 `running`：一次只跑一条。
+ * 包在 `try` 里是因为取消会在半路抛出去（`AbortSignal` 打断 fetch），
+ * `finally` 无条件收尾——漏一条这里，「下发」就永远变不回按钮了。
+ */
+async function dispatch(): Promise<void> {
+	const plan = compiled.value;
+	if (plan === null || running.value) return;
+
+	const controller = new AbortController();
+	inFlight = controller;
+	running.value = true;
+	cancelRequested.value = false;
+	runEvents.value = [];
+	verdict.value = null;
+
+	try {
+		const outcome = await runCompiledPlan(plan, {
+			baseUrl: baseUrl.value.trim(),
+			signal: controller.signal,
+			// 每来一条就落一次：行上的状态跟着事件长，不是等跑完一次性刷出来
+			onStep: (event) => {
+				runEvents.value = [...runEvents.value, event];
+			},
+		});
+		// 被新一轮顶掉时（只可能是取消之后又按了一次）不落结论：那一轮的事不归这一次说
+		if (inFlight !== controller) return;
+		verdict.value = runVerdictOf({ outcome, cancelRequested: cancelRequested.value });
+	} catch (error) {
+		if (inFlight !== controller) return;
+		// 执行器自己不该抛（它把每种失败都写成事件与 reason）。真抛了也不许咽掉：
+		// 如实摆出来——「没抛」这个前提不成立时，人只该看到那句话，而不是一个空白的面板。
+		verdict.value = {
+			face: '下发本身出错了',
+			detail: `执行器抛了一个异常（这不是「这一步失败」）：${error instanceof Error ? error.message : String(error)}`,
+		};
+	} finally {
+		if (inFlight === controller) inFlight = null;
+		running.value = false;
+	}
+}
+
+/**
+ * 取消：打断连接与等待。**只发请求，不下结论**——设备那边可能还在跑，
+ * 替它说「失败了」或「停下了」都是编（那句结论由执行器给，见 `runVerdictOf`）。
+ */
+function cancel(): void {
+	cancelRequested.value = true;
+	inFlight?.abort();
+}
+
+onBeforeUnmount(() => {
+	// 卸载即取消：组件没了还挂在一条一直轮询的请求上，只会往后写已经不存在的东西。
+	inFlight?.abort();
+	inFlight = null;
+});
+
+/** 一行 + 它现在的运行态。合成一对是为了让模板对同一个 map 只查一次，也不必写断言。 */
+interface RowWithRun {
+	readonly row: RobotCallRow;
+	readonly run: RowRun | null;
+}
+
+const displayRows = computed<readonly RowWithRun[]>(() =>
+	rows.value.map((row) => ({ row, run: runStates.value.get(row.stepPath) ?? null })),
+);
+
+/** 那枚状态徽标：观感与那句「它说的是什么事」都由 `plan-run.ts` 定（尤其 unreachable ≠ failed）。 */
+const runFaceOf = (run: RowRun): string => RUN_STATE_FACE[run.state];
+const runMeaningOf = (run: RowRun): string => RUN_STATE_MEANING[run.state];
+const runToneOf = (run: RowRun): string => RUN_STATE_TONE[run.state];
+
+/** 送不出去那一行不参与下发：这句话要挂在它自己身上（`describe` 是读屏与 `title` 用的）。 */
+const blockedRowNote = BLOCKED_ROW_RUN_NOTE;
 </script>
 
 <template>
@@ -130,6 +287,67 @@ const hasTimeout = (row: Extract<RobotCallRow, { kind: 'execute' }>): boolean =>
 					{{ summary.blocked }} 步送不出去
 				</span>
 			</div>
+
+			<!--
+				下发那一行：地址 + 按钮。**两个动作两条路**那句话就挂在它下面——
+				上面那块 3D 的「在虚拟设备上运行」跑的是本机仿真，这里是真的发 HTTP，
+				不写清楚，人会把「跑通了」当成「机器人收到了」。
+			-->
+			<div class="rc-dispatch" data-testid="robot-calls-dispatch-row">
+				<label class="rc-field">
+					<span class="rc-field-label">bridge 地址</span>
+					<input
+						v-model="baseUrl"
+						type="url"
+						class="rc-input"
+						data-testid="robot-calls-base-url"
+						aria-label="bridge 基地址"
+						spellcheck="false"
+						:placeholder="DEFAULT_BRIDGE_BASE_URL"
+					/>
+				</label>
+
+				<!-- 跑的时候它变成取消：同一格按钮，两种时候各说一件事 -->
+				<button
+					v-if="running"
+					type="button"
+					class="rc-btn rc-btn-cancel"
+					data-testid="robot-calls-cancel"
+					@click="cancel"
+				>
+					取消
+				</button>
+				<button
+					v-else
+					type="button"
+					class="rc-btn rc-btn-dispatch"
+					data-testid="robot-calls-dispatch"
+					:disabled="!gate.allowed"
+					@click="void dispatch()"
+				>
+					下发
+				</button>
+			</div>
+
+			<!--
+				按不动就说清为什么：灰按钮自己不会解释（五档理由各说各的，判据在 plan-run.ts）。
+				这一行只在按不动时占地方——能按时它不存在，那一格高度还给行列表。
+			-->
+			<p
+				v-if="!running && !gate.allowed && gate.reason !== null"
+				class="rc-gate"
+				data-testid="robot-calls-gate"
+			>
+				{{ gate.reason }}
+			</p>
+			<!--
+				两条路：摆的是**一行版**（全句在按钮的 `title` 里）。
+				这一行是防误读的——不写它，人会把「这里跑通了」当成「机器人收到了」；
+				写成两行则要吃掉行列表四成的高度（见 `DISPATCH_PATH_SHORT` 那段注释）。
+			-->
+			<p class="rc-path-note" data-testid="robot-calls-path-note" :title="DISPATCH_PATH_NOTE">
+				{{ DISPATCH_PATH_SHORT }}
+			</p>
 		</header>
 
 		<!-- 没有声明：说清先做什么，而不是摆一片空白 -->
@@ -164,37 +382,62 @@ const hasTimeout = (row: Extract<RobotCallRow, { kind: 'execute' }>): boolean =>
 				{{ emptyReason }}
 			</p>
 
+			<!--
+				这一次下发的结论：跑完了 / 停了 / 已请求取消。`detail` 是执行器那句 reason，
+				**原文照抄**（「第 X 步…我们不替它下结论」那种话是证据，改写了就不是了）。
+			-->
+			<div
+				v-if="verdict !== null"
+				class="rc-verdict"
+				:class="{ 'is-cancelled': cancelRequested }"
+				data-testid="robot-calls-verdict"
+				:data-cancelled="cancelRequested ? 'true' : 'false'"
+			>
+				<span class="rc-verdict-face" data-testid="robot-calls-verdict-face">{{ verdict.face }}</span>
+				<span class="rc-verdict-count">{{ settledCount }} / {{ rows.length }} 步有结论</span>
+				<p class="rc-verdict-detail" data-testid="robot-calls-verdict-detail">{{ verdict.detail }}</p>
+			</div>
+
+			<!--
+				对不上任何一行的事件：正常没有。真有就说明下发途中上面换了一份声明——
+				咽掉它们，屏幕上就会显得「那几步没发生过」，而它们确实发生过。
+			-->
+			<p v-if="orphanPaths.length > 0" class="rc-orphan" data-testid="robot-calls-orphan">
+				有 {{ orphanPaths.length }} 条下发事件对不上屏幕上的任何一行（{{ orphanPaths.join('、') }}）——
+				多半是下发途中上面换了一份声明：它们在下面这些行里没有位置，但确实发生过，这里如实摆出来。
+			</p>
+
 			<ol class="rc-rows" data-testid="robot-calls-rows">
 				<li
-					v-for="row in rows"
-					:key="`${String(row.line)}-${row.stepPath}-${row.kind}`"
+					v-for="entry in displayRows"
+					:key="`${String(entry.row.line)}-${entry.row.stepPath}-${entry.row.kind}`"
 					class="rc-row"
-					:class="`is-${row.kind}`"
-					:data-testid="`robot-call-${row.kind}`"
-					:data-kind="row.kind"
-					:data-step-path="row.stepPath"
-					:data-node-ordinal="row.nodeOrdinal"
-					:data-where="row.routing.where"
-					:data-depth="depthOf(row)"
-					:style="{ '--rc-depth': depthOf(row) }"
-					:title="describe(row)"
+					:class="`is-${entry.row.kind}`"
+					:data-testid="`robot-call-${entry.row.kind}`"
+					:data-kind="entry.row.kind"
+					:data-step-path="entry.row.stepPath"
+					:data-node-ordinal="entry.row.nodeOrdinal"
+					:data-where="entry.row.routing.where"
+					:data-depth="depthOf(entry.row)"
+					:style="{ '--rc-depth': depthOf(entry.row) }"
+					:title="describe(entry.row)"
 				>
 					<div class="rc-row-head">
-						<span class="rc-ln" aria-hidden="true">{{ row.line }}</span>
-						<span class="rc-step">节点 {{ row.nodeOrdinal }}</span>
-						<span class="rc-path">{{ row.stepPath }}</span>
-						<span class="rc-badge" :class="`is-${row.routing.where}`">{{ badgeOf(row) }}</span>
+						<span class="rc-ln" aria-hidden="true">{{ entry.row.line }}</span>
+						<span class="rc-step">节点 {{ entry.row.nodeOrdinal }}</span>
+						<span class="rc-path">{{ entry.row.stepPath }}</span>
+						<span class="rc-badge" :class="`is-${entry.row.routing.where}`">{{ badgeOf(entry.row) }}</span>
 					</div>
 
 					<!-- execute：方法 + 路径 + 请求体，后面紧跟轮询那一行 -->
-					<template v-if="row.kind === 'execute'">
+					<template v-if="entry.row.kind === 'execute'">
 						<div class="rc-request" data-testid="robot-call-execute-line">
-							<span class="rc-method">{{ row.method }}</span>
-							<code class="rc-target-path">{{ row.path }}</code>
+							<span class="rc-method">{{ entry.row.method }}</span>
+							<code class="rc-target-path">{{ entry.row.path }}</code>
 						</div>
 						<div class="rc-body-fields" data-testid="robot-call-body">
 							<span
-								v-for="field in row.body"
+								v-for="field in entry.row.body"
 								:key="field.field"
 								class="rc-field"
 								:data-field="field.field"
@@ -203,29 +446,62 @@ const hasTimeout = (row: Extract<RobotCallRow, { kind: 'execute' }>): boolean =>
 							</span>
 						</div>
 						<div class="rc-poll" data-testid="robot-call-poll">
-							轮询 <code class="rc-target-path">GET {{ row.poll.path }}</code> —
-							每 {{ row.poll.intervalMs }}ms 一次 · 截止 {{ row.poll.deadlineSec }}s（{{
-								hasTimeout(row)
+							轮询 <code class="rc-target-path">GET {{ entry.row.poll.path }}</code> —
+							每 {{ entry.row.poll.intervalMs }}ms 一次 · 截止 {{ entry.row.poll.deadlineSec }}s（{{
+								hasTimeout(entry.row)
 									? '计划里的 timeout_sec'
-									: `计划的缺省 ${row.poll.defaultTimeoutSec}s`
-							}} + {{ row.poll.marginSec }}s 余量）；成败只在这里读得到
+									: `计划的缺省 ${entry.row.poll.defaultTimeoutSec}s`
+							}} + {{ entry.row.poll.marginSec }}s 余量）；成败只在这里读得到
 						</div>
 					</template>
 
 					<!-- wait：本地等，明写不发请求 -->
-					<p v-else-if="row.kind === 'wait'" class="rc-line" data-testid="robot-call-wait-line">
-						本地等 {{ row.seconds }} 秒 —— <strong class="rc-no-request">不发请求</strong>
+					<p v-else-if="entry.row.kind === 'wait'" class="rc-line" data-testid="robot-call-wait-line">
+						本地等 {{ entry.row.seconds }} 秒 —— <strong class="rc-no-request">不发请求</strong>
 					</p>
 
 					<!-- branch：本地判断，明写不发请求 -->
-					<p v-else-if="row.kind === 'branch'" class="rc-line" data-testid="robot-call-branch-line">
-						本地判断：{{ row.conditionText }} —— <strong class="rc-no-request">不发请求</strong>
+					<p v-else-if="entry.row.kind === 'branch'" class="rc-line" data-testid="robot-call-branch-line">
+						本地判断：{{ entry.row.conditionText }} —— <strong class="rc-no-request">不发请求</strong>
 					</p>
 
 					<!-- 送不出去：诊断在它本来的位置上，危险色 -->
-					<p v-else class="rc-line rc-blocked-line" data-testid="robot-call-blocked-line">
-						<strong>送不出去</strong> · {{ row.code }} —— {{ row.message }}
-					</p>
+					<template v-else>
+						<p class="rc-line rc-blocked-line" data-testid="robot-call-blocked-line">
+							<strong>送不出去</strong> · {{ entry.row.code }} —— {{ entry.row.message }}
+						</p>
+						<!--
+							这一行**不参与下发**：编译期就没有请求可编，执行器的事件流里也没有它。
+							不说这一句，看起来就像「下发漏了一步」——那是最坏的一种误读。
+						-->
+						<p class="rc-line rc-blocked-run" data-testid="robot-call-blocked-no-dispatch">
+							{{ blockedRowNote }}
+						</p>
+					</template>
+
+					<!--
+						这一步的真实结果，落在**它自己这一行**上——与上面那条请求并排，
+						看得见一条条走完，而不是另开一个列表让人自己对账。
+						没有事件就是没走到（`v-if`），不摆一个「待下发」骗人：那一步可能永远不会到。
+					-->
+					<div
+						v-if="entry.run !== null"
+						class="rc-run"
+						:class="`is-${runToneOf(entry.run)}`"
+						:data-testid="`robot-call-run-${entry.row.kind}`"
+						:data-run-state="entry.run.state"
+						:title="runMeaningOf(entry.run)"
+					>
+						<span class="rc-run-badge" data-testid="robot-call-run-face">{{ runFaceOf(entry.run) }}</span>
+						<span class="rc-run-meaning">{{ runMeaningOf(entry.run) }}</span>
+						<!-- 诊断原文照抄执行器那一句（`detail` 空就不摆这一行，不替它编一句） -->
+						<code v-if="entry.run.detail !== ''" class="rc-run-detail" data-testid="robot-call-run-detail">{{
+							entry.run.detail
+						}}</code>
+						<code v-if="entry.run.taskId !== null" class="rc-run-task" data-testid="robot-call-run-task"
+							>task_id {{ entry.run.taskId }}</code
+						>
+					</div>
 				</li>
 			</ol>
 
@@ -298,6 +574,125 @@ const hasTimeout = (row: Extract<RobotCallRow, { kind: 'execute' }>): boolean =>
 	font-size: var(--cc-fs-sm);
 	color: var(--cc-text);
 	white-space: nowrap;
+}
+
+/*
+ * 下发那一行：地址吃掉剩下的宽，按钮贴右端。
+ * 与入口带的「接口设置」同一套控件写法（`field-label` + `field-text`），不引第二种输入框。
+ */
+.rc-dispatch {
+	display: grid;
+	grid-template-columns: minmax(0, 1fr) auto;
+	align-items: center;
+	gap: var(--cc-space-2);
+	min-width: 0;
+}
+
+.rc-field {
+	display: flex;
+	align-items: center;
+	gap: var(--cc-space-2);
+	min-width: 0;
+}
+
+.rc-field-label {
+	flex: 0 0 auto;
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-dim);
+	white-space: nowrap;
+}
+
+.rc-input {
+	width: 100%;
+	min-width: 0;
+	padding: 5px var(--cc-space-2);
+	line-height: 1.2;
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-sm);
+	color: var(--cc-text);
+	background: var(--cc-bg);
+	border: 1px solid var(--cc-line);
+	border-radius: var(--cc-radius-sm);
+}
+
+.rc-input::placeholder {
+	color: var(--cc-text-faint);
+}
+
+.rc-input:focus {
+	outline: none;
+	border-color: var(--cc-accent-dim);
+	box-shadow: 0 0 0 1px var(--cc-accent-glow) inset;
+}
+
+.rc-btn {
+	min-width: 58px;
+	padding: 5px var(--cc-space-2);
+	line-height: 1.2;
+	font-size: var(--cc-fs-sm);
+	font-weight: 650;
+	letter-spacing: 0.04em;
+	border: 1px solid transparent;
+	border-radius: var(--cc-radius-sm);
+	cursor: pointer;
+	transition:
+		filter 0.15s ease,
+		color 0.15s ease,
+		background 0.15s ease;
+}
+
+/* 下发是这个面板上唯一的实心按钮：把「摆出来的请求」变成「真的发出去」的那一下。 */
+.rc-btn-dispatch {
+	color: var(--cc-surface-sunken);
+	background: var(--cc-accent);
+	border-color: var(--cc-accent-strong);
+	box-shadow: 0 0 12px var(--cc-accent-glow);
+}
+
+.rc-btn-dispatch:hover:not(:disabled) {
+	filter: brightness(1.1);
+}
+
+.rc-btn-dispatch:disabled {
+	color: var(--cc-disabled-text);
+	background: var(--cc-disabled-surface);
+	border-color: var(--cc-line);
+	box-shadow: none;
+	cursor: not-allowed;
+}
+
+/* 取消不是危险动作，但它是**打断**：描边而不是实心，与「下发」分得开。 */
+.rc-btn-cancel {
+	color: var(--cc-danger-strong);
+	background: var(--cc-danger-veil);
+	border-color: var(--cc-danger);
+}
+
+.rc-btn-cancel:hover {
+	filter: brightness(1.15);
+}
+
+/* 按不动的理由：灰按钮自己不解释，所以这句要跟着它。 */
+.rc-gate {
+	margin: 0;
+	font-size: var(--cc-fs-xs);
+	line-height: 1.5;
+	color: var(--cc-text-dim);
+	overflow-wrap: anywhere;
+}
+
+/*
+ * 两条路那句：**这一块是防误读的**（上面那块 3D 是仿真，这里是真的发 HTTP），
+ * 用虚线跟上面那几行控件分开——它不是控件，是一句要说清的话。
+ */
+.rc-path-note {
+	margin: 0;
+	padding-top: var(--cc-space-1);
+	font-size: var(--cc-fs-xs);
+	line-height: 1.5;
+	color: var(--cc-text-faint);
+	border-top: 1px dashed var(--cc-line-strong);
+	overflow-wrap: anywhere;
 }
 
 .rc-empty {
@@ -480,6 +875,193 @@ const hasTimeout = (row: Extract<RobotCallRow, { kind: 'execute' }>): boolean =>
 
 .rc-blocked-line {
 	color: var(--cc-danger-strong);
+}
+
+/* 「不参与下发」那句：它是解释，不是报警——所以安静色，不跟上面那条诊断抢注意力 */
+.rc-blocked-run {
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-dim);
+}
+
+/*
+ * 行上的运行态：与它上面那条请求**并排**在同一格里（同一行 = 同一步）。
+ * 左边一条色条说档位，颜色只在 `is-*` 那几档里给——尤其
+ * `is-unreachable`（没到，不是失败：安静色 + 虚线）与 `is-failed`（业务失败：危险色 + 实边）
+ * 必须一眼分得开（判据在 `plan-run.ts` 的 `RUN_STATE_TONE` 上）。
+ */
+.rc-run {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	margin-top: var(--cc-space-1);
+	padding: var(--cc-space-1) var(--cc-space-2);
+	background: var(--cc-surface);
+	border: 1px solid var(--cc-line);
+	border-left: 3px solid var(--cc-line-strong);
+	border-radius: var(--cc-radius-sm);
+}
+
+.rc-run.is-live {
+	border-left-color: var(--cc-chain-live);
+}
+
+.rc-run.is-ok {
+	border-left-color: var(--cc-accent);
+}
+
+/* 业务失败：报警。实边、危险色——它说的是「机器真的动了，结果没成」。 */
+.rc-run.is-failed {
+	background: var(--cc-danger-veil);
+	border-color: var(--cc-danger);
+	border-left-color: var(--cc-danger);
+}
+
+/*
+ * 没到：**不染危险色**。请求根本没送出去，机器可能一步都没动——
+ * 染成红的就会被读成「这一步试过了、没成」，而那正是要防的误读。
+ * 虚线 + 安静色：显眼，但不像失败那样报警。
+ */
+.rc-run.is-unreachable {
+	background: var(--cc-surface-sunken);
+	border-style: dashed;
+	border-color: var(--cc-line-strong);
+	border-left-style: solid;
+	border-left-color: var(--cc-text-dim);
+}
+
+.rc-run.is-skipped {
+	border-left-color: var(--cc-text-faint);
+}
+
+.rc-run-badge {
+	align-self: flex-start;
+	padding: 1px var(--cc-space-1);
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-xs);
+	font-weight: 600;
+	color: var(--cc-text-dim);
+	border: 1px solid var(--cc-line-strong);
+	border-radius: var(--cc-radius-sm);
+}
+
+.rc-run.is-live .rc-run-badge {
+	color: var(--cc-chain-live);
+	border-color: var(--cc-accent-dim);
+	background: var(--cc-accent-veil);
+	animation: rc-run-breathe 0.9s ease-in-out infinite;
+}
+
+.rc-run.is-ok .rc-run-badge {
+	color: var(--cc-accent-strong);
+	border-color: var(--cc-accent-dim);
+	background: var(--cc-accent-veil);
+}
+
+.rc-run.is-failed .rc-run-badge {
+	color: var(--cc-danger-strong);
+	border-color: var(--cc-danger);
+	background: var(--cc-danger-veil);
+}
+
+.rc-run.is-unreachable .rc-run-badge {
+	color: var(--cc-text);
+	border-style: dashed;
+	border-color: var(--cc-text-dim);
+}
+
+/* 那一句「它说的是什么事」：unreachable 与 failed 的说明**不同**，这是分辨率所在 */
+.rc-run-meaning {
+	font-size: var(--cc-fs-xs);
+	line-height: 1.5;
+	color: var(--cc-text-dim);
+	overflow-wrap: anywhere;
+}
+
+/* 执行器给的原文：等宽、不截断——它是证据，改写或截掉就不算了 */
+.rc-run-detail,
+.rc-run-task {
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-xs);
+	line-height: 1.5;
+	color: var(--cc-text);
+	overflow-wrap: anywhere;
+}
+
+.rc-run-task {
+	color: var(--cc-text-faint);
+}
+
+@keyframes rc-run-breathe {
+	0%,
+	100% {
+		opacity: 1;
+	}
+
+	50% {
+		opacity: 0.45;
+	}
+}
+
+/* 不要动效的人看到的是一枚常亮的状态徽标，信息一个不少（档位本来就不只靠动画区分） */
+@media (prefers-reduced-motion: reduce) {
+	.rc-run.is-live .rc-run-badge {
+		animation: none;
+	}
+}
+
+/* 一次下发的结论：跑完了 / 停了 / 已请求取消。排在行列表上面——它是这整列的结论。 */
+.rc-verdict {
+	display: flex;
+	align-items: baseline;
+	flex-wrap: wrap;
+	gap: var(--cc-space-1) var(--cc-space-2);
+	padding: var(--cc-space-2);
+	background: var(--cc-surface-sunken);
+	border: 1px solid var(--cc-line-strong);
+	border-left: 3px solid var(--cc-chain-live);
+	border-radius: var(--cc-radius-sm);
+}
+
+/* 取消不是失败：与「停下来」不同档，也不染危险色 */
+.rc-verdict.is-cancelled {
+	border-left-color: var(--cc-text-dim);
+	border-style: dashed;
+	border-left-style: solid;
+}
+
+.rc-verdict-face {
+	font-size: var(--cc-fs-sm);
+	font-weight: 650;
+	color: var(--cc-text);
+}
+
+.rc-verdict-count {
+	margin-left: auto;
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-faint);
+}
+
+.rc-verdict-detail {
+	flex: 1 1 100%;
+	margin: 0;
+	font-size: var(--cc-fs-xs);
+	line-height: 1.5;
+	color: var(--cc-text-dim);
+	overflow-wrap: anywhere;
+}
+
+/* 对不上任何一行的事件：正常没有。有就说清是哪几条，不咽掉 */
+.rc-orphan {
+	margin: 0;
+	padding: var(--cc-space-2);
+	font-size: var(--cc-fs-xs);
+	line-height: 1.6;
+	color: var(--cc-text-dim);
+	background: var(--cc-surface-sunken);
+	border: 1px dashed var(--cc-line-strong);
+	border-radius: var(--cc-radius-sm);
+	overflow-wrap: anywhere;
 }
 
 /* 去向的说明不铺在行里（见 `describe`）：徽标说结论，note 在 `title` 里等人问 */

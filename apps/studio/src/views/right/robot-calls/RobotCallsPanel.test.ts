@@ -2,7 +2,7 @@
 /**
  * 「发给机器人」视图的验收：**这一句话编出来会变成哪些请求，以及哪一步送不出去**。
  *
- * 三组断言，对着这件东西的三半：
+ * 四组断言，对着这件东西的四半：
  *
  * 1. **数据**（`robot-calls.ts`，纯函数）：三种 call 各渲染成什么行；原语那一步的诊断出现在
  *    **它本来的顺序位置上**（不是被悄悄省掉的一行）；摘要那三个数对得上；一期声明返回
@@ -11,11 +11,14 @@
  * 2. **接线**（组件）：切到第三个 tab 能显示；没有声明时的空状态；一期设备下的如实说明。
  * 3. **不编造**：编不出来的东西一次都不许出现在屏幕上——没有目录的技能、送不出去的原语，
  *    屏幕上都不该有一条请求。
+ * 4. **下发**（`plan-run.ts` 纯函数 + 组件）：事件按 `stepPath` 落在**它自己那一行**上；
+ *    `unreachable` 与 `failed` 文案与观感都不同；取消后如实；基地址进 localStorage；
+ *    按不动时按钮禁用并说明。这一组的 `runCompiledPlan` **打桩**——单测里一条 HTTP 都不发。
  *
  * 一条纪律：技能名、原语名、参数名与那个 `task_id` **一个都不手写**——全部从合成目录与
  * 编译结果里现取。写死一个 id 就等于把「编译期生成的」这件事偷偷改成「界面自己拼的」。
  */
-import { mount } from '@vue/test-utils';
+import { flushPromises, mount } from '@vue/test-utils';
 import type { VueWrapper } from '@vue/test-utils';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
@@ -32,11 +35,29 @@ import {
 	STEP_ROUTING,
 	compilePlanToCalls,
 } from '@codecanvas/robot-bridge';
+import type { CompiledPlan, PlanRunEvent, PlanRunResult, RunOverHttpOptions } from '@codecanvas/robot-bridge';
 import { importSkillPlan } from '@codecanvas/task-import';
 import { loadSampleTask, useStudioDocument } from '../../../state/document';
 import { setSelectedDevice } from '../../../shell/devices';
 import RightPanel from '../RightPanel.vue';
 import RobotCallsPanel from './RobotCallsPanel.vue';
+import {
+	BLOCKED_ROW_RUN_NOTE,
+	BRIDGE_BASE_URL_STORAGE_KEY,
+	DEFAULT_BRIDGE_BASE_URL,
+	DISPATCH_PATH_NOTE,
+	DISPATCH_PATH_SHORT,
+	RUN_STATE_FACE,
+	RUN_STATE_MEANING,
+	RUN_STATE_TONE,
+	compiledOf,
+	dispatchGateOf,
+	orphanRunPaths,
+	readBridgeBaseUrl,
+	runStatesByStepPath,
+	runVerdictOf,
+	writeBridgeBaseUrl,
+} from './plan-run';
 import {
 	ROUTING_FACE,
 	buildPlanFromDeclaration,
@@ -44,6 +65,27 @@ import {
 	robotCallsView,
 	type RobotCallRow,
 } from './robot-calls';
+
+/**
+ * 这一份用例的桩：`runCompiledPlan` 换成下面这个实现，**一条 HTTP 都不发**。
+ *
+ * 为什么放在 `let` 里而不是直接 `vi.fn()`：每条用例要的东西不一样（成功 / 失败 / 取消），
+ * 而 `vi.mock` 的工厂会被提到文件顶部——所以工厂里**只包一层**，真正读这个变量的时机是
+ * 「执行器被调用时」（那时的 `let` 早就初始化好了）。
+ */
+let runnerImpl: ((plan: CompiledPlan, options: RunOverHttpOptions) => Promise<PlanRunResult>) | null = null;
+
+vi.mock('@codecanvas/robot-bridge', async (importOriginal) => {
+	const actual = await importOriginal<typeof import('@codecanvas/robot-bridge')>();
+	return {
+		...actual,
+		// 只换掉执行器：编译、路由清单、诊断码那几样是真的（这套断言靠它们做判据）
+		runCompiledPlan: (plan: CompiledPlan, options: RunOverHttpOptions): Promise<PlanRunResult> =>
+			runnerImpl === null
+				? Promise.reject(new Error('这一条用例没有摆好 runCompiledPlan 的桩'))
+				: runnerImpl(plan, options),
+	};
+});
 
 /**
  * 挂整块 `RightPanel` 时上半那块 3D **必须打桩**：真的 `mountVirtualDevice` 会建 WebGL 上下文，
@@ -629,4 +671,496 @@ const mountedWithPlan = async (): Promise<VueWrapper> => {
 afterEach(() => {
 	// 真相是模块级单例，跨用例活着：跑完把设备摆回默认那台，免得下一条用例起手就是技能计划格式。
 	setSelectedDevice('phase1_robot');
+});
+
+// ---------------------------------------------------------------------------
+// 下发 · 纯函数那一半（这一步的真实结果怎么对回它自己那一行）
+// ---------------------------------------------------------------------------
+
+/** 一条事件：字段与执行器给的一样，`detail` 缺省是空串（执行器允许不给）。 */
+const event = (
+	stepPath: string,
+	state: PlanRunEvent['state'],
+	detail?: string,
+): PlanRunEvent => (detail === undefined ? { stepPath, state } : { stepPath, state, detail });
+
+describe('发给机器人 · 事件按 stepPath 对号（纯函数）', () => {
+	it('一步一个键；同一个路径后到的覆盖先到的（execute 先 running 再终态）', () => {
+		const states = runStatesByStepPath([
+			event('0', 'running', 'POST /v1/skills/execute skill=demo'),
+			event('0', 'completed', '终态 state=completed success=true'),
+			event('1', 'completed', '条件 last.success == false 不成立 → 走 else 臂'),
+		]);
+
+		// 行上留的是**此刻**的状态，不是流水账——流水账是事件的完整列表
+		expect(states.get('0')).toEqual({
+			state: 'completed',
+			detail: '终态 state=completed success=true',
+			taskId: null,
+		});
+		expect(states.get('1')?.state).toBe('completed');
+		// 没走过的步压根没有键（不是「有一个空状态」）
+		expect(states.has('2')).toBe(false);
+	});
+
+	it('诊断原文一个字都不改：`detail` 就是执行器给的那句', () => {
+		const detail = 'POST /v1/skills/execute 回了 404：{"detail":"unknown skill: x"}';
+		const states = runStatesByStepPath([event('0', 'unreachable', detail)]);
+
+		expect(states.get('0')?.detail).toBe(detail);
+	});
+
+	it('对不上任何一行的事件不咽掉：orphanRunPaths 说得出来是哪几条', () => {
+		const events = [event('0', 'completed'), event('3.then.0', 'failed'), event('0', 'completed')];
+		// 屏幕上那几行（第二份声明）：没有 3.then.0，也没有别的
+		expect(orphanRunPaths(events, ['0', '1', '2'])).toEqual(['3.then.0']);
+		// 全对得上就是空的——正常情况
+		expect(orphanRunPaths(events, ['0', '3.then.0'])).toEqual([]);
+	});
+});
+
+describe('发给机器人 · unreachable 与 failed 是两件事（纯函数）', () => {
+	it('两档的读法、观感、那句话都不同——混起来就是编造一次成败', () => {
+		expect(RUN_STATE_FACE.unreachable).not.toBe(RUN_STATE_FACE.failed);
+		expect(RUN_STATE_TONE.unreachable).not.toBe(RUN_STATE_TONE.failed);
+		expect(RUN_STATE_MEANING.unreachable).not.toBe(RUN_STATE_MEANING.failed);
+
+		// 各自那句话说的正是它那一件事：一个「没到」、一个「到了没成」
+		expect(RUN_STATE_MEANING.unreachable).toContain('没到设备');
+		expect(RUN_STATE_MEANING.unreachable).toContain('不是业务失败');
+		expect(RUN_STATE_MEANING.failed).toContain('业务失败');
+		// 「发不出去」那三个字里不许出现「失败」——它就不是失败
+		expect(RUN_STATE_FACE.unreachable).not.toContain('失败');
+	});
+
+	it('五档各有各的读法：执行器定的那些取值一个都不漏', () => {
+		const states: readonly PlanRunEvent['state'][] = [
+			'running',
+			'completed',
+			'failed',
+			'unreachable',
+			'skipped',
+		];
+		for (const state of states) {
+			expect(RUN_STATE_FACE[state]).not.toBe('');
+			expect(RUN_STATE_MEANING[state]).not.toBe('');
+		}
+	});
+});
+
+describe('发给机器人 · 按不按得动（纯函数）', () => {
+	it('编得出来、有请求、地址也填了：按得动，且没有那句「为什么」', () => {
+		const gate = dispatchGateOf({ hasDeclaration: true, result: compileDemo(), baseUrl: 'http://127.0.0.1:8788' });
+
+		expect(gate.allowed).toBe(true);
+		expect(gate.reason).toBeNull();
+	});
+
+	it('没有声明：按不动，并说清先做什么', () => {
+		const gate = dispatchGateOf({ hasDeclaration: false, result: null, baseUrl: DEFAULT_BRIDGE_BASE_URL });
+
+		expect(gate.allowed).toBe(false);
+		expect(gate.reason).toContain('还没有声明');
+	});
+
+	it('一期声明（编译不出请求）：按不动，理由说的是「出生格式不是技能计划」', () => {
+		const result = compileDeclarationToCalls({
+			declaration: declarationOf(buildPlan()),
+			formatRef: 'phase1_task',
+			catalog: DEMO_CATALOG,
+			deviceRef: 'demo_device',
+		});
+		const gate = dispatchGateOf({ hasDeclaration: true, result, baseUrl: DEFAULT_BRIDGE_BASE_URL });
+
+		expect(gate.allowed).toBe(false);
+		expect(gate.reason).toContain('出生格式不是技能计划');
+	});
+
+	it('计划过不了校验：按不动，并把诊断条数说出来（去改计划，不是去按按钮）', () => {
+		const declaration = declarationOf(buildPlan());
+		const broken: WorkflowDeclaration = {
+			...declaration,
+			nodes: declaration.nodes.map((node) => ({ ...node, parameters: {} })),
+			connections: {},
+		};
+		const result = compileDeclarationToCalls({
+			declaration: broken,
+			formatRef: 'skill_plan',
+			catalog: DEMO_CATALOG,
+			deviceRef: 'demo_device',
+		});
+
+		const gate = dispatchGateOf({ hasDeclaration: true, result, baseUrl: DEFAULT_BRIDGE_BASE_URL });
+		expect(gate.allowed).toBe(false);
+		expect(gate.reason).toContain('过不了校验');
+	});
+
+	it('一条请求都没有的计划：按不动，三个数原样说出来', () => {
+		const plan = buildPlan();
+		const result = compileDemo({
+			...plan,
+			plan: [
+				{ step: 'primitive', primitive: DEMO_PRIMITIVE },
+				{ step: 'wait', seconds: 1 },
+			],
+		});
+		const gate = dispatchGateOf({ hasDeclaration: true, result, baseUrl: DEFAULT_BRIDGE_BASE_URL });
+
+		expect(gate.allowed).toBe(false);
+		expect(gate.reason).toContain('一条请求都没有');
+		expect(gate.reason).toContain('bridge 一个字节都收不到');
+	});
+
+	it('地址是空的：按不动——不知道发给谁，就没有「下发」这件事', () => {
+		const gate = dispatchGateOf({ hasDeclaration: true, result: compileDemo(), baseUrl: '   ' });
+
+		expect(gate.allowed).toBe(false);
+		expect(gate.reason).toContain('基地址');
+	});
+
+	it('`compiledOf` 给的就是这一屏摊开的那一份：calls 与 diagnostics 原样取出，不重编', () => {
+		const result = compileDemo();
+		expect(result.ok).toBe(true);
+		if (!result.ok) return;
+
+		const compiled = compiledOf(result);
+		expect(compiled?.calls).toBe(result.view.calls);
+		expect(compiled?.diagnostics).toBe(result.view.diagnostics);
+		// 编不出来时没有「要发的那一份」——不是一份空计划
+		expect(compiledOf({ ok: false, reason: 'format_mismatch', diagnostics: [] })).toBeNull();
+		expect(compiledOf(null)).toBeNull();
+	});
+});
+
+describe('发给机器人 · 基地址的存与取（照 LLM 地址输入的做法）', () => {
+	beforeEach(() => {
+		window.localStorage.removeItem(BRIDGE_BASE_URL_STORAGE_KEY);
+	});
+
+	afterEach(() => {
+		window.localStorage.removeItem(BRIDGE_BASE_URL_STORAGE_KEY);
+	});
+
+	it('没存过就是缺省那个地址；写一次读得回来；空串当没填', () => {
+		expect(readBridgeBaseUrl()).toBe(DEFAULT_BRIDGE_BASE_URL);
+
+		writeBridgeBaseUrl('http://127.0.0.1:9');
+		expect(readBridgeBaseUrl()).toBe('http://127.0.0.1:9');
+
+		// 清空输入框不该让面板从此记着一个空地址：空串＝没填，退回缺省
+		writeBridgeBaseUrl('   ');
+		expect(readBridgeBaseUrl()).toBe(DEFAULT_BRIDGE_BASE_URL);
+	});
+
+	it('隐私模式下 localStorage 会直接抛：读得出缺省，写得进去不抛——面板不许因此挂掉', () => {
+		const boom = (): never => {
+			throw new Error('localStorage 被禁了（隐私模式）');
+		};
+		const original = window.localStorage;
+		Object.defineProperty(window, 'localStorage', {
+			configurable: true,
+			value: { getItem: boom, setItem: boom },
+		});
+
+		try {
+			expect(() => readBridgeBaseUrl()).not.toThrow();
+			expect(readBridgeBaseUrl()).toBe(DEFAULT_BRIDGE_BASE_URL);
+			expect(() => writeBridgeBaseUrl('http://127.0.0.1:9999')).not.toThrow();
+		} finally {
+			Object.defineProperty(window, 'localStorage', { configurable: true, value: original });
+		}
+	});
+});
+
+describe('发给机器人 · 一次下发的结论（纯函数）', () => {
+	it('取消是**请求**不是结论：说已请求取消，执行器那句原话一字不改', () => {
+		const reason =
+			'运行被取消（AbortSignal）：第 0 步的请求已经发出去了，设备那边可能还在跑——我们不替它下结论';
+		const verdict = runVerdictOf({
+			outcome: { ok: false, events: [], reason },
+			cancelRequested: true,
+		});
+
+		expect(verdict.face).toBe('已请求取消');
+		expect(verdict.detail).toBe(reason);
+	});
+
+	it('没按取消而停下来：说停在当下，原因还是执行器那句', () => {
+		const reason = '第 0 步发不出去（这与「这一步跑失败了」不是一回事）：连不上 bridge';
+		const verdict = runVerdictOf({ outcome: { ok: false, events: [], reason }, cancelRequested: false });
+
+		expect(verdict.face).toBe('停在当下');
+		expect(verdict.detail).toBe(reason);
+	});
+
+	it('走完了：被容忍的失败不拦这件事要说出来（否则「ok 却有 failed 事件」看着像 bug）', () => {
+		const verdict = runVerdictOf({ outcome: { ok: true, events: [] }, cancelRequested: false });
+
+		expect(verdict.face).toBe('走完了');
+		expect(verdict.detail).toContain('被容忍的失败');
+	});
+
+	it('执行器没给原因时**不编一句**：如实说不知道停在哪', () => {
+		const verdict = runVerdictOf({ outcome: { ok: false, events: [] }, cancelRequested: false });
+
+		expect(verdict.detail).toContain('没给原因');
+	});
+});
+
+// ---------------------------------------------------------------------------
+// 下发 · 组件那一半（`runCompiledPlan` 打桩，一条 HTTP 都不发）
+// ---------------------------------------------------------------------------
+
+/** 摆好这一条用例的桩：跑一次就给这些事件，然后回这个结论。 */
+const stubRun = (events: readonly PlanRunEvent[], outcome?: Partial<PlanRunResult>): void => {
+	runnerImpl = async (_plan, options) => {
+		for (const item of events) options.onStep?.(item);
+		return { ok: true, events, ...outcome };
+	};
+};
+
+/** 桩：跑起来就停在那儿，直到被 abort 才回结论（取消那条用例要的就是这个形状）。 */
+const stubRunUntilAborted = (events: readonly PlanRunEvent[], reason: string): void => {
+	runnerImpl = async (_plan, options) => {
+		for (const item of events) options.onStep?.(item);
+		await new Promise<void>((resolve) => {
+			const signal = options.signal;
+			if (signal === undefined || signal.aborted) {
+				resolve();
+				return;
+			}
+			signal.addEventListener('abort', () => resolve(), { once: true });
+		});
+		return { ok: false, events, reason };
+	};
+};
+
+/** 某一行上的运行态那一块。没有它就说明「这一步没走到」（不是「有一个空状态」）。 */
+const runBoxOf = (wrapper: VueWrapper, stepPath: string) =>
+	wrapper.get(`li[data-step-path="${stepPath}"] [data-run-state]`);
+
+/** 同上，但「在不在」也要问得出来（`get` 拿不到会抛，这里要的是布尔）。 */
+const runBoxExists = (wrapper: VueWrapper, stepPath: string): boolean =>
+	wrapper.find(`li[data-step-path="${stepPath}"] [data-run-state]`).exists();
+
+const dispatchButton = (wrapper: VueWrapper) => wrapper.get('[data-testid="robot-calls-dispatch"]');
+
+const hasDispatchButton = (wrapper: VueWrapper): boolean =>
+	wrapper.find('[data-testid="robot-calls-dispatch"]').exists();
+
+describe('发给机器人 · 按下去真的发（组件）', () => {
+	beforeEach(() => {
+		runnerImpl = null;
+		window.localStorage.removeItem(BRIDGE_BASE_URL_STORAGE_KEY);
+	});
+
+	it('按不动就说清为什么：没有声明那一档', () => {
+		setSelectedDevice('so101_sim');
+		const wrapper = mount(RobotCallsPanel);
+		const before = doc.declaration.value;
+		doc.declaration.value = null;
+
+		return wrapper.vm.$nextTick().then(async () => {
+			expect(dispatchButton(wrapper).attributes('disabled')).toBeDefined();
+			expect(wrapper.get('[data-testid="robot-calls-gate"]').text()).toContain('还没有声明');
+
+			wrapper.unmount();
+			if (before !== null) doc.applyDeclaration(before);
+		});
+	});
+
+	it('按不动就说清为什么：一期声明（编译不出请求）那一档', async () => {
+		// 灌一份**一期**那份示例（出生格式因此是 phase1_task）：面板有内容可画，但编不出请求
+		setSelectedDevice('phase1_robot');
+		expect(loadSampleTask()).toBe(true);
+		expect(doc.declarationFormatRef.value).toBe('phase1_task');
+		const wrapper = mount(RobotCallsPanel);
+
+		expect(dispatchButton(wrapper).attributes('disabled')).toBeDefined();
+		expect(wrapper.get('[data-testid="robot-calls-gate"]').text()).toContain('出生格式不是技能计划');
+		wrapper.unmount();
+	});
+
+	it('下发：每一步的真实结果落在**它自己那一行**上，与那一步的请求并排', async () => {
+		const wrapper = await mountedWithPlan();
+		// 四类步都有的那份计划：0 技能 / 1 分支 / 1.then.0 技能 / 2 等待 / 3 原语 / 4 技能
+		stubRun([
+			event('0', 'running', `POST /v1/skills/execute skill=${SO101_SKILL}`),
+			event('0', 'completed', '终态 state=completed success=true'),
+			event('1', 'completed', '条件 last.success == false 不成立 → 走 else 臂'),
+			event('1.then.0', 'running', `POST /v1/skills/execute skill=${SO101_SKILL}`),
+			event('1.then.0', 'completed', '终态 state=completed success=true'),
+			event('2', 'completed', '等了 2 秒（bridge 不参与，这一步不产生成败）'),
+			event('4', 'running', `POST /v1/skills/execute skill=${SO101_SKILL}`),
+			event('4', 'completed', '终态 state=completed success=true'),
+		]);
+
+		await dispatchButton(wrapper).trigger('click');
+		await flushPromises();
+
+		// 行还是在原来的位置上（下发是**在它旁边**加的一层，不是另开一个列表）
+		expect(wrapper.findAll('[data-testid="robot-calls-rows"] > li').map((li) => li.attributes('data-step-path'))).toEqual([
+			'0',
+			'1',
+			'1.then.0',
+			'2',
+			'3',
+			'4',
+		]);
+
+		// 结果与请求**同一格**：技能行里既有请求行，也有它自己的运行态
+		const skillRow = wrapper.get('li[data-step-path="0"]');
+		expect(skillRow.find('[data-testid="robot-call-execute-line"]').exists()).toBe(true);
+		expect(runBoxOf(wrapper, '0').attributes('data-run-state')).toBe('completed');
+		expect(runBoxOf(wrapper, '0').text()).toContain(RUN_STATE_FACE.completed);
+		expect(runBoxOf(wrapper, '0').text()).toContain('终态 state=completed success=true');
+
+		// 臂里的那一步认得自己属于哪一层：它那条结果落在 `1.then.0` 那一行上
+		expect(runBoxOf(wrapper, '1.then.0').attributes('data-run-state')).toBe('completed');
+		expect(runBoxOf(wrapper, '1').attributes('data-run-state')).toBe('completed');
+		expect(runBoxOf(wrapper, '2').text()).toContain('bridge 不参与');
+
+		// 结论排在行列表上面，且与事件对得上：6 行里 5 行有结论（原语那一步没有事件）
+		expect(wrapper.get('[data-testid="robot-calls-verdict-face"]').text()).toBe('走完了');
+		expect(wrapper.get('[data-testid="robot-calls-verdict"]').text()).toContain('5 / 6 步有结论');
+		wrapper.unmount();
+	});
+
+	it('unreachable 与 failed 在屏幕上是两种东西：文案不同、观感不同、原文照抄', async () => {
+		const unreachableDetail = 'POST /v1/skills/execute 回了 404：{"detail":"unknown skill: wave"}';
+		const failedDetail = '终态 state=failed success=false error_code=skill_failed message=夹爪没夹住';
+
+		const unreachable = await mountedWithPlan();
+		stubRun([event('0', 'running'), event('0', 'unreachable', unreachableDetail)], {
+			ok: false,
+			reason: '第 0 步发不出去',
+		});
+		await dispatchButton(unreachable).trigger('click');
+		await flushPromises();
+
+		const unreachableBox = runBoxOf(unreachable, '0');
+		expect(unreachableBox.attributes('data-run-state')).toBe('unreachable');
+		expect(unreachableBox.classes()).toContain('is-unreachable');
+		expect(unreachableBox.classes()).not.toContain('is-failed');
+		expect(unreachableBox.text()).toContain(RUN_STATE_FACE.unreachable);
+		expect(unreachableBox.text()).toContain(RUN_STATE_MEANING.unreachable);
+		// 诊断原文照原样，一个字都不改写
+		expect(unreachable.get('[data-testid="robot-call-run-detail"]').text()).toBe(unreachableDetail);
+		unreachable.unmount();
+
+		const failed = await mountedWithPlan();
+		stubRun([event('0', 'running'), event('0', 'failed', failedDetail)], {
+			ok: false,
+			reason: '第 0 步失败',
+		});
+		await dispatchButton(failed).trigger('click');
+		await flushPromises();
+
+		const failedBox = runBoxOf(failed, '0');
+		expect(failedBox.attributes('data-run-state')).toBe('failed');
+		expect(failedBox.classes()).toContain('is-failed');
+		expect(failedBox.classes()).not.toContain('is-unreachable');
+		expect(failed.get('[data-testid="robot-call-run-detail"]').text()).toBe(failedDetail);
+
+		// 三种不同：徽标那几个字、那句「它说的是什么事」、观感
+		expect(unreachableBox.text()).not.toContain(RUN_STATE_FACE.failed);
+		expect(failedBox.text()).not.toContain(RUN_STATE_FACE.unreachable);
+		expect(unreachableBox.text()).not.toContain(RUN_STATE_MEANING.failed);
+		expect(failedBox.text()).not.toContain(RUN_STATE_MEANING.unreachable);
+		failed.unmount();
+	});
+
+	it('取消：按钮变成取消，按下去停在当下、如实说「已请求取消」', async () => {
+		const wrapper = await mountedWithPlan();
+		const reason =
+			'运行被取消（AbortSignal）：第 0 步的请求已经发出去了，设备那边可能还在跑——我们不替它下结论';
+		stubRunUntilAborted([event('0', 'running', `POST /v1/skills/execute skill=${SO101_SKILL}`)], reason);
+
+		await dispatchButton(wrapper).trigger('click');
+		await flushPromises();
+
+		// 跑的时候按钮就是那一格「取消」——「下发」此时不在了（一次只跑一条）
+		expect(hasDispatchButton(wrapper)).toBe(false);
+		const cancel = wrapper.get('[data-testid="robot-calls-cancel"]');
+		expect(cancel.text()).toBe('取消');
+		// 走到哪儿了也看得出来：那一步是 running（成败还没读到，不许替它说）
+		expect(runBoxOf(wrapper, '0').attributes('data-run-state')).toBe('running');
+		expect(wrapper.find('[data-testid="robot-calls-verdict"]').exists()).toBe(false);
+
+		await cancel.trigger('click');
+		await flushPromises();
+
+		expect(wrapper.get('[data-testid="robot-calls-verdict-face"]').text()).toBe('已请求取消');
+		expect(wrapper.get('[data-testid="robot-calls-verdict"]').attributes('data-cancelled')).toBe('true');
+		// 执行器那句原话照抄：设备那边可能还在跑，我们不替它下结论
+		expect(wrapper.get('[data-testid="robot-calls-verdict-detail"]').text()).toBe(reason);
+		// 取消之后按钮回到「下发」，还能再发一次
+		expect(hasDispatchButton(wrapper)).toBe(true);
+		expect(dispatchButton(wrapper).attributes('disabled')).toBeUndefined();
+		wrapper.unmount();
+	});
+
+	it('primitive 那一行不参与下发：它没有事件，但看得出来「不是漏了」', async () => {
+		const wrapper = await mountedWithPlan();
+		stubRun([event('0', 'running'), event('0', 'completed', '终态 state=completed success=true')]);
+
+		await dispatchButton(wrapper).trigger('click');
+		await flushPromises();
+
+		// 它那一行**没有请求行**（编译期就送不出去），也没有运行态那一块
+		const blockedRow = wrapper.get('li[data-step-path="3"]');
+		expect(blockedRow.find('[data-testid="robot-call-execute-line"]').exists()).toBe(false);
+		expect(runBoxExists(wrapper, '3')).toBe(false);
+		// 但它自己那一行说得出来：不参与下发
+		expect(blockedRow.get('[data-testid="robot-call-blocked-no-dispatch"]').text()).toBe(BLOCKED_ROW_RUN_NOTE);
+		expect(blockedRow.text()).toContain('不参与下发');
+		// 别的行照旧有运行态——不是整块没画
+		expect(runBoxExists(wrapper, '0')).toBe(true);
+		wrapper.unmount();
+	});
+
+	it('基地址：面板上填的进 localStorage，重新挂载还在', async () => {
+		const wrapper = await mountedWithPlan();
+		const input = wrapper.get('[data-testid="robot-calls-base-url"]');
+		expect((input.element as HTMLInputElement).value).toBe(DEFAULT_BRIDGE_BASE_URL);
+
+		await input.setValue('http://127.0.0.1:9999');
+		expect(window.localStorage.getItem(BRIDGE_BASE_URL_STORAGE_KEY)).toBe('http://127.0.0.1:9999');
+
+		// 「刷新」＝重新挂一个全新的组件：它只认 localStorage
+		const remounted = await mountedWithPlan();
+		expect((remounted.get('[data-testid="robot-calls-base-url"]').element as HTMLInputElement).value).toBe(
+			'http://127.0.0.1:9999',
+		);
+
+		wrapper.unmount();
+		remounted.unmount();
+	});
+
+	it('两条路在面板上说清了：这里是真下发，上面那块 3D 是本机仿真', async () => {
+		const wrapper = await mountedWithPlan();
+
+		// 摆的是一行版（面板高度有限），全句挂在 `title` 上等人问——两版说的是同一件事
+		const note = wrapper.get('[data-testid="robot-calls-path-note"]');
+		expect(note.text()).toBe(DISPATCH_PATH_SHORT);
+		expect(note.text()).toContain('真下发');
+		expect(note.text()).toContain('HTTP');
+		expect(note.text()).toContain('本机仿真');
+		expect(note.attributes('title')).toBe(DISPATCH_PATH_NOTE);
+		expect(DISPATCH_PATH_NOTE).toContain('一个网络请求都不发');
+		wrapper.unmount();
+	});
+
+	it('下发之后声明被换掉：对不上的事件不咽掉，说得出来是哪几条', async () => {
+		const wrapper = await mountedWithPlan();
+		stubRun([event('0', 'completed'), event('9.then.7', 'completed')], { ok: false, reason: '换了' });
+
+		await dispatchButton(wrapper).trigger('click');
+		await flushPromises();
+
+		const orphan = wrapper.get('[data-testid="robot-calls-orphan"]');
+		expect(orphan.text()).toContain('9.then.7');
+		expect(orphan.text()).toContain('确实发生过');
+		wrapper.unmount();
+	});
 });
