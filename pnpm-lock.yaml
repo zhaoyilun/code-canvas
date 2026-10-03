@@ -60,6 +60,9 @@ importers:
       '@codecanvas/contracts':
         specifier: workspace:*
         version: link:../../packages/contracts
+      '@codecanvas/robot-bridge':
+        specifier: workspace:*
+        version: link:../../packages/robot-bridge
       '@codecanvas/robot3d':
         specifier: workspace:*
         version: link:../robot3d

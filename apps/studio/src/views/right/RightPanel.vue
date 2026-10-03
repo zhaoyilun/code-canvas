@@ -1,13 +1,15 @@
 <script setup lang="ts">
 /**
- * 右栏 = **虚拟设备**（上，占大头）+ **代码 / 任务 JSON**（下，tab 切换）。
+ * 右栏 = **虚拟设备**（上，占大头）+ **代码 / 任务 JSON / 发给机器人**（下，tab 切换）。
  *
  * 为什么上半要大：虚拟设备那块现在装的是**真的 3D 设备**——`@codecanvas/robot3d` 的执行器
  * 挂在 `<VirtualDevicePanel>` 里（画面、执行、步骤日志都在它里面）。3D 是这一栏里最吃地方的东西，
- * 所以它拿掉七成以上（`flex` 8:3），下半块只留「这份声明是什么」的两种看法够用的高度。
+ * 所以它拿掉七成以上（`flex` 8:3），下半块只留「这份声明是什么」的几种看法够用的高度。
  *
- * 为什么下半是 tab 而不是再分一块：代码与任务 JSON 是**同一件事的两种看法**
- * （编译产物 / 还原出来的输入），并排摆会把两块都压扁。tab 让当前看的那一份拿到整块高度。
+ * 为什么下半是 tab 而不是再分一块：三个 tab 是**同一件事的三种看法**
+ * （编译产物 / 还原出来的输入 / 会发出去的请求序列），并排摆会把三块都压扁。
+ * tab 让当前看的那一份拿到整块高度。第三个 tab 是「接到真执行链」的可见证据：
+ * 它把计划编成 bridge 会收到的请求，并如实标出哪一步送不出去。
  *
  * 设备**事实**那几行（名字、真机还是仿真、目录、能力数、出处）仍在 `VirtualDevicePanel` 里：
  * 「选的是哪一台」和「它能不能跑 3D」是同一个问题的两半，拆成两个组件只会让两边各存一份判断。
@@ -19,14 +21,16 @@ import { computed, ref } from 'vue';
 import { useStudioDevices } from '../../shell/devices';
 import { useStudioDocument } from '../../state/document';
 import { CodePanel } from '../code-panel';
+import { RobotCallsPanel } from './robot-calls';
 import { TaskJsonPanel } from './task-json';
 import VirtualDevicePanel from './VirtualDevicePanel.vue';
 
-type RightTab = 'code' | 'json';
+type RightTab = 'code' | 'json' | 'calls';
 
 const TABS = [
 	{ id: 'code' as RightTab, label: '代码', testid: 'right-tab-code' },
 	{ id: 'json' as RightTab, label: '任务 JSON', testid: 'right-tab-json' },
+	{ id: 'calls' as RightTab, label: '发给机器人', testid: 'right-tab-calls' },
 ] as const;
 
 const activeTab = ref<RightTab>('code');
@@ -89,8 +93,11 @@ function moveTab(event: KeyboardEvent, step: number): void {
 			>
 				<CodePanel />
 			</div>
-			<div v-else class="panel-code" data-testid="right-panel-json" role="tabpanel">
+			<div v-else-if="activeTab === 'json'" class="panel-code" data-testid="right-panel-json" role="tabpanel">
 				<TaskJsonPanel />
+			</div>
+			<div v-else class="panel-code" data-testid="right-panel-calls" role="tabpanel">
+				<RobotCallsPanel />
 			</div>
 		</section>
 	</section>

@@ -1,14 +1,15 @@
 // @vitest-environment happy-dom
 /**
- * 右栏的接线验收：**上面虚拟设备（占大头，里面是真的 3D）+ 下面「代码 / 任务 JSON」两个 tab**。
+ * 右栏的接线验收：**上面虚拟设备（占大头，里面是真的 3D）+ 下面「代码 / 任务 JSON / 发给机器人」三个 tab**。
  *
  * 四件事：
  * 1. 虚拟设备那块是固定的、占比更大（`flex` 8:3，去掉 tab 条后约七成）——里面装的是
  *    `@codecanvas/robot3d` 的挂载入口（见文件尾那组用例）；里面只列**设备**那一行行真东西
  *    （名字、真机还是仿真、目录、能力与原语数，以及真实上游数据的出处）；
  * 2. 下半块是 tab：代码面板是其中一个（内容一个字没改，仍是声明的编译产物），
- *    另一个是任务 JSON 视图；切到 JSON 时面板里就是它，切换是纯界面状态；
- * 3. 两个 tab 的键位是常规的（点击 + 左右方向键）。
+ *    另外两个是任务 JSON 视图与「发给机器人」（会发出去的请求序列）；切过去时面板里就是它，
+ *    切换是纯界面状态；
+ * 3. 三个 tab 的键位是常规的（点击 + 左右方向键）。
  *
  * 真实高度在浏览器里量（见交付报告）——happy-dom 不跑样式表，这里守结构与接线。
  */
@@ -177,16 +178,32 @@ describe('右栏 · 虚拟设备（固定常驻，放大）', () => {
 	});
 });
 
-describe('右栏 · 代码 / 任务 JSON 两个 tab', () => {
-	it('两个 tab 都在，默认显示代码（右栏的老本行）', () => {
+describe('右栏 · 代码 / 任务 JSON / 发给机器人 三个 tab', () => {
+	it('三个 tab 都在，默认显示代码（右栏的老本行）', () => {
 		const wrapper = panel();
 		const tabs = wrapper.findAll('[role="tab"]');
 
-		expect(tabs).toHaveLength(2);
+		expect(tabs).toHaveLength(3);
 		expect(wrapper.get('[data-testid="right-tab-code"]').text()).toContain('代码');
 		expect(wrapper.get('[data-testid="right-tab-json"]').text()).toContain('任务 JSON');
+		expect(wrapper.get('[data-testid="right-tab-calls"]').text()).toContain('发给机器人');
 		expect(wrapper.get('[data-testid="right-tab-code"]').attributes('aria-selected')).toBe('true');
 		expect(wrapper.find('[data-testid="code-panel"]').exists()).toBe(true);
+		expect(wrapper.find('[data-testid="task-json-panel"]').exists()).toBe(false);
+		expect(wrapper.find('[data-testid="robot-calls-panel"]').exists()).toBe(false);
+	});
+
+	it('切到「发给机器人」→ 面板换成请求序列，另外两块让位', async () => {
+		const wrapper = panel();
+
+		await wrapper.get('[data-testid="right-tab-calls"]').trigger('click');
+
+		expect(wrapper.get('[data-testid="right-tab-calls"]').attributes('aria-selected')).toBe('true');
+		expect(wrapper.get('[data-testid="right-tab-code"]').attributes('aria-selected')).toBe('false');
+		expect(
+			wrapper.find('[data-testid="right-panel-calls"]').find('[data-testid="robot-calls-panel"]').exists(),
+		).toBe(true);
+		expect(wrapper.find('[data-testid="code-panel"]').exists()).toBe(false);
 		expect(wrapper.find('[data-testid="task-json-panel"]').exists()).toBe(false);
 	});
 
