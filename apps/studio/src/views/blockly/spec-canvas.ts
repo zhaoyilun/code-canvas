@@ -19,6 +19,11 @@
  * 这里做两件事：整棵树**一次画完**（位置因此稳定，不会一边铺一边挪），
  * 然后把还没轮到的那几块先按住（透明、不吃指针），轮到时再调
  * `playBlockStepEntrance` 让那一块「从工具箱方向拖进来、落位」。
+ *
+ * 这一版多接了一条线：**设备执行到哪一步 → 切到那一步的块**。判据是规格里那块积木的
+ * 归属（`data-cc-plan-node`）与当前步在流程图上对应的那个框是否同一个 id；
+ * 「切过去」只有两件不动坐标的事（挂属性 + 滚视口），**`transform` 一个字节都不碰**
+ * ——块的定位与命中区都靠它（见 `useSpecCanvas` 的注释）。
  */
 import * as Blockly from 'blockly';
 import { onBeforeUnmount, onMounted, ref, watch, type ComputedRef, type Ref } from 'vue';
@@ -61,6 +66,18 @@ export const SPEC_PENDING_CLASS = 'cc-spec-pending';
 export const SPEC_INDEX_ATTRIBUTE = 'data-cc-spec-index';
 export const SPEC_DEPTH_ATTRIBUTE = 'data-cc-spec-depth';
 export const SPEC_TYPE_ATTRIBUTE = 'data-cc-spec-type';
+
+/**
+ * 这一块**属于哪个流程节点**（规格里那块积木的 `planPath`，落成属性）。
+ *
+ * 它是「切到那一步的块」的判据：规格里的锚与当前步在流程图上对应的那个框是同一个 id，
+ * 三处（流程图 / 积木 / 代码）于是说的是同一件事。**没有归属的块不挂这个属性**
+ * ——空属性值会读成「归属是空字符串」，那是两回事。
+ */
+export const SPEC_PLAN_ATTRIBUTE = 'data-cc-plan-node';
+
+/** 设备此刻走到的那一步落在哪一块/哪几块上（`SPEC_PLAN_ATTRIBUTE` 等于当前节点的块）。 */
+export const SPEC_CURRENT_ATTRIBUTE = 'data-cc-current-block';
 
 /** 块面文字里那个 `%` 要挡一下：Blockly 把 `%1` 当占位符，模型写的百分号会吃掉一个槽。 */
 const escapeMessage = (text: string): string => text.replace(/%(?=\d)/g, '％');
@@ -356,21 +373,34 @@ export interface UseSpecCanvasResult {
 	readonly hostRef: Ref<HTMLElement | null>;
 	readonly failure: Ref<string | null>;
 	readonly blockCount: Ref<number>;
+	/** 设备当前那一步落在画布上的哪几块（块的铺开序）。空表 = 这一份没有归属对得上。 */
+	readonly currentBlockIndexes: Ref<readonly number[]>;
 }
 
 /**
- * 建画布 + 跟着规格重画 + 跟着播放队列铺开。
+ * 建画布 + 跟着规格重画 + 跟着播放队列铺开 + 跟着当前步切过去。
  *
- * 三件事分开做：`spec` 变 → 重画（定义补齐、状态换掉、块数重置）；`revealedCount` 变 →
- * 只改「哪几块露出来」，**不重画**（重画会把位置与已经入场的块一起抹掉）。
+ * 四件事分开做：`spec` 变 → 重画（定义补齐、状态换掉、块数重置）；`revealedCount` 变 →
+ * 只改「哪几块露出来」，**不重画**（重画会把位置与已经入场的块一起抹掉）；
+ * `currentNodeId` 变 → 只挪「当前步」那一个标记（并在必要时把画布滚过去）。
+ *
+ * **不碰 `transform`**：Blockly 给每个块的 `<g>` 写着 `transform="translate(x, y)"`，
+ * 块的定位与命中区都靠它（CSS 的 `transform` 会整个盖掉那个属性）。所以这一版的
+ * 「切过去」只有两件不动坐标的事：给块挂一个属性（CSS 用 `filter` 画那圈辉光），
+ * 以及 `workspace.scroll()`（动的是画布视口，不是块）。
  */
 export const useSpecCanvas = (options: {
 	readonly spec: Ref<TeachingSpec | null>;
 	readonly revealedCount: Ref<number>;
+	/** 每一块的归属（与画布的深度优先序同序、一格对一格）；`state/teaching.ts` 给的。 */
+	readonly anchors?: Ref<readonly (string | undefined)[]>;
+	/** 设备此刻走到的那一步对应哪个流程节点（空串 = 没有）。 */
+	readonly currentNodeId?: Ref<string>;
 }): UseSpecCanvasResult => {
 	const hostRef = ref<HTMLElement | null>(null);
 	const failure = ref<string | null>(null);
 	const blockCount = ref(0);
+	const currentBlockIndexes = ref<readonly number[]>([]);
 
 	let workspace: Blockly.WorkspaceSvg | null = null;
 	/** 已经入过场的那几块：同一块不重复拖第二遍（`playBlockStepEntrance` 自己会重放，代价是白闪一下）。 */
@@ -379,14 +409,18 @@ export const useSpecCanvas = (options: {
 	const reveal = (): void => {
 		if (workspace === null) return;
 		const blocks = depthFirstSpecBlocks(workspace);
+		const anchors = options.anchors?.value ?? [];
 		blocks.forEach((entry, index) => {
 			const element = entry.block.getSvgRoot();
 			if (!(element instanceof Element)) return;
-			// 验收与调试读这三个属性认块（铺开序、树里的层数、块型）——与从前那套
-			// `data-cc-step-path` 同一个用意：不靠肉眼认积木。
+			// 验收与调试读这几个属性认块（铺开序、树里的层数、块型、归属哪个流程节点）——
+			// 与从前那套 `data-cc-step-path` 同一个用意：不靠肉眼认积木。
 			element.setAttribute(SPEC_INDEX_ATTRIBUTE, String(index));
 			element.setAttribute(SPEC_DEPTH_ATTRIBUTE, String(entry.depth));
 			element.setAttribute(SPEC_TYPE_ATTRIBUTE, entry.block.type);
+			const anchor = anchors[index];
+			if (anchor === undefined) element.removeAttribute(SPEC_PLAN_ATTRIBUTE);
+			else element.setAttribute(SPEC_PLAN_ATTRIBUTE, anchor);
 			if (index >= options.revealedCount.value) {
 				element.classList.add(SPEC_PENDING_CLASS);
 				return;
@@ -396,6 +430,60 @@ export const useSpecCanvas = (options: {
 			entered.add(element);
 			playBlockStepEntrance(element);
 		});
+	};
+
+	/**
+	 * 当前步 → 那几块：挂标记 + 滚过去。
+	 *
+	 * **一次遍历干完**（与 `reveal` 同一份幂等写法）：先摘掉上一轮的标记，再给对上的挂上。
+	 * 一个流程节点可能对应好几块（一个技能拆成父块 + 子块 + 值块），所以是「哪几块」而不是
+	 * 「哪一块」——全挂上，屏幕上就是「这一步讲的是这几块」。
+	 */
+	const syncCurrent = (): void => {
+		const current = workspace;
+		if (current === null) return;
+		const wanted = options.currentNodeId?.value ?? '';
+		const anchors = options.anchors?.value ?? [];
+		const hits: number[] = [];
+		depthFirstSpecBlocks(current).forEach((entry, index) => {
+			const element = entry.block.getSvgRoot();
+			if (!(element instanceof Element)) return;
+			// 归属在 `reveal` 里挂（那里才是画布与规格对齐的地方）；这里只读它。
+			const anchored = wanted !== '' && anchors[index] === wanted;
+			if (anchored) {
+				hits.push(index);
+				element.setAttribute(SPEC_CURRENT_ATTRIBUTE, wanted);
+			} else {
+				element.removeAttribute(SPEC_CURRENT_ATTRIBUTE);
+			}
+		});
+		currentBlockIndexes.value = hits;
+		if (hits.length === 0) return;
+		scrollIntoView(current, depthFirstSpecBlocks(current)[hits[0] as number]?.block ?? null);
+	};
+
+	/**
+	 * 把那一块挪进可视区。**动的是画布视口**（`workspace.scroll`），不是块的坐标
+	 * ——块的 `transform` 由 Blockly 管，碰它命中区就错位了。
+	 *
+	 * 已经看得见就不动：画布是「整棵树一次画完 + 自适应缩小」的，绝大多数时候全都看得见，
+	 * 每次都滚一下只会让画面自己抖。看不见（缩放下限装不下时）才滚。
+	 */
+	const scrollIntoView = (current: Blockly.WorkspaceSvg, block: Blockly.BlockSvg | null): void => {
+		if (block === null) return;
+		const box = block.getBoundingRectangle();
+		const metrics = current.getMetrics();
+		const scale = current.scale;
+		const within =
+			box.left * scale >= 0 &&
+			box.top * scale >= 0 &&
+			box.getWidth() * scale <= metrics.viewWidth &&
+			box.getHeight() * scale <= metrics.viewHeight;
+		if (within) return;
+		current.scroll(
+			metrics.viewWidth / 2 - (box.left + box.getWidth() / 2) * scale,
+			metrics.viewHeight / 2 - (box.top + box.getHeight() / 2) * scale,
+		);
 	};
 
 	const render = (spec: TeachingSpec | null): void => {
@@ -433,6 +521,8 @@ export const useSpecCanvas = (options: {
 				const box = workspace.getBlocksBoundingBox();
 				workspace.scroll(FIT_MARGIN_PX - box.left * fit.scale, FIT_MARGIN_PX - box.top * fit.scale);
 			}
+			// 画完就对一次当前步：重画这件事本身不该把「设备跑到哪一块」的标记抹掉。
+			syncCurrent();
 		} catch (error) {
 			// 画不出来就照实说：这一栏不能空着，也不能显示一棵半截的树。
 			failure.value = error instanceof Error ? error.message : String(error);
@@ -451,10 +541,14 @@ export const useSpecCanvas = (options: {
 		reveal();
 	});
 
+	// 归属与当前步：两条都只是「挪标记」，不重画（重画会把位置与已经入场的块一起抹掉）。
+	if (options.anchors !== undefined) watch(options.anchors, () => reveal());
+	if (options.currentNodeId !== undefined) watch(options.currentNodeId, () => syncCurrent());
+
 	onBeforeUnmount(() => {
 		workspace?.dispose();
 		workspace = null;
 	});
 
-	return { hostRef, failure, blockCount };
+	return { hostRef, failure, blockCount, currentBlockIndexes };
 };

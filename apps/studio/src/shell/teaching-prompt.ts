@@ -24,6 +24,7 @@ import {
 	describeInterfaces,
 	describeRuntimeCapabilities,
 	findCapability,
+	PLAN_PATH_PATTERN,
 	type CapabilityCatalog,
 	type CapabilitySpec,
 	type ImplArgument,
@@ -31,6 +32,7 @@ import {
 	type JsonValue,
 	type PrimitiveSpec,
 	type WorkflowDeclaration,
+	type WorkflowNode,
 } from '@codecanvas/contracts';
 
 /**
@@ -39,19 +41,29 @@ import {
  * 三条纪律里有两条是导演定的硬要求，写在这里也写在 `contracts/teaching-spec.ts` 的文件头：
  * 「目录里有的必须照目录说」与「不许一块包全部」。第三条「模型赢」落到提示词上只有一句话：
  * 与任务 JSON 对不上不用改、也不用解释，照你理解的讲（拦与不拦都在我们这一侧）。
+ *
+ * 这一版多了一整块「对应关系」：屏幕上那三样要跟着设备**执行到第几步**一起走
+ * （流程图那个框亮、积木切过去、代码切到那几行）。这件事我们做不了主——它靠的是
+ * 你写出来的三栏（节点的 `planPath`、块的 `planPath`、代码分段的 `planPath`）。
+ * 所以下面不但要求写，还逐条说清**写错/不写会怎样**：那些后果就是校验器真的会做的事。
  */
 export const TEACHING_SYSTEM_PROMPT = `你是机器人技能的**教学作者**。用户给你一份已经定稿的任务 JSON，以及这台设备的能力目录。你把这件事讲成一个新手看得懂的教学规格。只输出合法 JSON，不要输出 Markdown、不要解释。
 
 JSON 的形状（字段名一个字都不许改）：
 {
-  "version": 1,
+  "version": 2,
   "title": "这次教学的名字（一行）",
   "flow": {
-    "nodes": [{"id":"start","kind":"start","title":"开始"}, {"id":"n1","kind":"action","title":"移动到观察位","detail":"pose_name=observe_table"}, ...],
+    "nodes": [
+      {"id":"start","kind":"start","title":"开始"},
+      {"id":"n1","kind":"action","title":"移动到观察位","detail":"pose_name=observe_table","planPath":"0"},
+      {"id":"n2","kind":"decision","title":"看到桌面了吗","planPath":"1"},
+      {"id":"n3","kind":"wait","title":"等 1 秒","planPath":"2"}
+    ],
     "edges": [{"from":"start","to":"n1"}, {"from":"n2","to":"n3","arm":"then","label":"是"}, ...]
   },
   "blocks": [ 语句块… ],
-  "code": "一整段教学代码（带注释的纯文本，\\n 换行）"
+  "codeSegments": [{"planPath":"n1","lines":["一行代码","又一行"]}, ...]
 }
 
 【流程图 flow】
@@ -64,20 +76,47 @@ JSON 的形状（字段名一个字都不许改）：
 - 节点数控制在 4～12 个：图是**讲解的主线**，不是把每一步都摊开。
 
 【积木 blocks】一棵**可嵌套**的块树（顶层就是一串语句）。语句块五种：
-- {"kind":"call","label":"块上一个动作的名字","args":[{"name":"实参名","value":值块}]}
-- {"kind":"if","condition":值块,"body":[语句块…],"otherwise":[语句块…]}   ← C 形块，肚子里是一条语句链
-- {"kind":"repeat","times":值块,"body":[语句块…]}                        ← C 形块
-- {"kind":"wait","seconds":值块}
-- {"kind":"note","text":"一句讲解（不做动作）"}
+- {"kind":"call","label":"块上一个动作的名字","args":[{"name":"实参名","value":值块}],"planPath":"n1"}
+- {"kind":"if","condition":值块,"body":[语句块…],"otherwise":[语句块…],"planPath":"n2"}   ← C 形块
+- {"kind":"repeat","times":值块,"body":[语句块…],"planPath":"n1"}                        ← C 形块
+- {"kind":"wait","seconds":值块,"planPath":"n3"}
+- {"kind":"note","text":"一句讲解（不做动作）","planPath":"n1"}
 值块四种：{"kind":"number","value":0.03}、{"kind":"text","value":"observe_table"}、
 {"kind":"bool","value":true}、{"kind":"call","label":"…","args":[…]}
-（值块是**插进调用块槽位里的另一块积木**，不是写在块上的一行字。）
+（值块是**插进调用块槽位里的另一块积木**，不是写在块上的一行字；值块不写 planPath——它跟着自己那个调用块。）
+**每种块只许带它自己那几个键，多一个键整份规格会被拒**（实测踩过：给 call 加 "body" 就被拒了）。
+具体地说：call 只有 label / args / planPath，wait 只有 seconds / planPath，note 只有 text / planPath
+——这三种**不许**出现 "body" / "otherwise" / "condition" / "times"（那是 C 形块的键）；
+只有 if 有 condition / body / otherwise，只有 repeat 有 times / body。
+想讲「合上夹爪，然后往前走一点」，写成**平着排的两块**，不要写成一块带 body 的 call。
 **硬要求：不许一块包全部。** 一个动作至少要拆成「调用块 + 实参值块」；
 有判断就是 C 形块 + 里面嵌语句链。整棵树只有一块，这份规格就不合格。
 
-【教学代码 code】
-一整段带注释的代码文本：这件事从头到尾怎么做、为什么这么做、失败怎么办。
-它是**给人读的**，不是从积木翻译出来的，可以写注释与分步说明。空行与缩进都照你想要的样子写。
+【教学代码 codeSegments】
+把整段教学代码**按步切开**，一段一个对象：\`planPath\` 是这一段讲哪个流程节点（写流程节点的 id），
+\`lines\` 是这一段的那几行（一个字符串数组，一行一个元素；空行写成 ""）。我们按顺序拼起来，就是你写的那段代码。
+- 带注释的代码文本：这件事从头到尾怎么做、为什么这么做、失败怎么办。它是**给人读的**，不是从积木翻译的。
+- 同一步的文字要**连着写完**再写下一步：中间插了别的步，「切到那几行」就切不出一段连续的行。
+- 不要为了分段在段之间留空行：空行属于某一行的末尾，不单独成段。
+
+【最重要的一件事：三处都要写出「这是任务 JSON 里的哪一步」（planPath）】
+跑起来之后，设备执行到第几步，屏幕上就要跟着动：流程图上那个框亮起来、积木切到那一步的块、
+代码切到那一步那几行。**这件事完全靠你写出来的对应关系**，我们不会替你猜一个。
+所以三处都要写，而且指的地方必须真的存在：
+
+1. **每个流程节点**（action / decision / wait）写 "planPath"：它讲的是任务 JSON 里的哪一步。
+   取值是**执行路径**，样子就是 ${String(PLAN_PATH_PATTERN)}：顶层第几步就写那个下标（第 1 步写 "0"，第 3 步写 "2"）；
+   走到某条臂里的一步，就接着写臂再写臂内的下标（第 2 步那个分支的「那么」臂里的第 1 步写 "1.then.0"）。
+   **能写哪些路径，看材料最后那块「每一步的执行路径」——那张表是设备实际会走到的位置，照抄。**
+   start 与 end 两个框**不许**写 planPath：它们不是任务 JSON 里的步骤。
+   写错会怎样：指着一个不存在的步（写了个没在那张表里的路径、或者下标越界），**整份规格会被拒**，
+   界面上就是「模型没画出来」，一句图都没有。
+2. **每棵顶层积木**写 "planPath"：它属于**哪个流程节点**——注意这里写的是**流程节点的 id**（n1 那种），
+   不是执行路径；嵌套在肚子里的块不写就跟父块走（也可以自己写一个不同的）。
+   写错会怎样：写了个不在图上的 id，**整份规格会被拒**；顶层一块都不写，规格仍然能用、图照画，
+   但积木那一栏跟不了当前步（界面上会照实说「没接上联动」）。
+3. **每一段代码**写 "planPath"：也是**流程节点的 id**，说的是「这一段讲的是哪一步」。
+   写错会怎样：写了个不在图上的 id，**整份规格会被拒**；同一步的文字被别的步隔开也会被拒。
 
 【怎么把一步拆开（这是这一版最容易被做错的地方）】
 - 目录里**写着实现**的技能（技能清单里那行「实现：…」），要把它**展开成多块**：
@@ -306,15 +345,21 @@ const taskFactLines = (declaration: WorkflowDeclaration, catalog: CapabilityCata
 };
 
 /**
- * user 那条消息：任务 JSON + 目录的直接序列化。**顺序就是上面那六块**。
+ * user 那条消息：任务 JSON + 目录的直接序列化。**顺序就是上面那七块**。
  *
  * `declarationText` 由调用方给（生成那条路留着模型吐出来的原文；导入那条路给规范化 JSON）。
  * 这里不自己序列化声明——两种来源都叫「这次的任务 JSON」，谁拿到就交谁，别在这里再造一份。
+ *
+ * 第 7 块（每一步的执行路径）是这一版加的：规格里那三栏 `planPath` 要照着它写。
+ * 这张表**由计划结构列出来**（`planPathsOf`，与设备报的 `runningPlanPath` 同一份口径），
+ * 不是这里手写的一张清单——手写一张的下场是模型照着手写的那份写，而校验器拿的是真结构。
  */
 export const teachingMaterialOf = (
 	declaration: WorkflowDeclaration,
 	catalog: CapabilityCatalog,
 	declarationText: string,
+	/** 每一步的执行路径 → 那一步。缺省就从没人给——那一块说「列不出来」，不编一张。 */
+	planPaths?: ReadonlyMap<string, WorkflowNode>,
 ): string => {
 	const sections: string[] = [
 		`【这台设备】${catalog.displayName}（robotName=${catalog.robotName ?? '未知'}，目录 ${catalog.catalogRef}）`,
@@ -329,5 +374,22 @@ export const teachingMaterialOf = (
 		`【这台设备的设备事实】\n${deviceFactLines(catalog).join('\n') || '（这台设备没有导到设备事实）'}`,
 		`【这次任务用到的那几步，落到哪儿】\n${taskFactLines(declaration, catalog).join('\n') || '（没有可解析的步骤）'}`,
 	];
+	if (planPaths !== undefined) {
+		sections.push(
+			`【每一步的执行路径（写 planPath 时照这张表抄，一个字都别改）】\n${
+				stepPathLines(planPaths).join('\n') || '（这份声明里没有走得通的步骤）'
+			}`,
+		);
+	}
 	return sections.join('\n\n');
 };
+
+/**
+ * 每一步一行：`路径 ← 第几步 · 显示名`。
+ *
+ * 为什么要连显示名一起给：模型要认出「这一步」是哪一步，靠的只能是任务 JSON 里那个名字
+ * （技能名、`wait 2s`、分支的条件），而路径本身是一串下标，认不出任何东西。
+ * 两样并排摆着，它才能把「讲这一步的那个框」对到一条具体的路径上。
+ */
+const stepPathLines = (planPaths: ReadonlyMap<string, WorkflowNode>): readonly string[] =>
+	[...planPaths].map(([path, node]) => `- ${path} ← ${node.name}`);

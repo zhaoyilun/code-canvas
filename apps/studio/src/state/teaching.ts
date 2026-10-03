@@ -23,6 +23,9 @@
 import { computed, ref, shallowRef, watch, type ComputedRef, type Ref } from 'vue';
 import {
 	flattenTeachingBlocks,
+	flattenedBlockAnchors,
+	segmentLineRanges,
+	type CodeSegmentRange,
 	type FlowEdge,
 	type FlowGraph,
 	type FlowNode,
@@ -32,8 +35,10 @@ import {
 	type WorkflowDeclaration,
 } from '@codecanvas/contracts';
 import { createStepPlayback, type StepPlayback } from '../shell/step-playback';
+import { runningPlanPath } from '../shell/device-run';
 import { generateTeachingSpec } from '../shell/teaching-generation';
 import { readTaskEndpoint } from '../shell/llm-endpoint';
+import { nodeAtPlanPath, planPathOf, planPathsOf } from '../views/shared/plan-structure';
 import { useStudioDocument } from './document';
 
 export type TeachingStatus = 'idle' | 'drawing' | 'ready' | 'failed';
@@ -114,7 +119,6 @@ const flowPlayback: StepPlayback<FlowDrawItem> = createStepPlayback<FlowDrawItem
 const blockPlayback: StepPlayback<TeachingBlock | TeachingValueBlock> =
 	createStepPlayback<TeachingBlock | TeachingValueBlock>();
 const codePlayback: StepPlayback<string> = createStepPlayback<string>();
-
 const revealedFlowItems: ComputedRef<readonly FlowDrawItem[]> = flowPlayback.revealed;
 const revealedBlockItems: ComputedRef<readonly (TeachingBlock | TeachingValueBlock)[]> = blockPlayback.revealed;
 const revealedCodeLines: ComputedRef<readonly string[]> = codePlayback.revealed;
@@ -161,6 +165,24 @@ const applySpec = (next: TeachingSpec): void => {
 	failure.value = null;
 };
 
+/**
+ * 把这一条线清回「什么都没有」：规格撤下、三条队列清空、状态回 `idle`。
+ *
+ * `runTeaching` 开头那段撤规格就是这个函数（撤下来的理由写在那里）。单独开出来是因为
+ * **它自己就是一条状态迁移**：声明换了一份而新一轮还没回来时，屏幕上该有的样子正是它。
+ * 导出是给测试用的（模块级单例，不重置就会把上一条用例的规格带进下一条）。
+ */
+export const clearTeaching = (): void => {
+	spec.value = null;
+	flowPlayback.reset();
+	blockPlayback.reset();
+	codePlayback.reset();
+	status.value = 'idle';
+	failure.value = null;
+	streamedChars.value = 0;
+	attempt.value = 0;
+};
+
 /** 这一轮之后的结果还算不算数：新一轮一开始，在途的旧结果就不许再写状态。 */
 let runToken = 0;
 let controller: AbortController | null = null;
@@ -200,14 +222,8 @@ export async function runTeaching(options: RunTeachingOptions = {}): Promise<voi
 	 * ——「模型赢」说的是「模型与这份 JSON 对不上也不拦」，不是「可以拿另一份 JSON 的图顶上」。
 	 * 撤下来之后三张画布会照实说「正在画…」，那才是这一刻的真话。
 	 */
-	spec.value = null;
-	flowPlayback.reset();
-	blockPlayback.reset();
-	codePlayback.reset();
+	clearTeaching();
 	status.value = 'drawing';
-	failure.value = null;
-	streamedChars.value = 0;
-	attempt.value = 0;
 
 	const result = await generateTeachingSpec({
 		endpoint: readTaskEndpoint(),
@@ -216,6 +232,10 @@ export async function runTeaching(options: RunTeachingOptions = {}): Promise<voi
 		deviceRef: catalog.catalogRef,
 		formatRef: doc.declarationFormatRef.value ?? '',
 		declarationText: options.declarationText ?? declarationTextOf(declaration),
+		// 对应关系那两样：一张「有哪些执行路径」的表（材料里给模型照抄），
+		// 和一个「这条路径对不对」的判据（解析时对账）。两个一起给，见 `TeachingGenerationOptions`。
+		planPaths: planPathsOf(declaration),
+		nodeAtPlanPath,
 		signal: controller.signal,
 		onDelta: (accumulated) => {
 			if (token !== runToken) return;
@@ -250,8 +270,8 @@ export async function runTeaching(options: RunTeachingOptions = {}): Promise<voi
  * 挂上「声明一换就重画」这条线。**由外壳在挂载时调一次**（`App.vue`），不在这里自动跑：
  * 模块级 `watch` 会在任何 import 到这份状态的测试里也跑起来，那时它只会去打一个不存在的接口。
  *
- * `immediate` 是有意的：开机那份样例任务也要有图（否则三张画布空着，
- * 而用户看到的第一眼就是「这东西没做完」）。
+ * `immediate` 是有意的：挂载这一刻声明**可能是空的**（开局什么都不灌，见 `App.vue`），
+ * 那时它什么都不做——而用户第一次生成完，这条线要能立刻接上，不必再挂一次。
  */
 export function startTeachingWatch(): void {
 	watch(
@@ -289,5 +309,144 @@ export function useTeaching(): {
 		/** 还在铺（有东西没放出来）：视图据此决定要不要挂入场动画。 */
 		drawing: computed(() => status.value === 'drawing' || flowPlayback.playing.value),
 		run: runTeaching,
+	};
+}
+
+// ---------------------------------------------------------------------------
+// 联动：设备执行到哪一步 → 那一步在规格里是哪个流程节点
+// ---------------------------------------------------------------------------
+
+/**
+ * 现在讲的是**哪一步**（执行路径，或者 `null` = 没有谈到任何一步）。
+ *
+ * 两个来源，**先设备、后选中**，两条都走同一份路径口径（`planPathsOf` / `nodeAtPlanPath`）：
+ *
+ * 1. `runningPlanPath`（`shell/device-run.ts`）：设备此刻在那一步。它是硬事实，所以最优先；
+ * 2. 用户在计划里的选中（`document.ts` 的 `selectedNodeId`）——**选中也是「某一步」**，
+ *    与设备报的那条是同一个空间里的一个位置（右栏面板跑的时候正是用 `nodeAtPlanPath`
+ *    把路径反推成选中的，所以两条常常相等，但一跑完运行标记就灭了、选中还停在那儿）。
+ *
+ * 为什么不用 `selectedStepIndex`：那是**选中那个模块的实现里第几条语句**，
+ * 与「计划里的哪一步」不是一个空间（见 `document.ts` 那段注释）。拿它对流程节点，
+ * 对出来的是一个恰好相等的数，不是一条对应关系。
+ */
+const currentPlanPath = computed<string | null>(() => {
+	const running = runningPlanPath.value;
+	if (running !== null) return running;
+	return planPathOf(useStudioDocument().declaration.value, useStudioDocument().selectedNodeId.value);
+});
+
+/**
+ * 当前那一步**在规格的流程图上**是哪个框——三处联动的唯一交汇点。
+ *
+ * 判据是**节点身份**，不是路径字符串相等：规格里那条 `planPath` 与设备报的那条路
+ * 有可能是两条不同的路径走到同一个节点（两条臂汇到同一步）。比身份，两条路说同一件事时仍然对得上。
+ */
+const currentFlowNodeId = computed<string | null>(() => {
+	const declaration = useStudioDocument().declaration.value;
+	const specNow = spec.value;
+	if (specNow === null) return null;
+
+	// 设备报的那条路径说了算；没在跑就看选中（两条路都在 `currentPlanPath` 里）。
+	const path = currentPlanPath.value;
+	if (path === null) return null;
+	const step = nodeAtPlanPath(declaration, path);
+	if (step === null) return null; // 路径推不出步骤：什么都别亮，不拿另一条顶上。
+
+	const owner = specNow.flow.nodes.find(
+		(node) => node.planPath !== undefined && nodeAtPlanPath(declaration, node.planPath)?.id === step.id,
+	);
+	return owner?.id ?? null;
+});
+
+/**
+ * 这一份规格里有没有一条**真能用的**联动路径：三处对应关系只要有一处就够点亮一处。
+ */
+const linkageOf = (specNow: TeachingSpec | null): LinkageState => {
+	if (specNow === null) return 'none';
+	const declaration = useStudioDocument().declaration.value;
+	if (declaration === null) return 'none';
+	const resolvable = (path: string | undefined): boolean =>
+		path !== undefined && nodeAtPlanPath(declaration, path) !== null;
+	return specNow.flow.nodes.some((node) => resolvable(node.planPath)) ? 'linked' : 'none';
+};
+
+/**
+ * 积木那一条对应关系在不在：**顶层块有没有写归属，而且写的那个 id 真在图上**。
+ *
+ * 单独一个判据（而不是复用 `linkage`）：三条对应关系是各自独立的，流程那条好着
+ * 而积木那条整个漏掉——那正是这一版最可能出的错（模型只写了图那一栏）。
+ * 那一栏漏了，画布上就永远切不动，而别的两处照常动；不单独说，屏幕上就没有一个字解释得清。
+ */
+const blockLinkageOf = (specNow: TeachingSpec | null): boolean => {
+	if (specNow === null) return false;
+	const flowIds = new Set(specNow.flow.nodes.map((node) => node.id));
+	return specNow.blocks.some((block) => block.planPath !== undefined && flowIds.has(block.planPath));
+};
+
+/**
+ * 三处的联动状态。**这一栏是给「照实说」用的**：没有对应关系时三张画布照常画，
+ * 但屏幕上必须有一句话说明「跟不了当前步」，而不是让用户盯着一张不动的图猜。
+ */
+export type LinkageState = 'none' | 'linked' | 'unlinked';
+
+export function useTeachingLinkage(): {
+	readonly currentPlanPath: ComputedRef<string | null>;
+	readonly currentNodeId: ComputedRef<string | null>;
+	readonly blockAnchorsOf: ComputedRef<readonly (string | undefined)[]>;
+	readonly codeRangesOf: ComputedRef<readonly CodeSegmentRange[]>;
+	readonly linkage: ComputedRef<LinkageState>;
+	readonly note: ComputedRef<string>;
+	/** 积木那一条对应关系在不在（不在时说一句，见 `blockLinkageOf`）。 */
+	readonly blockNote: ComputedRef<string>;
+	readonly activeNodeId: ComputedRef<string>;
+} {
+	/** 这一块的锚（与 `flatBlocks` 同序、一格对一格）；规格没到就是空表。 */
+	const blockAnchorsOf = computed<readonly (string | undefined)[]>(() =>
+		spec.value === null ? [] : flattenedBlockAnchors(spec.value.blocks),
+	);
+
+	/** 每一段代码的行范围（推出来的，不是模型写的）。 */
+	const codeRangesOf = computed<readonly CodeSegmentRange[]>(() =>
+		spec.value === null ? [] : segmentLineRanges(spec.value.codeSegments),
+	);
+
+	/**
+	 * 联动现在是什么状态。
+	 *
+	 * `linked` = 规格里至少有一个框指着一条**真的**路径（这一份规格接得上设备）；
+	 * `unlinked` = 有图、有规格，但一个都指不到（模型没写、或写的都不在这次的声明里）；
+	 * `none` = 还没有规格（那不是说联动坏了，是说还没有东西可联动）。
+	 */
+	const linkage = computed<LinkageState>(() => linkageOf(spec.value));
+
+	const note = computed<string>(() => {
+		if (linkage.value === 'linked') return '';
+		if (linkage.value === 'none') return '';
+		return '这份规格没有「哪一块对应任务里哪一步」的对应关系，所以三张画布跟不了设备的当前步。';
+	});
+
+	/**
+	 * 积木那一栏的话：**只在这一栏真的漏了时说**（有规格、但一块归属都没有）。
+	 * 与 `note` 分开，因为两件事：整份规格都没对应关系 vs 只有积木这一栏漏了。
+	 */
+	const blockNote = computed<string>(() => {
+		const specNow = spec.value;
+		if (specNow === null) return '';
+		if (blockLinkageOf(specNow)) return '';
+		return '这份规格里的积木没写「属于哪个流程节点」，所以积木画布跟不了设备的当前步。';
+	});
+
+	const activeNodeId = computed<string>(() => currentFlowNodeId.value ?? '');
+
+	return {
+		currentPlanPath,
+		currentNodeId: currentFlowNodeId,
+		blockAnchorsOf,
+		codeRangesOf,
+		linkage,
+		note,
+		blockNote,
+		activeNodeId,
 	};
 }

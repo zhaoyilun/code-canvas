@@ -369,6 +369,56 @@ export const nodeAtPlanPath = (declaration: WorkflowDeclaration | null, path: st
 	return node;
 };
 
+/**
+ * 一份声明 → **每一条走得到的执行路径**（路径 → 那一步的节点）。
+ *
+ * 为什么要有反向那一趟：`nodeAtPlanPath` 答的是「这条路径是哪一步」，而模型手里只有
+ * 「这是第几步」——它要把路径写进规格，就得有一张能照抄的表。这张表**由我们列出来给它**
+ * （提示词材料里那一块），而不是让它自己去推：推一遍就多一处可能推错的地方，
+ * 而推错的后果是整整三处视图的联动都不生效。
+ *
+ * 口径与 `nodeAtPlanPath` 严格互逆（同一棵 `planStructureOf` 的树、同一个 `topIndex`）：
+ * 遍历时逐个位置拼出路径，臂里的那一步排在自己的分支步后面，于是 `1.then.0` 这种也在这里。
+ *
+ * **链尾那几步没有臂**，所以它们的路径就是它在**本层**的下标——顶层第 3 步是 `2`，
+ * 某条臂里的第 1 步是 `1.then.0`。同一层里同一个下标只会走到一个节点，所以路径唯一。
+ */
+export const planPathsOf = (declaration: WorkflowDeclaration | null): ReadonlyMap<string, WorkflowNode> => {
+	const paths = new Map<string, WorkflowNode>();
+	if (declaration === null) return paths;
+
+	/** 已经收过的那几个节点：同一个节点只认**第一次**走到的那条路（见下）。 */
+	const claimed = new Set<string>();
+	const visit = (steps: readonly PlanStep[], prefix: string): void => {
+		steps.forEach((step, index) => {
+			const path = prefix === '' ? String(index) : `${prefix}.${String(index)}`;
+			// 同一个节点被两条路走到（两条臂汇到同一步——那份声明是坏的，校验会拦）时，
+			// 认哪条都在理，但只能认一条：屏幕上的「当前在第几步」只有一个答案。
+			if (!paths.has(path) && !claimed.has(step.node.id)) {
+				paths.set(path, step.node);
+				claimed.add(step.node.id);
+			}
+			for (const arm of step.arms) visit(arm.steps, `${path}.${arm.kind}`);
+		});
+	};
+	visit(planStructureOf(declaration).steps, '');
+	return paths;
+};
+
+/**
+ * 某一步的节点 → 它的执行路径（`planPathsOf` 的第一条；多了取最短的那条）。
+ *
+ * 用途只有一处：「人选中了某一步」这一路也要能变成一条路径，与设备报的那条同一个口径
+ * ——两条路（选中 / 在跑）于是走同一份判据，而不是各写一套。
+ */
+export const planPathOf = (declaration: WorkflowDeclaration | null, nodeId: string | null): string | null => {
+	if (nodeId === null) return null;
+	for (const [path, node] of planPathsOf(declaration)) {
+		if (node.id === nodeId) return path;
+	}
+	return null;
+};
+
 // ---------------------------------------------------------------------------
 // 条件：人话给画布看，代码形态给代码面板看
 // ---------------------------------------------------------------------------

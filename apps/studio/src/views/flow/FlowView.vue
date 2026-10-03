@@ -16,12 +16,36 @@
  * 两者对不上不拦、也不标注（导演定的「模型赢」）。
  */
 import { computed } from 'vue';
-import { useTeaching } from '../../state/teaching';
+import { useTeaching, useTeachingLinkage } from '../../state/teaching';
 import FlowChart from './FlowChart.vue';
 
 const teaching = useTeaching();
+const linkage = useTeachingLinkage();
 
 const spec = teaching.spec;
+
+/**
+ * 设备此刻走到的那一步对应图上哪个框（`state/teaching.ts` 算好的）。
+ *
+ * 画布只认这一个数：**「没有当前步」与「这一步图上没有框」都传空串**——
+ * 两种都不是「随便挑一个亮着」的理由。
+ */
+const currentNodeId = computed(() => linkage.currentNodeId.value ?? '');
+
+/**
+ * 有没有一行话要说。
+ *
+ * 两句话，说的是两件不同的事，所以分开：
+ * - `linkage.note`：规格里根本没有那三栏对应关系（模型没写）——图上哪个框都跟不了；
+ * - 下面那句：对应关系写了，但**此刻这一步**在这张图上找不到框（例如它讲的那一步在臂里，
+ *   而模型没给臂里那一步单独画一个框）。两种都要有字，不能只让图不动。
+ */
+const missingStepNote = computed(
+	() =>
+		linkage.linkage.value === 'linked' &&
+		currentNodeId.value === '' &&
+		linkage.currentPlanPath.value !== null,
+);
 
 /** 失败信息摊平成模板好用的一份（`null` = 没失败）；字数也在这一层算好。 */
 const failed = computed(() => {
@@ -61,8 +85,22 @@ const totalCount = computed(() => {
 			<p v-if="drawnCount < totalCount" class="flow-progress" data-testid="flow-progress">
 				正在画…（{{ drawnCount }} / {{ totalCount }}）
 			</p>
+			<!--
+				联动那条不生效时**照实说**（两种原因各一句，见 `missingStepNote`）。
+				图照画——这是「照常画、只是不亮」，不是失败。
+			-->
+			<p v-if="linkage.note.value !== ''" class="flow-link-note" data-testid="flow-linkage-note">
+				{{ linkage.note.value }}
+			</p>
+			<p v-else-if="missingStepNote" class="flow-link-note" data-testid="flow-linkage-missing-step">
+				当前这一步（{{ linkage.currentPlanPath.value }}）在这张流程图上没有对应的框，所以没有高亮。
+			</p>
 			<div class="flow-scroll">
-				<FlowChart :graph="flow" :revealed="teaching.revealedFlowKeys.value" />
+				<FlowChart
+					:graph="flow"
+					:revealed="teaching.revealedFlowKeys.value"
+					:current-node-id="currentNodeId"
+				/>
 			</div>
 		</div>
 
@@ -147,6 +185,15 @@ const totalCount = computed(() => {
 	margin: 0;
 	padding: var(--cc-space-1) var(--cc-space-3);
 	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-dim);
+	border-bottom: 1px solid var(--cc-line);
+}
+
+/* 「跟不了当前步」那一句：与别处的提示同一档（暗色小字，不是错误色——这不是失败）。 */
+.flow-link-note {
+	margin: 0;
+	padding: var(--cc-space-1) var(--cc-space-3);
 	font-size: var(--cc-fs-xs);
 	color: var(--cc-text-dim);
 	border-bottom: 1px solid var(--cc-line);

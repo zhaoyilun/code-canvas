@@ -56,12 +56,6 @@
  *
  * 3D 那部分的可视尺寸：由右栏宽度与这个面板的 flex 比例决定，
  * 全部走 `--cc-*` 变量（右栏栏宽是 `--cc-right-w`），组件里不写死像素。
- *
- * 3D 画布下面那一行是**本机布景**：待抓的方块摆在哪（x / y / z，米）+ 复位。
- * 为什么它是布景而不是任务参数：真机上目标物是相机看见的——`pick_object` 的 `target_name`
- * 是「红色方块」这种**视觉查询**（上游 `ibrobot_msgs` 的 `PickObject.action` 里那是运行时文本查询），
- * 不是我们给坐标。所以这三个数**不进声明、不进任务 JSON**，只改这一场仿真里那块方块的位置；
- * 面板上必须把这句话写在看得见的地方（不是塞进 `title`），否则人会以为它是任务的一部分。
  */
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue';
 import {
@@ -86,7 +80,6 @@ import {
 	type PlanRunEvent,
 } from '@codecanvas/robot-bridge';
 import {
-	DEFAULT_TARGET_BLOCK,
 	mountVirtualDevice,
 	type BranchArm,
 	type MountedVirtualDevice,
@@ -162,64 +155,6 @@ const BRIDGE_PATH_NOTE =
 	'选真机时按「运行」：这份计划被编成一列请求，真的 HTTP 发给 bridge 的基地址（请求一个字节都不改）——'
 	+ '一个技能一条 POST，随后在客户端轮询它的 task 到终态；「单步运行」在每个顶层步之前等一次放行，'
 	+ '停住时下一个请求一个字节都不发。地址与「发给机器人」那块共用同一格（联调时一起改）。';
-
-/**
- * 本机布景：方块摆在哪儿（米，方块中心）。显示值就是**设备上那个值**（每次改动后从设备读回）——
- * 不另存一份「界面以为的位置」，否则屏幕上的数和 3D 里的方块早晚会不一致。
- *
- * 存的是**自己的拷贝、且不冻**：设备读回来的那份是冻结的（读到的值不该被外面改掉），
- * 拿它直接当界面状态，下一次改一个分量就会静默失败——输入框再也不动了。
- */
-const targetBlock = ref<{ x: number; y: number; z: number }>({ ...DEFAULT_TARGET_BLOCK });
-/** 上一次被拒的原因（本机布景没有范围限制，但非有限数会被拒；界面上得说清是哪一项）。 */
-const targetError = ref<string | null>(null);
-
-/** 复位：回到缺省那一处（与 `createStage` 建方块时那句同一个数，见 `DEFAULT_TARGET_BLOCK`）。 */
-function resetTargetBlock(): void {
-	targetBlock.value = { ...DEFAULT_TARGET_BLOCK };
-	applyTargetBlock();
-}
-
-/**
- * 三个数**一个整体**生效：改一个就把当前这三个交给设备，不做「先应用一半」的中间态。
- *
- * 拒了就如实说出来并**把显示值写回设备上的那个值**：反了会留下一个屏幕上写着 0.4、
- * 3D 里其实是 0.12 的输入框——那正是这个面板最不该有的东西（读数与画面打架）。
- *
- * 「写回去」得**直接落到 DOM**，不能只靠 `:value` 重渲染：被拒之后的那个好值往往与拒之前
- * 的显示值一模一样（`targetBlock` 没变），Vue 于是合理地不重渲染，输入框里那个被拒的值
- * 会一直留在屏幕上——屏幕写 0.9、设备里是 0.12。所以这里连输入框一起接过来写。
- */
-function applyTargetBlock(field?: HTMLInputElement, axis?: 'x' | 'y' | 'z'): void {
-	const current = device3d.value;
-	if (current === null) return;
-	const position = { ...targetBlock.value };
-	try {
-		current.setTargetBlock(position);
-		targetBlock.value = { ...current.targetBlock };
-		targetError.value = null;
-	} catch (error) {
-		targetError.value = error instanceof Error ? error.message : String(error);
-		targetBlock.value = { ...current.targetBlock };
-		if (field !== undefined && axis !== undefined) field.value = String(targetBlock.value[axis]);
-	}
-}
-
-/**
- * 输入框改一下：只认能读成有限数的写法（空串 / 半截数字都不是）。
- * 读不出来就原地退回上一个值——输入框里留一个「读不出来」的东西，等于把判断推给看的人。
- */
-function onTargetInput(axis: 'x' | 'y' | 'z', event: Event): void {
-	const field = event.target;
-	if (!(field instanceof HTMLInputElement)) return;
-	const value = Number(field.value.trim());
-	if (field.value.trim() === '' || !Number.isFinite(value)) {
-		field.value = String(targetBlock.value[axis]);
-		return;
-	}
-	targetBlock.value = { ...targetBlock.value, [axis]: value };
-	applyTargetBlock(field, axis);
-}
 
 /**
  * 跟随：跑到哪一步就选中那一步（默认开）。
@@ -711,11 +646,6 @@ function syncMount(): void {
 	if (element === null || current === null) return;
 	device3d.value = mountVirtualDevice(element, { catalog: current.catalog });
 	/*
-	 * 挂上就把显示着的那个位置交给新设备：换设备时设备是新建的（方块回到缺省），
-	 * 而输入框里那三个数还在——不推一次，屏幕上写的位置与 3D 里那块就不一致了。
-	 */
-	applyTargetBlock();
-	/*
 	 * 每走一步在面板上留一行——**计划步**那种一步（技能步 / 分支步），不是技能内部的原语：
 	 * 分支步没有原语事件，而「走了哪条臂」只有它说得清。
 	 * `running` 也收：`path` 相同就是同一行，起点与终点写同一格（换状态而不是添一行），
@@ -798,67 +728,6 @@ onBeforeUnmount(() => {
 			<p v-else class="device-absent" data-testid="virtual-device-absent">
 				这台是真机：这里没有本机 3D 画面（本机连不上它，画出来的都是编的）。
 				三个按钮照旧：「运行」经 bridge 真下发，一个技能一条 HTTP 请求。
-			</p>
-
-			<!--
-				本机布景：待抓的方块摆在哪。**只有虚拟设备有这一行**（真机没有 3D，摆给谁看）。
-				三个数一个整体生效；「本机布景」那句话与控件同一行、一眼看得见——
-				它说的是这三个数**不是任务参数**，真机那边靠视觉找 `target_name`。
-			-->
-			<div v-if="isVirtual" class="device-scene" data-testid="virtual-device-scene">
-				<span class="scene-scope" data-testid="virtual-device-scene-scope">本机布景</span>
-				<label class="scene-field">
-					<span class="scene-axis">x</span>
-					<input
-						type="text"
-						inputmode="decimal"
-						class="scene-input"
-						data-testid="virtual-device-target-x"
-						:value="targetBlock.x"
-						aria-label="方块位置 x（米）"
-						@input="onTargetInput('x', $event)"
-					/>
-				</label>
-				<label class="scene-field">
-					<span class="scene-axis">y</span>
-					<input
-						type="text"
-						inputmode="decimal"
-						class="scene-input"
-						data-testid="virtual-device-target-y"
-						:value="targetBlock.y"
-						aria-label="方块位置 y（米）"
-						@input="onTargetInput('y', $event)"
-					/>
-				</label>
-				<label class="scene-field">
-					<span class="scene-axis">z</span>
-					<input
-						type="text"
-						inputmode="decimal"
-						class="scene-input"
-						data-testid="virtual-device-target-z"
-						:value="targetBlock.z"
-						aria-label="方块位置 z（米）"
-						@input="onTargetInput('z', $event)"
-					/>
-				</label>
-				<span class="scene-unit">m</span>
-				<button
-					type="button"
-					class="scene-reset"
-					data-testid="virtual-device-target-reset"
-					@click="resetTargetBlock()"
-				>
-					复位
-				</button>
-				<!-- 每个字都得对得上事实：坐标是本机布景；真机那边 `pick_object` 找的是视觉查询里的那个名字。 -->
-				<span class="scene-note" data-testid="virtual-device-scene-note">
-					本机布景；真机那边靠视觉找 <code>target_name</code>，不是我们给坐标
-				</span>
-			</div>
-			<p v-if="isVirtual && targetError !== null" class="scene-error" data-testid="virtual-device-target-error">
-				{{ targetError }}
 			</p>
 
 			<!--
@@ -1108,96 +977,6 @@ onBeforeUnmount(() => {
 	flex: 0 0 auto;
 	/* 三条按钮 + 跟随开关 + 状态语挤在一行：窄栏下让状态语掉到下一行，而不是把按钮压扁 */
 	flex-wrap: wrap;
-}
-
-/*
- * 本机布景那一行：3D 画布下面、运行按钮上面。**一行、紧凑**——它从 3D 画面里让高度，
- * 所以只占一行，三个数字框各 58px 宽。
- *
- * 「本机布景」这句话留在一眼看得见的地方（不是 `title`）：它说的是这一行的**身份**——
- * 摆的是这一场仿真的布景，不是任务参数；真机那边 `pick_object` 靠视觉查询找目标物。
- */
-.device-scene {
-	display: flex;
-	align-items: center;
-	gap: var(--cc-space-1);
-	flex: 0 0 auto;
-	flex-wrap: wrap;
-	font-size: var(--cc-fs-xs);
-}
-
-/* 身份标签：本机布景 vs 任务参数是两件事，这一句先把它说清 */
-.scene-scope {
-	padding: 1px var(--cc-space-1);
-	border: 1px solid var(--cc-line-strong);
-	border-radius: var(--cc-radius-sm);
-	color: var(--cc-text-dim);
-	white-space: nowrap;
-}
-
-.scene-field {
-	display: flex;
-	align-items: center;
-	gap: 2px;
-	flex: 0 0 auto;
-}
-
-.scene-axis {
-	color: var(--cc-accent);
-	font-family: var(--cc-font-mono);
-}
-
-.scene-input {
-	width: 58px;
-	padding: 3px var(--cc-space-1);
-	border: 1px solid var(--cc-line-strong);
-	border-radius: var(--cc-radius-sm);
-	background: var(--cc-surface-sunken);
-	color: var(--cc-text);
-	font: var(--cc-fs-xs) / 1.2 var(--cc-font-mono);
-}
-
-.scene-input:focus-visible {
-	outline: 1px solid var(--cc-highlight);
-	outline-offset: -1px;
-}
-
-/* 单位只说一次，跟在 z 后面：三个框都是米（与目录里的 workspace_limits 同一个坐标系） */
-.scene-unit {
-	color: var(--cc-text-faint);
-}
-
-.scene-reset {
-	padding: 3px var(--cc-space-2);
-	border: 1px solid var(--cc-line-strong);
-	border-radius: var(--cc-radius-sm);
-	background: var(--cc-surface-raised);
-	color: var(--cc-text);
-	font-size: var(--cc-fs-xs);
-	cursor: pointer;
-}
-
-.scene-reset:hover {
-	border-color: var(--cc-accent);
-}
-
-/* 那一句说明：跟在控件后面，压暗——它不是读数，是这个控件的注解 */
-.scene-note {
-	color: var(--cc-text-faint);
-	line-height: 1.4;
-}
-
-.scene-note code {
-	font-family: var(--cc-font-mono);
-	color: var(--cc-text-dim);
-}
-
-/* 被拒的原因：红字一行，紧贴在那一行下面（说清是哪个数读不出来） */
-.scene-error {
-	margin: 0;
-	flex: 0 0 auto;
-	font-size: var(--cc-fs-xs);
-	color: var(--cc-danger);
 }
 
 .device-run-buttons {

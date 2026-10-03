@@ -27,30 +27,11 @@ import RightPanel from './RightPanel.vue';
 
 /**
  * 3D 那一层**必须打桩**：真的 `mountVirtualDevice` 会建 WebGL 上下文，happy-dom 里起不来
- * （就算起得来，单测也不该去跑渲染循环）。这里只钉接线：虚拟设备时挂、真机时不挂、卸载时 dispose、
- * 以及**本机布景**（方块摆在哪）那一行真的把位置推到设备上。
+ * （就算起得来，单测也不该去跑渲染循环）。这里只钉接线：虚拟设备时挂、真机时不挂、卸载时 dispose。
  * 真正的挂载 / 跑一步 / 卸载契约在 `apps/robot3d/src/mount.test.ts` 里，那边用假舞台跑真执行器。
- *
- * 缺省位置与真身 `DEFAULT_TARGET_BLOCK` 是**同一个数**：真身从 `@codecanvas/robot3d` 转出来，
- * 这里 hoist 一份写死的，于是面板读到的缺省与被钉的断言对得上（换个缺省数，两边一起红）。
  */
-const robot3d = vi.hoisted(() => ({
-	DEFAULT_TARGET_BLOCK: { x: 0.12, y: 0.015, z: 0.16 },
-}));
-
-/** 假设备的形状（`vi.fn(...)` 的返回值 + 方块位置那两项 + 单步那几项） */
+/** 假设备的形状（`vi.fn(...)` 的返回值 + 单步那几项） */
 function fakeDevice() {
-	// 方块位置这一份账单独写：**不能靠展开运算符合并**——展开会把 getter 在那一刻的取值
-	// 摊平成普通属性，于是替身永远停在缺省值上，与真设备（每次读回当前值）不是一回事。
-	let target: { x: number; y: number; z: number } = Object.freeze({ ...robot3d.DEFAULT_TARGET_BLOCK });
-	const setTargetBlock = vi.fn((position: { x: number; y: number; z: number }) => {
-		for (const [axis, value] of Object.entries(position)) {
-			if (!Number.isFinite(value)) throw new RangeError(`方块位置的 ${axis} 不是有限数：${String(value)}`);
-		}
-		// 冻住：真设备读出来的那份改不动（写它当场抛），替身照做
-		target = Object.freeze({ x: position.x, y: position.y, z: position.z });
-	});
-
 	/*
 	 * 整趟跑：缺省是「立刻跑完」。要观察「跑着的时候按钮什么样」就用 `holdRun()` 把它按住，
 	 * 再用 `finishRun()` 收尾——形状照真的 `PlanRunOutcome` 给全（状态行要用 completed/total 说话，
@@ -117,17 +98,12 @@ function fakeDevice() {
 		onPlanStep: vi.fn(() => () => {}),
 		dispose: vi.fn(),
 		size: { width: 0, height: 0 },
-		setTargetBlock,
-		get targetBlock(): { x: number; y: number; z: number } {
-			return target;
-		},
 	};
 }
 
 const mountVirtualDevice = vi.fn((_host: HTMLElement) => fakeDevice());
 
 vi.mock('@codecanvas/robot3d', () => ({
-	DEFAULT_TARGET_BLOCK: robot3d.DEFAULT_TARGET_BLOCK,
 	mountVirtualDevice: (...args: unknown[]) => mountVirtualDevice(...(args as [HTMLElement])),
 }));
 
@@ -146,8 +122,6 @@ type FakeDevice = {
 	onPlanStep: ReturnType<typeof vi.fn>;
 	dispose: ReturnType<typeof vi.fn>;
 	size: { width: number; height: number };
-	setTargetBlock: ReturnType<typeof vi.fn>;
-	targetBlock: { x: number; y: number; z: number };
 };
 
 /**
@@ -959,114 +933,3 @@ describe('右栏 · 跟随运行与可点的步骤行', () => {
 	});
 });
 
-/**
- * 本机布景：**待抓的方块摆在哪**。
- *
- * 这一组钉两件事：控件只挂在虚拟设备上（真机没有 3D，摆给谁看），以及改一个数真的走
- * `setTargetBlock` 推到设备上——屏幕上那三个数与 3D 里那块方块是同一个值（读回来再显示）。
- * 那句话（「本机布景；真机那边靠视觉找 target_name」）也钉在看得见的那一处，不是 `title`。
- * 3D 里那块真的挪过去只能在浏览器里验（见交付报告截图）。
- */
-describe('右栏 · 本机布景（方块位置）', () => {
-	/** 挂上面板、切到虚拟设备，返回面板与它挂上的那台假设备。 */
-	const mountedVirtual = async (): Promise<{ wrapper: ReturnType<typeof panel>; instance: FakeDevice }> => {
-		const wrapper = panel();
-		setSelectedDevice('so101_sim');
-		await wrapper.vm.$nextTick();
-		return { wrapper, instance: lastMount() };
-	};
-
-	it('虚拟设备上才有这一行：三个数字框 + 复位，显示的是缺省那一处（0.12 / 0.015 / 0.16）', async () => {
-		const { wrapper, instance } = await mountedVirtual();
-		const scene = wrapper.get('[data-testid="virtual-device-scene"]');
-		const value = (testid: string): string => (scene.get(`[data-testid="${testid}"]`).element as HTMLInputElement).value;
-
-		expect(scene.get('[data-testid="virtual-device-scene-scope"]').text()).toBe('本机布景');
-		expect(value('virtual-device-target-x')).toBe('0.12');
-		expect(value('virtual-device-target-y')).toBe('0.015');
-		expect(value('virtual-device-target-z')).toBe('0.16');
-		// 挂上就把显示着的这个位置推给设备：换设备时方块会回到缺省，两边得对上
-		expect(instance.setTargetBlock).toHaveBeenCalledWith({ x: 0.12, y: 0.015, z: 0.16 });
-	});
-
-	it('改一个数 → 调 setTargetBlock，三个分量一起交过去（一个整体生效）', async () => {
-		const { wrapper, instance } = await mountedVirtual();
-		const x = wrapper.get('[data-testid="virtual-device-target-x"]');
-
-		await x.setValue('0.30');
-
-		expect(instance.setTargetBlock).toHaveBeenLastCalledWith({ x: 0.3, y: 0.015, z: 0.16 });
-		expect(instance.targetBlock).toEqual({ x: 0.3, y: 0.015, z: 0.16 });
-
-		// 负值照收：坐标系与 workspace_limits 同源，基座另一侧也是合法的位置
-		await wrapper.get('[data-testid="virtual-device-target-z"]').setValue('-0.25');
-		expect(instance.setTargetBlock).toHaveBeenLastCalledWith({ x: 0.3, y: 0.015, z: -0.25 });
-	});
-
-	it('复位 → 摆回缺省那一处（就是 createStage 建方块时那个数）', async () => {
-		const { wrapper, instance } = await mountedVirtual();
-		await wrapper.get('[data-testid="virtual-device-target-x"]').setValue('0.4');
-		expect(instance.targetBlock.x).toBe(0.4);
-
-		await wrapper.get('[data-testid="virtual-device-target-reset"]').trigger('click');
-
-		expect(instance.setTargetBlock).toHaveBeenLastCalledWith(robot3d.DEFAULT_TARGET_BLOCK);
-		expect((wrapper.get('[data-testid="virtual-device-target-x"]').element as HTMLInputElement).value).toBe('0.12');
-		expect(wrapper.find('[data-testid="virtual-device-target-error"]').exists()).toBe(false);
-	});
-
-	it('读不出来的输入不退给设备，且显示值退回上一个好值（不留一个写 0.4、实际 0.12 的框）', async () => {
-		const { wrapper, instance } = await mountedVirtual();
-		const x = wrapper.get('[data-testid="virtual-device-target-x"]');
-		await x.setValue('0.3');
-		const calls = instance.setTargetBlock.mock.calls.length;
-
-		await x.setValue('abc');
-
-		// 一次都没多调：坏值到不了设备
-		expect(instance.setTargetBlock).toHaveBeenCalledTimes(calls);
-		expect((x.element as HTMLInputElement).value).toBe('0.3');
-		expect(instance.targetBlock).toEqual({ x: 0.3, y: 0.015, z: 0.16 });
-	});
-
-	it('设备拒了就把原因写在那一行下面，并把显示值写回设备上的那个值', async () => {
-		const { wrapper, instance } = await mountedVirtual();
-		// 假设备与真设备同一道闸（非有限数一律拒）。这里让这台设备对 0.9 也拒一次，
-		// 好把「设备拒了之后界面怎么办」那条路真的走一遍。
-		instance.setTargetBlock.mockImplementationOnce(() => {
-			throw new RangeError('方块位置的 x 不是有限数：NaN');
-		});
-
-		const x = wrapper.get('[data-testid="virtual-device-target-x"]');
-		await x.setValue('0.9');
-		await wrapper.vm.$nextTick();
-
-		expect(wrapper.get('[data-testid="virtual-device-target-error"]').text()).toContain('不是有限数');
-		// 设备那边还是缺省那个好值（0.12），输入框跟着它——
-		// 屏幕上不会留下一个设备没接受的数（它就是 `:value` 重渲染管不到的那一格：值没变，Vue 不重画）
-		expect((x.element as HTMLInputElement).value).toBe('0.12');
-	});
-
-	it('真机上没有这一行（真机没有 3D，摆给谁看），也没有那句说明', async () => {
-		const wrapper = panel();
-		setSelectedDevice('so101_robot');
-		await wrapper.vm.$nextTick();
-
-		expect(wrapper.find('[data-testid="virtual-device-scene"]').exists()).toBe(false);
-		expect(wrapper.find('[data-testid="virtual-device-target-x"]').exists()).toBe(false);
-		expect(wrapper.find('[data-testid="virtual-device-scene-note"]').exists()).toBe(false);
-		// 那句「真机没有 3D」的说明仍在（这一行不是它）
-		expect(wrapper.get('[data-testid="virtual-device-absent"]').text()).toContain('真机');
-	});
-
-	it('那句话是看得见的正文，不是 title：说的是本机布景与真机靠视觉找 target_name', async () => {
-		const { wrapper } = await mountedVirtual();
-		const note = wrapper.get('[data-testid="virtual-device-scene-note"]');
-
-		expect(note.text()).toContain('本机布景');
-		expect(note.text()).toContain('视觉');
-		expect(note.text()).toContain('target_name');
-		// 塞进 title 就等于没写：这里 `title` 一个字都不占
-		expect(note.attributes('title')).toBeUndefined();
-	});
-});

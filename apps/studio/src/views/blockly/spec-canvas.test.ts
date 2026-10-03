@@ -115,7 +115,7 @@ describe('块树 → 工作区状态', () => {
 			| undefined;
 		const inputs = branch?.block?.['inputs'] as Record<string, { block?: Record<string, unknown> }> | undefined;
 		expect(inputs?.[CONDITION_INPUT_NAME]?.block?.['type']).toBe(SPEC_BOOL_TYPE);
-		expect(inputs?.[BODY_INPUT_NAME]?.block?.['type']).toBe(callBlockType('记下桌面快照', false));
+		expect(inputs?.[BODY_INPUT_NAME]?.block?.['type']).toBe(callBlockType('合上夹爪', false));
 		expect(inputs?.[ELSE_INPUT_NAME]?.block?.['type']).toBe(SPEC_WAIT_TYPE);
 	});
 

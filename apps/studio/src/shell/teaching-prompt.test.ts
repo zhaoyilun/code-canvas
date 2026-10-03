@@ -19,17 +19,33 @@ import {
 	type CapabilityCatalog,
 } from '@codecanvas/contracts';
 import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
-import { loadSampleTask, useStudioDocument } from '../state/document';
+import { useStudioDocument } from '../state/document';
 import { setSelectedDevice } from './devices';
 import { TEACHING_SYSTEM_PROMPT, teachingMaterialOf } from './teaching-prompt';
 import { generateTeachingSpec } from './teaching-generation';
-import { sseResponse, sseForSpec, TEACHING_SPEC_FIXTURE } from '../state/__fixtures__/teaching-spec';
+import { planPathsOf } from '../views/shared/plan-structure';
+import {
+	codeOfSegments,
+	loadTeachingPlan,
+	SINGLE_BLOCK_SPEC,
+	sseForSpec,
+	sseResponse,
+	TEACHING_PLAN_STEPS,
+	TEACHING_SPEC_FIXTURE,
+	teachingSpecJson,
+} from '../state/__fixtures__/teaching-spec';
 
-const declarationOf = () => {
+/**
+ * 这一组用的那份声明：夹具那条**四步带分支**的计划（`TEACHING_PLAN_JSON`）。
+ *
+ * 为什么不用样例任务：材料里这一版多了一块「每一步的执行路径」，而样例那条三步直线
+ * 没有分支，`1.then.0` 这种路径根本不存在——拿它测「模型照这张表抄 planPath」等于测不到。
+ */
+const declarationOf = async () => {
 	setSelectedDevice('so101_sim');
-	expect(loadSampleTask()).toBe(true);
+	await loadTeachingPlan();
 	const declaration = useStudioDocument().declaration.value;
-	if (declaration === null) throw new Error('样例任务没灌进来');
+	if (declaration === null) throw new Error('夹具计划没灌进来');
 	return declaration;
 };
 
@@ -40,8 +56,8 @@ const skillLines = (material: string): readonly string[] => {
 };
 
 describe('材料由目录现生成', () => {
-	it('技能清单的条数就是目录里技能的条数，名字逐字来自目录', () => {
-		const material = teachingMaterialOf(declarationOf(), ROBOFRAME_SO101_CATALOG, '{}');
+	it('技能清单的条数就是目录里技能的条数，名字逐字来自目录', async () => {
+		const material = teachingMaterialOf((await declarationOf()), ROBOFRAME_SO101_CATALOG, '{}');
 		const lines = skillLines(material);
 		expect(lines).toHaveLength(ROBOFRAME_SO101_CATALOG.capabilities.length);
 		for (const capability of ROBOFRAME_SO101_CATALOG.capabilities) {
@@ -49,7 +65,7 @@ describe('材料由目录现生成', () => {
 		}
 	});
 
-	it('改目录里一个技能的 label 与参数 → 材料跟着变（提示词不是第二份目录）', () => {
+	it('改目录里一个技能的 label 与参数 → 材料跟着变（提示词不是第二份目录）', async () => {
 		const target = 'inspect_scene';
 		const renamed: CapabilityCatalog = {
 			...ROBOFRAME_SO101_CATALOG,
@@ -59,7 +75,7 @@ describe('材料由目录现生成', () => {
 					: capability,
 			),
 		};
-		const material = teachingMaterialOf(declarationOf(), renamed, '{}');
+		const material = teachingMaterialOf((await declarationOf()), renamed, '{}');
 		expect(material).toContain('看一眼桌面（改过的）');
 		expect(material).toContain('改过的说法');
 		// 技能清单那一段里不再有旧名字（任务 JSON 那段里出现的是**任务里那一步的名字**，
@@ -67,21 +83,21 @@ describe('材料由目录现生成', () => {
 		expect(skillLines(material).join('\n')).not.toContain('（观察桌面）');
 	});
 
-	it('新补的第一层：接口名表照上游 YAML 的键与值写进材料', () => {
-		const material = teachingMaterialOf(declarationOf(), ROBOFRAME_SO101_CATALOG, '{}');
+	it('新补的第一层：接口名表照上游 YAML 的键与值写进材料', async () => {
+		const material = teachingMaterialOf((await declarationOf()), ROBOFRAME_SO101_CATALOG, '{}');
 		expect(material).toContain('skill_action_name = /embodied/execute_skill');
 		expect(material).toContain('primitive_action_name = /embodied/execute_primitive');
 		expect(material).toContain('validate_skill_service = /embodied/validate_skill');
 	});
 
-	it('新补的第二层：原语要设备先具备哪些运行时能力（含上游那句「缺了怎么说」）', () => {
-		const material = teachingMaterialOf(declarationOf(), ROBOFRAME_SO101_CATALOG, '{}');
+	it('新补的第二层：原语要设备先具备哪些运行时能力（含上游那句「缺了怎么说」）', async () => {
+		const material = teachingMaterialOf((await declarationOf()), ROBOFRAME_SO101_CATALOG, '{}');
 		expect(material).toContain('要设备先具备：');
 		expect(material).toContain('fresh_ee_pose（缺了的话网关说：ee pose unavailable or stale）');
 	});
 
-	it('设备事实落到这一次的取值上：观察位那个坐标是目录里的真数字', () => {
-		const declaration = declarationOf();
+	it('设备事实落到这一次的取值上：观察位那个坐标是目录里的真数字', async () => {
+		const declaration = (await declarationOf());
 		const material = teachingMaterialOf(declaration, ROBOFRAME_SO101_CATALOG, '{}');
 		const target = ROBOFRAME_SO101_CATALOG.namedPoseTargets?.find((pose) => pose.name === 'observe_table');
 		expect(target?.position).toBeDefined();
@@ -96,8 +112,8 @@ describe('材料由目录现生成', () => {
 		expect(capability?.implementation.length).toBe(1);
 	});
 
-	it('任务 JSON 那段就是**这一份**声明（不是重新编的一份）', () => {
-		const declaration = declarationOf();
+	it('任务 JSON 那段就是**这一份**声明（不是重新编的一份）', async () => {
+		const declaration = (await declarationOf());
 		const text = JSON.stringify(declaration, null, 2);
 		const material = teachingMaterialOf(declaration, ROBOFRAME_SO101_CATALOG, text);
 		// 原文照进材料：声明名、那个开头的 `{`、以及它自己的 digest 都在。
@@ -115,6 +131,70 @@ describe('材料由目录现生成', () => {
 	});
 });
 
+/**
+ * 这一版加的那一块材料与那三条要求：**三处对应关系**（流程图节点 / 积木 / 代码分段
+ * 各自指着声明里的哪一步）。
+ *
+ * 判据分两面：
+ * 1. **材料跟着目录/声明走**——「每一步的执行路径」那张表是 `planPathsOf` 列出来的，
+ *    不是手写的一份清单：换一份声明，表跟着换（这一条与上面那组同一个用意）；
+ * 2. **提示词要求里含那三样**，且**说清写错的后果**（写错会怎样不是修辞：那正是校验器会做的事）。
+ */
+describe('对应关系那三样', () => {
+	it('材料里那张「每一步的执行路径」表就是声明算出来的那张（不是手写清单）', async () => {
+		const declaration = (await declarationOf());
+		const paths = planPathsOf(declaration);
+		const material = teachingMaterialOf(declaration, ROBOFRAME_SO101_CATALOG, '{}', paths);
+		// 表里每一条路径都在材料里，而且每条路径后面跟着它那一步的显示名（模型靠名字认步）。
+		for (const [path, node] of paths) expect(material).toContain(`- ${path} ← ${node.name}`);
+		// 路径表里的分支那两条（`1.then.0` / `1.else.0`）必须在——这一版要的正是它们。
+		expect(material).toContain('- 1.then.0 ←');
+		expect(material).toContain('- 1.else.0 ←');
+		expect(Object.keys(TEACHING_PLAN_STEPS).every((path) => material.includes(`- ${path} ←`))).toBe(true);
+	});
+
+	it('换一份声明，材料那张表跟着换（表由声明现生成）', async () => {
+		const declaration = (await declarationOf());
+		const other = {
+			...declaration,
+			// 只留第一步：这一份声明里没有分支，`1.then.0` 那条路径也就不该出现在材料里。
+			nodes: declaration.nodes.slice(0, 1),
+			connections: {},
+		};
+		const material = teachingMaterialOf(other, ROBOFRAME_SO101_CATALOG, '{}', planPathsOf(other));
+		expect(material).toContain('- 0 ←');
+		expect(material).not.toContain('- 1.then.0 ←');
+	});
+
+	it('不给那张表时材料照旧（少一块，不编一块）', async () => {
+		const declaration = (await declarationOf());
+		const material = teachingMaterialOf(declaration, ROBOFRAME_SO101_CATALOG, '{}');
+		expect(material).not.toContain('每一步的执行路径');
+	});
+
+	it('提示词要求模型写出那三样对应关系，并把写错的后果说清', () => {
+		// 三样各写一处：流程节点、积木、代码分段。
+		expect(TEACHING_SYSTEM_PROMPT).toContain('"planPath"');
+		expect(TEACHING_SYSTEM_PROMPT).toContain('codeSegments');
+		expect(TEACHING_SYSTEM_PROMPT).toContain('每个流程节点');
+		expect(TEACHING_SYSTEM_PROMPT).toContain('每棵顶层积木');
+		expect(TEACHING_SYSTEM_PROMPT).toContain('每一段代码');
+		// 后果不是修辞：指到不存在的步 → 整份规格被拒；顶层不写 → 照画但不点亮。
+		expect(TEACHING_SYSTEM_PROMPT).toContain('整份规格会被拒');
+		expect(TEACHING_SYSTEM_PROMPT).toContain('跟不了当前步');
+		// 「照那张表抄」这句话要有——表在材料里，模型得知道去哪儿看。
+		expect(TEACHING_SYSTEM_PROMPT).toContain('每一步的执行路径');
+	});
+
+	it('材料与要求对得上：提示词说的字段名就是契约里的字段名', async () => {
+		const declaration = (await declarationOf());
+		const material = teachingMaterialOf(declaration, ROBOFRAME_SO101_CATALOG, '{}', planPathsOf(declaration));
+		// 材料里那一块的表头与提示词里指的那一块是同一句（模型照着找得到）。
+		expect(material).toContain('【每一步的执行路径（写 planPath 时照这张表抄，一个字都别改）】');
+		expect(TEACHING_SYSTEM_PROMPT).toContain('每一步的执行路径');
+	});
+});
+
 describe('这一次通话的请求体', () => {
 	it('max_tokens 覆写成 4096（512 装不下一棵块树 + 一张图 + 一段代码）', async () => {
 		let body: Record<string, unknown> = {};
@@ -125,7 +205,7 @@ describe('这一次通话的请求体', () => {
 
 		const result = await generateTeachingSpec({
 			endpoint: '/llm',
-			declaration: declarationOf(),
+			declaration: (await declarationOf()),
 			catalog: ROBOFRAME_SO101_CATALOG,
 			deviceRef: 'so101_sim',
 			formatRef: 'skill_plan',
@@ -146,11 +226,11 @@ describe('这一次通话的请求体', () => {
 		expect(messages[1]?.content).toContain('skill_action_name = /embodied/execute_skill');
 	});
 
-	it('一次成功的返回：解析出来就是那份规格', async () => {
+	it('一次成功的返回：解析出来就是那份规格（`code` 是分段拼出来的，不是模型写的）', async () => {
 		const fetchImpl = (async () => sseResponse(sseForSpec())) as unknown as typeof fetch;
 		const result = await generateTeachingSpec({
 			endpoint: '/llm',
-			declaration: declarationOf(),
+			declaration: (await declarationOf()),
 			catalog: ROBOFRAME_SO101_CATALOG,
 			deviceRef: 'so101_sim',
 			formatRef: 'skill_plan',
@@ -160,18 +240,25 @@ describe('这一次通话的请求体', () => {
 		expect(result.ok).toBe(true);
 		if (!result.ok) return;
 		expect(result.spec.title).toBe(TEACHING_SPEC_FIXTURE.title);
-		expect(parseTeachingSpec(JSON.stringify(result.spec)).ok).toBe(true);
+		// `code` 不是模型交的那一份（模型只交分段），而是**拼出来的**。
+		expect(result.spec.code).toBe(codeOfSegments(TEACHING_SPEC_FIXTURE.codeSegments));
+		expect(result.spec.code).toBe(TEACHING_SPEC_FIXTURE.code);
+		// 模型交的那份原文再过一次解析（不带声明，只判形状）：形状这一层它也过。
+		expect(parseTeachingSpec(teachingSpecJson()).ok).toBe(true);
 	});
 
 	it('整段流完了但形状不过：判据是它，重试一次（attempts=2）', async () => {
 		let calls = 0;
-		const fetchImpl = (async () => {
+		const userMessages: string[] = [];
+		const fetchImpl = (async (_url: string, init?: RequestInit) => {
 			calls += 1;
-			return sseResponse(sseForSpec());
+			const parsedBody = JSON.parse(String(init?.body)) as { messages: { role: string; content: string }[] };
+			userMessages.push(parsedBody.messages.find((message) => message.role === 'user')?.content ?? '');
+			return sseResponse(sseForSpec(calls === 1 ? SINGLE_BLOCK_SPEC : TEACHING_SPEC_FIXTURE));
 		}) as unknown as typeof fetch;
 		const result = await generateTeachingSpec({
 			endpoint: '/llm',
-			declaration: declarationOf(),
+			declaration: (await declarationOf()),
 			catalog: ROBOFRAME_SO101_CATALOG,
 			deviceRef: 'so101_sim',
 			formatRef: 'skill_plan',
@@ -182,6 +269,15 @@ describe('这一次通话的请求体', () => {
 			wait: async () => undefined,
 		});
 		expect(result.ok).toBe(true);
-		expect(calls).toBe(1);
+		expect(calls).toBe(2);
+		/*
+		 * 第二次**带着上一次「哪儿不对」**再问一遍。
+		 *
+		 * 不带的话第二次只是把同一个坑再踩一次（实测：模型把 `body` 写到 `call` 上，
+		 * 第二次照样这么写）——判据已经把话说清了，交回去才是真的重试。
+		 */
+		expect(userMessages[0]).not.toContain('上一次那一份没通过');
+		expect(userMessages[1]).toContain('上一次那一份没通过');
+		expect(userMessages[1]).toContain('一块包全部');
 	});
 });

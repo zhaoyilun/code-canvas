@@ -13,12 +13,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import FlowView from './FlowView.vue';
 import { runTeaching, useTeaching } from '../../state/teaching';
 import { setSelectedDevice } from '../../shell/devices';
-import { loadSampleTask } from '../../state/document';
+import { useStudioDocument } from '../../state/document';
+import { clearRunningPlanPath, setRunningPlanPath } from '../../shell/device-run';
 import {
 	loadTeachingFixture,
+	NO_BLOCK_LINKAGE_SPEC,
 	sseForSpec,
 	sseResponse,
 	SINGLE_BLOCK_SPEC,
+	TEACHING_PLAN_JSON,
 	TEACHING_SPEC_FIXTURE,
 } from '../../state/__fixtures__/teaching-spec';
 
@@ -95,8 +98,8 @@ describe('规格到手之后', () => {
 		const arms = edges.map((edge) => edge.attributes('data-arm'));
 		expect(arms).toContain('then');
 		expect(arms).toContain('else');
-		// 分支的两条臂在图上写着「看到了 / 否」——模型给的 label 用它，没给的那条按臂写。
-		expect(wrapper.text()).toContain('看到了');
+		// 分支的两条臂在图上写着「没看到 / 否」——模型给的 label 用它，没给的那条按臂写。
+		expect(wrapper.text()).toContain('没看到');
 		expect(wrapper.text()).toContain('否');
 	});
 
@@ -127,7 +130,7 @@ describe('规格到手之后', () => {
 				vi.fn(async () => sseResponse(sseForSpec())),
 			);
 			setSelectedDevice('so101_sim');
-			loadSampleTask();
+			useStudioDocument().loadTaskJson(TEACHING_PLAN_JSON);
 			await runTeaching();
 
 			const total = TEACHING_SPEC_FIXTURE.flow.nodes.length + TEACHING_SPEC_FIXTURE.flow.edges.length;
@@ -151,6 +154,8 @@ describe('规格到手之后', () => {
 describe('画不出来时', () => {
 	it('照实说，并把「哪儿不对」逐条摆出来；**不画**一份推出来的旧链顶上', async () => {
 		stubMotion(true);
+		setSelectedDevice('so101_sim');
+		useStudioDocument().loadTaskJson(TEACHING_PLAN_JSON);
 		vi.stubGlobal(
 			'fetch',
 			vi.fn(async () => sseResponse(sseForSpec(SINGLE_BLOCK_SPEC))),
@@ -169,6 +174,8 @@ describe('画不出来时', () => {
 
 	it('正在画：说出「正在画…」，画布上还没有东西', () => {
 		stubMotion(true);
+		setSelectedDevice('so101_sim');
+		useStudioDocument().loadTaskJson(TEACHING_PLAN_JSON);
 		let release: (() => void) | null = null;
 		const gate = new Promise<void>((resolve) => {
 			release = resolve;
@@ -190,5 +197,70 @@ describe('画不出来时', () => {
 				expect(wrapper.find('[data-testid="flow-chart"]').exists()).toBe(false);
 				release?.();
 			});
+	});
+});
+
+/**
+ * 联动：**设备执行到哪一步，图上那个框亮起来**。
+ *
+ * 判据是 DOM 上的 `data-cc-current-step`（当前步在图上对应的那个框的 id），
+ * 不是「看起来亮了」——那正是验收时要读的那个数。三处各有一条对应关系，
+ * 这一组只管流程那一处；积木与代码各自的测试在它们自己的文件里。
+ */
+describe('执行到哪一步，图上的框跟着亮', () => {
+	beforeEach(async () => {
+		stubMotion(true);
+		await loadTeachingFixture();
+	});
+
+	afterEach(() => clearRunningPlanPath());
+
+	/** 图上此刻亮着的那个框的 id（没有就是 null）。 */
+	const litNode = (wrapper: VueWrapper): string | null =>
+		wrapper.find('[data-testid="flow-node"][data-cc-current-step]').exists()
+			? (wrapper.get('[data-testid="flow-node"][data-cc-current-step]').attributes('data-node-id') ?? null)
+			: null;
+
+	it('没在跑时一个都不亮（「没有当前步」不是「随便挑一个亮着」）', () => {
+		const wrapper = mountView();
+		expect(litNode(wrapper)).toBeNull();
+	});
+
+	it('设备换一步，亮的就是那一步那个框（逐条对着执行路径）', async () => {
+		const wrapper = mountView();
+		// 夹具那条计划：`0` 观察、`1` 分支、`1.then.0` 合爪、`1.else.0` 张爪、`2` 往前、`3` 等一秒。
+		const expected: readonly (readonly [string, string])[] = [
+			['0', 'observe'],
+			['1', 'seen'],
+			['1.then.0', 'plan'],
+			['1.else.0', 'again'],
+		];
+		for (const [path, nodeId] of expected) {
+			setRunningPlanPath(path);
+			await wrapper.vm.$nextTick();
+			expect(litNode(wrapper)).toBe(nodeId);
+		}
+	});
+
+	it('这一步图上没有对应的框：一个都不亮，而且有一句话说清为什么', async () => {
+		const wrapper = mountView();
+		// `2`（往前一点）夹具的图上没有它的框。
+		setRunningPlanPath('2');
+		await wrapper.vm.$nextTick();
+		expect(litNode(wrapper)).toBeNull();
+		expect(wrapper.get('[data-testid="flow-linkage-missing-step"]').text()).toContain('没有对应的框');
+	});
+
+	it('积木那一条对应关系缺失时：图**照常画**、流程那一条**照常亮**（三条各自独立）', async () => {
+		// 这份规格里积木一块归属都没写——流程那一栏好着，所以图上照样亮，也没有多余的话。
+		await loadTeachingFixture(NO_BLOCK_LINKAGE_SPEC);
+		const wrapper = mountView();
+		expect(wrapper.find('[data-testid="flow-chart"]').exists()).toBe(true);
+		expect(wrapper.findAll('[data-testid="flow-node"]').length).toBe(NO_BLOCK_LINKAGE_SPEC.flow.nodes.length);
+
+		setRunningPlanPath('0');
+		await wrapper.vm.$nextTick();
+		expect(litNode(wrapper)).toBe('observe');
+		expect(wrapper.find('[data-testid="flow-linkage-note"]').exists()).toBe(false);
 	});
 });

@@ -18,19 +18,43 @@
 import { computed } from 'vue';
 import { teachingBlockCount } from '@codecanvas/contracts';
 import { useSpecCanvas } from './spec-canvas';
-import { useTeaching } from '../../state/teaching';
+import { useTeaching, useTeachingLinkage } from '../../state/teaching';
 
 const teaching = useTeaching();
+const linkage = useTeachingLinkage();
 
 /** 播放队列放到第几格（值块也算一格——它插进槽里的那一刻也该是一块块落进来的一块）。 */
 const revealedCount = computed(() => teaching.revealedBlockItems.value.length);
 
-const { hostRef, failure, blockCount } = useSpecCanvas({ spec: teaching.spec, revealedCount });
+/**
+ * 每一块的归属（与画布的深度优先序同序）——画布据此挂 `data-cc-plan-node`，
+ * 并在当前步落到某几块上时切过去。
+ */
+const anchors = computed<readonly (string | undefined)[]>(() => linkage.blockAnchorsOf.value);
+/** 当前步在流程图上对应的框；空串 = 没有（画布于是哪儿都不亮、也不滚）。 */
+const currentNodeId = computed(() => linkage.currentNodeId.value ?? '');
+
+const { hostRef, failure, blockCount, currentBlockIndexes } = useSpecCanvas({
+	spec: teaching.spec,
+	revealedCount,
+	anchors,
+	currentNodeId,
+});
 
 const spec = teaching.spec;
 
 /** 规格里一共有几块（铺开的进度读数用它，与画布上真实块数对账）。 */
 const specBlockCount = computed(() => (spec.value === null ? 0 : teachingBlockCount(spec.value.blocks)));
+
+/**
+ * 有没有一行话要说（联动那条不生效时的「照实说」）。
+ *
+ * 两条分开说，因为它们是两件事：整份规格都没对应关系（`note`）、只有积木这一栏漏了
+ * （`blockNote`——流程与代码那两条照常动，而画布上永远切不动）。
+ * 「当前这一步恰好没有块」不说：那一刻画布上什么都没亮，但那不是「没接上」，
+ * 是这一步就没有块可亮（那是规格的事实，不是缺陷）。
+ */
+const linkNote = computed(() => linkage.note.value || linkage.blockNote.value);
 </script>
 
 <template>
@@ -45,14 +69,21 @@ const specBlockCount = computed(() => (spec.value === null ? 0 : teachingBlockCo
 			<p v-if="failure !== null" class="canvas-failure" data-testid="blockly-failure">{{ failure }}</p>
 		</div>
 
+		<!-- 联动那条不生效时照实说（与流程画布同一句，`state/teaching.ts` 给的）。 -->
+		<p v-if="linkNote !== ''" class="link-note" data-testid="blockly-linkage-note">{{ linkNote }}</p>
+
 		<footer class="view-footer">
 			<!--
 				两个数分开说：规格里有几块、讲到第几块，是**规格与播放队列**的事实（画布起没起来都成立）；
 				画布上真有几块是**画布**的事实，画布没建起来时一个字都不说它——
 				那时报一个「0 块」会读成「这份规格是空的」，而那是假的。
+				第三个读数是这一版加的：当前步切到了哪几块（没有就是空）。
 			-->
 			<span v-if="spec !== null" class="footer-hint" data-testid="blockly-block-count">
 				共 {{ specBlockCount }} 块（讲到了第 {{ revealedCount }} 块<template v-if="failure === null">，画布上 {{ blockCount }} 块</template>）
+			</span>
+			<span v-if="spec !== null" class="footer-hint" data-testid="blockly-current-blocks">
+				当前步切到：{{ currentBlockIndexes.length === 0 ? '没有' : currentBlockIndexes.map((index) => `第 ${index + 1} 块`).join('、') }}
 			</span>
 			<span v-else-if="teaching.status.value === 'drawing'" class="footer-hint" data-testid="blockly-drawing">
 				正在写…（已经收到 {{ teaching.streamedChars.value }} 字）
@@ -64,7 +95,6 @@ const specBlockCount = computed(() => (spec.value === null ? 0 : teachingBlockCo
 		</footer>
 	</section>
 </template>
-
 <style scoped>
 .blockly-view {
 	display: flex;
@@ -171,6 +201,26 @@ const specBlockCount = computed(() => (spec.value === null ? 0 : teachingBlockCo
 	.canvas-host :deep(g.cc-block-enter) {
 		animation: none;
 	}
+}
+
+/*
+ * 设备跑到的那一步落在哪几块上：**与别处同一条强调色**（`--cc-highlight` = `--cc-accent`）。
+ *
+ * 为什么是 `filter: drop-shadow` 而不是描边或位移：块的位置是 Blockly 用
+ * `transform="translate(x, y)"` 写在块根元素上的，CSS 的 `transform` 会整个盖掉它
+ * （块会跳到画布原点），而 `filter` 只作用于画出来的像素，不吃布局、不碰命中区。
+ * 同一块上也不会同时出现两处高亮：这个属性只有当前步那几块有。
+ */
+.canvas-host :deep(g[data-cc-current-block]) {
+	filter: drop-shadow(0 0 5px var(--cc-highlight));
+}
+
+.link-note {
+	margin: 0;
+	font-family: var(--cc-font-mono);
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-dim);
+	overflow-wrap: anywhere;
 }
 
 .canvas-failure {

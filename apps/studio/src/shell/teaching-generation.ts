@@ -28,6 +28,7 @@ import {
 	type JsonObject,
 	type TeachingSpec,
 	type WorkflowDeclaration,
+	type WorkflowNode,
 } from '@codecanvas/contracts';
 import { GENERATION_ATTEMPTS, RETRY_DELAY_MS, type GenerationMessage } from './llm-json';
 import { generateJsonStream } from './llm-stream';
@@ -64,6 +65,19 @@ export interface TeachingGenerationOptions {
 	 * 交给材料当「这次的任务 JSON」，而不是在这里重新序列化一遍声明。
 	 */
 	readonly declarationText: string;
+	/**
+	 * 每一步的执行路径 → 那一步（`planPathsOf` 的结果）。
+	 *
+	 * 两处要用它，问的是同一件事：材料里那张「照这张表抄 planPath」的表，
+	 * 以及解析时的对账（「这条路径指得到声明里的一步吗」）。
+	 * 不给的话材料里那一块说「列不出来」，**解析也只判形状**——生成那条路一定要给。
+	 */
+	readonly planPaths?: ReadonlyMap<string, WorkflowNode>;
+	/**
+	 * 执行路径 → 那一步（`nodeAtPlanPath`）。对账那一层用它，与设备报的路径同一份口径。
+	 * 与 `planPaths` 一起给：一张表列出所有路径，一个函数判一条路径对不对。
+	 */
+	readonly nodeAtPlanPath?: (declaration: WorkflowDeclaration, path: string) => WorkflowNode | null;
 	readonly model?: string;
 	readonly attempts?: number;
 	/** 每收到一段就报**累积到此刻的全文**（界面拿它写「正在写… N 字」）。 */
@@ -100,7 +114,7 @@ const defaultWait = (ms: number): Promise<void> =>
  * 要一份教学规格。最多 `attempts` 次（默认 2，与第一条路一致）。
  *
  * 重试的口径与非流式那条路一样：**整段流完了、判据不过 → 再流一次**。
- * 判据就是 `parseTeachingSpec`（形状），半成品不参与判断。
+ * 判据就是 `parseTeachingSpec`（形状，加上给了声明时的三段对应关系对账），半成品不参与判断。
  */
 export async function generateTeachingSpec(
 	options: TeachingGenerationOptions,
@@ -112,9 +126,27 @@ export async function generateTeachingSpec(
 		// 覆写共享请求体里那个 512（见文件头第 1 条）。
 		max_tokens: TEACHING_MAX_TOKENS,
 	};
-	const messages = teachingMessages(
-		teachingMaterialOf(options.declaration, options.catalog, options.declarationText),
-	);
+	const material = teachingMaterialOf(options.declaration, options.catalog, options.declarationText, options.planPaths);
+	/**
+	 * 上一次为什么没过（**逐条**）。第二次尝试把它附在材料后面。
+	 *
+	 * 为什么要有这一句：重试发的是**同一段材料**，模型只会在同一个坑里再踩一次
+	 * （实测：它把 `body` 写到了 `call` 块上，第二次照样这么写）。判据已经把「哪儿不对」
+	 * 逐条说出来了，把它交回去才是真的重试，不是碰运气。
+	 */
+	let retryNote: string | null = null;
+	const messagesForAttempt = (): readonly GenerationMessage[] =>
+		teachingMessages(
+			retryNote === null ? material : `${material}\n\n【上一次那一份没通过，这些地方要改】\n${retryNote}`,
+		);
+	/*
+	 * 解析时的对账上下文：只有两样都给齐了才带上——**半份上下文比没有更坏**
+	 * （表列了却没判据，或判据在而表没列，两种都会让「指不到步」那条判据时灵时不灵）。
+	 */
+	const context =
+		options.planPaths === undefined || options.nodeAtPlanPath === undefined
+			? undefined
+			: { declaration: options.declaration, nodeAtPlanPath: options.nodeAtPlanPath };
 	const attempts = Math.max(1, options.attempts ?? GENERATION_ATTEMPTS);
 	const wait = options.wait ?? defaultWait;
 
@@ -127,7 +159,7 @@ export async function generateTeachingSpec(
 
 	for (let attempt = 1; attempt <= attempts; attempt += 1) {
 		const result = await generateJsonStream({
-			messages,
+			messages: messagesForAttempt(),
 			endpoint: options.endpoint,
 			extras,
 			...(options.model === undefined ? {} : { model: options.model }),
@@ -139,9 +171,11 @@ export async function generateTeachingSpec(
 
 		if (result.ok) {
 			lastText = result.text;
-			const parsed = parseTeachingSpec(result.text);
+			const parsed = parseTeachingSpec(result.text, context);
 			if (parsed.ok) return { ok: true, spec: parsed.spec, text: result.text, attempts: attempt };
 			failure = { kind: 'rejected', message: parsed.message, issues: parsed.issues };
+			// 下一次带着「哪儿不对」再问一遍（形状不过时 issues 就是那些字；对账不过时同样逐条）。
+			retryNote = parsed.issues.join('\n');
 		} else if (result.kind === 'aborted') {
 			return {
 				ok: false,

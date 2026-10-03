@@ -13,13 +13,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { computeWorkflowDigest } from '@codecanvas/contracts';
 import { useStudioDocument } from '../../state/document';
 import { codeLinesOf, runTeaching, useTeaching } from '../../state/teaching';
+import { clearRunningPlanPath, setRunningPlanPath } from '../../shell/device-run';
 import CodePanel from './CodePanel.vue';
 import {
 	loadTeachingFixture,
+	NO_BLOCK_LINKAGE_SPEC,
 	sseForSpec,
 	sseResponse,
 	SINGLE_BLOCK_SPEC,
 	TEACHING_SPEC_FIXTURE,
+	TEACHING_SPEC_STEP_OF_SEGMENT,
 } from '../../state/__fixtures__/teaching-spec';
 
 const teaching = useTeaching();
@@ -127,5 +130,74 @@ describe('画不出来时', () => {
 		expect(wrapper.get('[data-testid="code-panel-failed"]').text()).toContain('模型没写出来');
 		expect(wrapper.find('[data-testid="code-panel-lines"]').exists()).toBe(false);
 		expect(teaching.spec.value).toBeNull();
+	});
+});
+
+/**
+ * 联动：**设备执行到哪一步，代码切到那几行**。
+ *
+ * 判据是 DOM 上的 `data-cc-current-line`（当前那一段的行号），不是「看起来亮了」。
+ * 哪一段对应哪一步由夹具那张表给（`TEACHING_SPEC_STEP_OF_SEGMENT`），而那张表在
+ * `state/teaching.test.ts` 里与真声明算出来的执行路径核过一次——这里直接用它。
+ */
+describe('执行到哪一步，代码切到那几行', () => {
+	beforeEach(async () => {
+		stubReducedMotion();
+		await loadTeachingFixture();
+	});
+
+	afterEach(() => clearRunningPlanPath());
+
+	/** 此刻亮着的那几行的行号（0 基；空表 = 一行都没亮）。 */
+	const litLines = (wrapper: VueWrapper): readonly number[] =>
+		wrapper
+			.findAll('[data-testid="code-line"][data-cc-current-line]')
+			.map((line) => Number(line.attributes('data-cc-line')));
+
+	/** 那一段的行范围（0 基、闭区间）——「切到那几行」这句话的**内容**。 */
+	const rangeOf = (wrapper: VueWrapper, nodeId: string): { readonly from: number; readonly to: number } => {
+		const lines = wrapper
+			.findAll('[data-testid="code-line"]')
+			.filter((line) => line.attributes('data-cc-plan-node') === nodeId)
+			.map((line) => Number(line.attributes('data-cc-line')));
+		return { from: lines[0] ?? -1, to: lines.at(-1) ?? -1 };
+	};
+
+	it('没在跑时一行都不亮', () => {
+		expect(litLines(mountPanel())).toEqual([]);
+	});
+
+	it('设备换一步，亮的就是那一段的每一行（一段连续的行）', async () => {
+		const wrapper = mountPanel();
+		for (const [nodeId, path] of Object.entries(TEACHING_SPEC_STEP_OF_SEGMENT)) {
+			setRunningPlanPath(path);
+			await wrapper.vm.$nextTick();
+			const { from, to } = rangeOf(wrapper, nodeId);
+			const expected = Array.from({ length: to - from + 1 }, (_, index) => from + index);
+			expect(expected.length).toBeGreaterThan(0);
+			expect(litLines(wrapper)).toEqual(expected);
+		}
+	});
+
+	it('规格里积木没有归属时：代码照常切（三条对应关系各自独立），也没有多余的话', async () => {
+		await loadTeachingFixture(NO_BLOCK_LINKAGE_SPEC);
+		const wrapper = mountPanel();
+		expect(wrapper.findAll('[data-testid="code-line"]').length).toBe(codeLinesOf(NO_BLOCK_LINKAGE_SPEC.code).length);
+
+		// 代码那一条对应关系好着：当前步照样切到那几行，一个字都不多说。
+		setRunningPlanPath('0');
+		await wrapper.vm.$nextTick();
+		expect(litLines(wrapper).length).toBeGreaterThan(0);
+		expect(wrapper.find('[data-testid="code-panel-linkage-note"]').exists()).toBe(false);
+	});
+
+	it('这一步在这段代码里没有段：一行都不亮，也不猜一段顶上', async () => {
+		const wrapper = mountPanel();
+		// `2`（往前一点）与 `3`（等一秒）夹具的代码里都没写。
+		for (const path of ['2', '3']) {
+			setRunningPlanPath(path);
+			await wrapper.vm.$nextTick();
+			expect(litLines(wrapper)).toEqual([]);
+		}
 	});
 });

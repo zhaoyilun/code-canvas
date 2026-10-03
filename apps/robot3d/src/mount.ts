@@ -22,7 +22,7 @@ import { runPlan, type PlanRunner, type PlanStepGate, type PlanStepReport } from
 import { SerialQueue } from './roboframe/queue';
 import { createKit } from './scene/kit';
 import { So101Rig } from './scene/so101';
-import { createStage, DEFAULT_TARGET_BLOCK, disposeStageResources } from './scene/stage';
+import { createStage, disposeStageResources } from './scene/stage';
 
 /**
  * 门口把执行侧的类型一起转出去：宿主（studio 的面板）要写 `onStep` 的回调、
@@ -31,25 +31,11 @@ import { createStage, DEFAULT_TARGET_BLOCK, disposeStageResources } from './scen
  */
 export type { RunOutcome, StepEvent, StepState } from './roboframe/executor';
 export type { PlanRunOutcome, PlanStepReport, BranchArm, PlanStepGate } from './roboframe/plan';
-/** 布景的缺省值：宿主（studio 面板的输入框与「复位」）要与场景同源，不能各写一份数。 */
-export { DEFAULT_TARGET_BLOCK } from './scene/stage';
-
-/** 待抓方块的位置（方块中心，单位米，坐标系与目录里的 `workspace_limits` 同源）。 */
-export interface TargetBlockPosition {
-	readonly x: number;
-	readonly y: number;
-	readonly z: number;
-}
 
 /** 舞台的最小动作面（真身是 `scene/stage.ts` 的 `createStage`；测试注入假的，别让单测去跑真 WebGL） */
 export interface StageHandle {
 	render(dt: number): void;
 	resize(): void;
-	/**
-	 * 把待抓的方块摆到给定位置（方块中心，单位米，基座系）。
-	 * 可选的：假舞台没有方块可摆——mount 那时只记账，不假装摆过了。
-	 */
-	setTargetBlock?(position: TargetBlockPosition): void;
 	/** 释放渲染器与 GPU 资源。可选的：假舞台没有东西要放。 */
 	dispose?(): void;
 }
@@ -124,20 +110,6 @@ export interface VirtualDevice {
 	onStepGate(listener: (waiting: boolean) => void): () => void;
 	/** 回到初始姿态、清空步骤账本。 */
 	reset(): void;
-	/**
-	 * 把待抓的方块摆到 `position`（方块中心，单位米，坐标系与目录里的 `workspace_limits` 同源）。
-	 *
-	 * 这是**本机布景**，不是任务参数：真机上目标物是相机看见的（`pick_object` 的
-	 * `target_name` 是「红色方块」这种视觉查询），所以坐标不进声明、不进任务 JSON，
-	 * 只是「本机这一场里方块摆在哪」。
-	 *
-	 * 三个分量都得是**有限数**：`NaN` / `±Infinity` 会被拒（`RangeError`）——
-	 * three 收下这种值之后整个场景的包围盒变成 `Infinity`，方块自己也不再画得出来，
-	 * 而画面上没有任何东西说得出「是刚才那个输入把它弄坏的」。
-	 */
-	setTargetBlock(position: TargetBlockPosition): void;
-	/** 方块当前摆在哪（缺省就是 `DEFAULT_TARGET_BLOCK`）——界面的输入框显示的就是它。 */
-	readonly targetBlock: TargetBlockPosition;
 	/** 每走一步回调一次（state 为 'done'/'failed' 时才推，别把 'running' 也推）。 */
 	onStep(listener: (event: StepEvent) => void): () => void;
 	/**
@@ -214,12 +186,6 @@ export function mountVirtualDevice(host: HTMLElement, options: VirtualDeviceMoun
 	const kit = createKit();
 	const rig = new So101Rig(kit);
 	const stage = buildStage(canvas, rig, kit);
-
-	// 本机布景记在这一层（真舞台由 `createStage` 自己按同一个缺省摆好）；
-	// 舞台没带 `setTargetBlock`（测试里的假舞台）时，账照记，只是没有 mesh 可挪。
-	// 冻住：`targetBlock` 这个读出口给的是这一份，外面拿到手改一下就把设备里的账改了——
-	// 那正是「读到的值」与「真摆在哪」不一致的来源，冻结让它当场可见，而不是悄悄错开。
-	let targetBlock: TargetBlockPosition = Object.freeze({ ...DEFAULT_TARGET_BLOCK });
 
 	/**
 	 * 舞台没带 `dispose()` 时的兜底（测试里的假舞台就是这种）。
@@ -339,19 +305,6 @@ export function mountVirtualDevice(host: HTMLElement, options: VirtualDeviceMoun
 		reset() {
 			executor.reset();
 			stepEvents.length = 0;
-		},
-		setTargetBlock(position) {
-			assertLive();
-			// 判据只有这一个入口，所以留在这里（真舞台与假舞台同一道闸）：非有限数一律拒，
-			// 免得把一场景变成 NaN 之后，界面上没有任何一句说得清是哪个输入干的
-			for (const [axis, value] of Object.entries(position)) {
-				if (!Number.isFinite(value)) throw new RangeError(`方块位置的 ${axis} 不是有限数：${String(value)}`);
-			}
-			targetBlock = Object.freeze({ x: position.x, y: position.y, z: position.z });
-			stage.setTargetBlock?.(targetBlock);
-		},
-		get targetBlock() {
-			return targetBlock;
 		},
 		onStep(listener) {
 			stepListeners.add(listener);

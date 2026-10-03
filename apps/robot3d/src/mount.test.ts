@@ -3,8 +3,7 @@
  * `mountVirtualDevice` 的验收：挂载 / 跑一步 / 卸载这三件事的契约。
  *
  * **测得到什么**：canvas 真的进了 host、`onStep` 只推有结论的那两种状态、失败即停、
- * `reset()` 清账本、`dispose()` 之后 DOM 里不留 canvas、连续挂卸 10 次不报错、尺寸读实测值、
- * **本机布景的位置真的传到舞台上**（`setTargetBlock`）。
+ * `reset()` 清账本、`dispose()` 之后 DOM 里不留 canvas、连续挂卸 10 次不报错、尺寸读实测值。
  * 执行器的动作（原语 → 关节角）与机械臂的动画在这个仓库里另有测试（`roboframe/**`、`scene/so101.test.ts`），
  * 这里不重复。
  *
@@ -24,7 +23,7 @@ import * as THREE from 'three';
 import { describe, expect, it, vi } from 'vitest';
 import { ROBOFRAME_SO101_CATALOG } from '@codecanvas/capabilities';
 import type { CapabilityCatalog, SkillPlan } from '@codecanvas/contracts';
-import { DEFAULT_TARGET_BLOCK, mountVirtualDevice, type FrameScheduler, type StageHandle, type StepEvent } from './mount';
+import { mountVirtualDevice, type FrameScheduler, type StageHandle, type StepEvent } from './mount';
 import { disposeStageResources } from './scene/stage';
 
 /** 测试要用的小目录：两个原语、三条能力。别让单测去跑整份 SO-101 目录（几十步动画太慢）。 */
@@ -84,8 +83,6 @@ function fakeStage(): StageHandle & {
 	renders: number;
 	disposals: number;
 	attach(rig: { update(dt: number): void }): void;
-	/** 舞台收到的每一次方块位置（真舞台拿它去挪那块 mesh） */
-	targetBlocks: { x: number; y: number; z: number }[];
 } {
 	let rig: { update(dt: number): void } | null = null;
 	const rigTree = new THREE.Group();
@@ -93,7 +90,6 @@ function fakeStage(): StageHandle & {
 		resizes: 0,
 		renders: 0,
 		disposals: 0,
-		targetBlocks: [] as { x: number; y: number; z: number }[],
 		attach(target: { update(dt: number): void }) {
 			rig = target;
 			if (target instanceof THREE.Object3D) rigTree.add(target);
@@ -104,11 +100,6 @@ function fakeStage(): StageHandle & {
 		render(dt: number) {
 			stage.renders += 1;
 			rig?.update(dt);
-		},
-		setTargetBlock(position: { x: number; y: number; z: number }) {
-			// 与真舞台同一件事：把三个数收下（真身是 `placeTargetBlock` 写那块 mesh 的 position）。
-			// 存一份**拷贝**：真舞台写的是自己的 Vector3，不是调用方那个对象的引用
-			stage.targetBlocks.push({ ...position });
 		},
 		dispose() {
 			stage.disposals += 1;
@@ -425,84 +416,6 @@ describe('mountVirtualDevice · 跑一步', () => {
 
 		device.reset();
 		expect(device.stepEvents).toHaveLength(0);
-
-		device.dispose();
-	});
-});
-
-describe('mountVirtualDevice · 本机布景（待抓的方块摆在哪）', () => {
-	it('改名入口真的把位置传到舞台：三个数一个不少，而且是照收下的那份走', () => {
-		const { device, stage } = mountOn(hostOf());
-
-		device.setTargetBlock({ x: -0.05, y: 0.015, z: 0.22 });
-
-		expect(stage.targetBlocks).toEqual([{ x: -0.05, y: 0.015, z: 0.22 }]);
-		// 账也记下了（界面读它显示当前值）
-		expect(device.targetBlock).toEqual({ x: -0.05, y: 0.015, z: 0.22 });
-
-		device.dispose();
-	});
-
-	it('挂载时方块就是缺省那一处（0.12, 0.015, 0.16）——不摆一次也已经是它', () => {
-		const { device, stage } = mountOn(hostOf());
-
-		expect(device.targetBlock).toEqual({ x: 0.12, y: 0.015, z: 0.16 });
-		expect(device.targetBlock).toEqual(DEFAULT_TARGET_BLOCK);
-		// 舞台不需要在挂载时被摆一次：真舞台建出来就在缺省处（createStage 里那句 setTargetBlock）
-		expect(stage.targetBlocks).toEqual([]);
-
-		device.dispose();
-	});
-
-	it('摆到远处也照摆（本机布景没有范围限制），挪两次就是两次', () => {
-		const { device, stage } = mountOn(hostOf());
-
-		device.setTargetBlock({ x: 0.4, y: 0.3, z: -0.2 });
-		device.setTargetBlock({ x: 0.12, y: 0.015, z: 0.16 });
-
-		expect(stage.targetBlocks).toEqual([
-			{ x: 0.4, y: 0.3, z: -0.2 },
-			{ x: 0.12, y: 0.015, z: 0.16 },
-		]);
-		expect(device.targetBlock).toEqual({ x: 0.12, y: 0.015, z: 0.16 });
-
-		device.dispose();
-	});
-
-	it('非有限数一律拒，且不动上一次的位置（NaN 进了场景，画面上没有一句话说得清是谁干的）', () => {
-		const { device, stage } = mountOn(hostOf());
-		device.setTargetBlock({ x: 0.2, y: 0.015, z: 0.16 });
-
-		expect(() => device.setTargetBlock({ x: Number.NaN, y: 0.015, z: 0.16 })).toThrow(RangeError);
-		expect(() => device.setTargetBlock({ x: 0.2, y: Number.POSITIVE_INFINITY, z: 0.16 })).toThrow(/y/);
-
-		// 拒了就是拒了：舞台一次都没收到坏值，账本还是上一个好值
-		expect(stage.targetBlocks).toEqual([{ x: 0.2, y: 0.015, z: 0.16 }]);
-		expect(device.targetBlock).toEqual({ x: 0.2, y: 0.015, z: 0.16 });
-
-		device.dispose();
-	});
-
-	it('卸载之后再摆：如实拒绝，不假装摆过了', () => {
-		const { device, stage } = mountOn(hostOf());
-		device.dispose();
-
-		expect(() => device.setTargetBlock({ x: 0.1, y: 0.015, z: 0.1 })).toThrow(/卸载/);
-		expect(stage.targetBlocks).toEqual([]);
-	});
-
-	it('读到的那份账改不动：外面拿到手写它，设备里的值不跟着变（读到≠能改）', () => {
-		const { device } = mountOn(hostOf());
-
-		device.setTargetBlock({ x: 0.1, y: 0.02, z: 0.3 });
-		// 运行时的一次乱写（类型上这份账是只读的，所以这里绕一道）：冻结让它在严格模式下当场抛，
-		// 而不是把设备里的账悄悄改掉——「读到的值」与「真摆在哪」从此不会分家
-		const read = device.targetBlock as { x: number; y: number; z: number };
-
-		expect(() => {
-			read.x = 9;
-		}).toThrow(TypeError);
-		expect(device.targetBlock).toEqual({ x: 0.1, y: 0.02, z: 0.3 });
 
 		device.dispose();
 	});

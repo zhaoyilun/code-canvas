@@ -27,11 +27,25 @@ const props = defineProps<{
 	readonly graph: FlowGraph;
 	/** 已经画出来的那些格子（键与 `flowDrawOrder` 同一套）。 */
 	readonly revealed: ReadonlySet<string>;
+	/**
+	 * 设备此刻走到的那一步，对应图上哪个节点（`state/teaching.ts` 算好的）。
+	 * 空串 = 没有当前步（没在跑、也没有选中），或者这一步在这张图上没有对应的框
+	 * ——两种都是「没有」，所以都不亮，**不拿别的框顶上**。
+	 */
+	readonly currentNodeId: string;
 }>();
 
 const layout = computed(() => layoutFlowGraph(props.graph));
 
 const isRevealed = (key: string): boolean => props.revealed.has(key);
+
+/**
+ * 这个节点是不是**设备此刻走到的那一步**。
+ *
+ * 判据只有一条：`currentNodeId` 就是它。空串（没在跑、或者这一步图上没有对应的框）
+ * 谁都不匹配——「没有」不许靠「随便挑一个亮着」糊过去。
+ */
+const isCurrent = (id: string): boolean => props.currentNodeId !== '' && props.currentNodeId === id;
 
 /** 节点里那两行字的截断宽度（框宽减去左右内边距；估宽口径见 `layout.ts`）。 */
 const titleOf = (title: string, width: number): string => fitText(title, 13, width - 32);
@@ -93,10 +107,11 @@ const detailOf = (detail: string, width: number): string => fitText(detail, 11, 
 				v-show="isRevealed(flowNodeKey(item.id))"
 				:key="item.id"
 				class="flow-node"
-				:class="`flow-node-${item.node.kind}`"
+				:class="[`flow-node-${item.node.kind}`, { 'flow-node-current': isCurrent(item.id) }]"
 				data-testid="flow-node"
 				:data-node-id="item.id"
 				:data-kind="item.node.kind"
+				:data-cc-current-step="isCurrent(item.id) ? item.id : undefined"
 			>
 				<rect class="flow-node-box" :x="item.x" :y="item.y" :width="item.width" :height="item.height" rx="8" />
 				<text class="flow-node-title" :x="item.x + 16" :y="item.y + 22">
@@ -207,9 +222,48 @@ const detailOf = (detail: string, width: number): string => fitText(detail, 11, 
 	font-size: 11px;
 }
 
+/*
+ * 设备跑到的那一步：**与别处同一条强调色**（`--cc-highlight` = `--cc-accent`，
+ * 描边粗细也是同一个变量），不是这里另配的一套色。
+ *
+ * 为什么动 `stroke` / `stroke-width` / `filter`：这是 SVG，节点本来就会动
+ * `transform`（入场那一段），而 `filter: drop-shadow` 不吃布局、不碰坐标——
+ * 框的位置与命中区一个像素都不挪。加粗 1.2 → 2 用的是与别处同一个 `--cc-highlight-border-width`。
+ */
+.flow-node-current .flow-node-box {
+	stroke: var(--cc-highlight);
+	stroke-width: var(--cc-highlight-border-width);
+	filter: drop-shadow(0 0 6px var(--cc-accent-glow));
+}
+
+.flow-node-current .flow-node-title {
+	fill: var(--cc-highlight);
+}
+
+/* 当前步的呼吸：只动那圈辉光，节点的位置与大小一动不动（截图里也读得出是哪一帧）。 */
+@media (prefers-reduced-motion: no-preference) {
+	.flow-node-current .flow-node-box {
+		animation: cc-flow-current 1.2s ease-in-out infinite alternate;
+	}
+}
+
+@keyframes cc-flow-current {
+	from {
+		filter: drop-shadow(0 0 3px var(--cc-accent-glow));
+	}
+
+	to {
+		filter: drop-shadow(0 0 9px var(--cc-accent-glow));
+	}
+}
+
 @media (prefers-reduced-motion: reduce) {
 	.flow-node,
 	.flow-edge-line {
+		animation: none;
+	}
+
+	.flow-node-current .flow-node-box {
 		animation: none;
 	}
 }

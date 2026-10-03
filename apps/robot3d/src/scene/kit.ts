@@ -23,7 +23,6 @@ export function createKit() {
 		chip: std({ color: 0x1a1d21, metalness: 0.3, roughness: 0.5 }),
 		gold: std({ color: 0xd8b23a, metalness: 1.0, roughness: 0.3 }),
 		wood: std({ color: 0x3a3632, metalness: 0.05, roughness: 0.85 }),
-		block: std({ color: 0x2ee6a8, metalness: 0.2, roughness: 0.35 }),
 	};
 
 	function box(w: number, h: number, d: number, r: number, material: THREE.Material, segments = 3) {

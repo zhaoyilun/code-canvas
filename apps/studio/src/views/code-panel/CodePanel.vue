@@ -13,17 +13,64 @@
  * 代码铺到第 4 行，说的是同一件事。行号是**这一份代码自己的行号**（只影响显示），
  * 不参与任何判据。
  *
- * 与声明的关系：没有。这栏一个字都不写回 `state/document.ts`，也不做「这一行对应哪一步」
- * 那种对应关系——那需要一份模型没有给、我们也不该编的映射。
+ * 这一版多接了一条线：**设备执行到哪一步 → 切到那几行**。判据是每一段代码的归属
+ * （`codeSegments[].planPath`，指向流程节点）与当前步在流程图上对应的那个框是否同一个 id；
+ * 行范围是**推出来的**（`segmentLineRanges`），模型只写「这一段属于哪一步」。
+ * 归属指不到图上任何一个框时这一段永远不亮——**不猜一个顶上**。
+ *
+ * 与声明的关系：没有。这栏一个字都不写回 `state/document.ts`。
  */
-import { computed } from 'vue';
-import { codeLinesOf, useTeaching } from '../../state/teaching';
+import { computed, nextTick, ref, watch } from 'vue';
+import { codeLinesOf, useTeaching, useTeachingLinkage } from '../../state/teaching';
 
 const teaching = useTeaching();
+const linkage = useTeachingLinkage();
 
 const spec = teaching.spec;
 const revealed = teaching.revealedCodeLines;
 const totalLines = computed(() => (spec.value === null ? 0 : codeLinesOf(spec.value.code).length));
+
+/** 每一段的行范围（推出来的）；规格没到就是空表。 */
+const ranges = computed(() => linkage.codeRangesOf.value);
+
+/**
+ * 当前步落在哪几行上（0 基，闭区间）。空表 = 没有当前步，或者这一步在这段代码里没有段。
+ *
+ * 判据与另外两栏同一条：段上那个流程节点 id，等于当前步在流程图上对应的那个框。
+ */
+const activeRange = computed<{ readonly from: number; readonly to: number } | null>(() => {
+	const node = linkage.currentNodeId.value;
+	if (node === null) return null;
+	const hit = ranges.value.find((range) => range.planPath === node);
+	return hit === undefined ? null : { from: hit.from, to: hit.to };
+});
+
+const isActive = (index: number): boolean => {
+	const range = activeRange.value;
+	return range !== null && index >= range.from && index <= range.to;
+};
+
+/** 每行所属的那一段（`undefined` = 那一段的归属指不到图上任何一个框）。 */
+const anchorOfLine = (index: number): string | undefined =>
+	ranges.value.find((range) => index >= range.from && index <= range.to)?.planPath;
+
+/**
+ * 切过去之后**滚到那几行**。
+ *
+ * 为什么用 `scrollIntoView` 而不是自己算偏移：行高由 CSS（`line-height` + 换行）定，
+ * 自己算就是把一份排版参数抄进脚本里，改一次样式就错一次。`block: 'nearest'` 是刻意的
+ * ——已经看得见的那几行不动（铺开过程中每来一格都滚一次会把画面抖散）。
+ */
+const linesRef = ref<HTMLElement | null>(null);
+watch(activeRange, async (range) => {
+	if (range === null) return;
+	await nextTick();
+	const first = linesRef.value?.querySelector(`[data-cc-line="${String(range.from)}"]`);
+	if (first instanceof Element) first.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+});
+
+/** 有没有一行话要说（联动那条不生效时照实说，与另外两栏同一句）。 */
+const linkNote = computed(() => linkage.note.value);
 </script>
 
 <template>
@@ -33,17 +80,26 @@ const totalLines = computed(() => (spec.value === null ? 0 : codeLinesOf(spec.va
 			<span v-if="spec !== null" class="cp-name" data-testid="code-panel-title">{{ spec.title }}</span>
 		</header>
 
-		<ol v-if="revealed.length > 0" class="cp-lines" data-testid="code-panel-lines">
+		<ol v-if="revealed.length > 0" ref="linesRef" class="cp-lines" data-testid="code-panel-lines">
 			<li
 				v-for="(line, index) in revealed"
 				:key="`${String(index)}:${line}`"
 				class="cp-line"
+				:class="{ 'cp-line-current': isActive(index) }"
 				data-testid="code-line"
+				:data-cc-line="index"
+				:data-cc-plan-node="anchorOfLine(index)"
+				:data-cc-current-line="isActive(index) ? index : undefined"
 			>
 				<span class="cp-no">{{ index + 1 }}</span>
 				<span class="cp-text">{{ line === '' ? ' ' : line }}</span>
 			</li>
 		</ol>
+
+		<!-- 联动那条不生效时照实说（与另外两栏同一句，`state/teaching.ts` 给的）。 -->
+		<p v-if="revealed.length > 0 && linkNote !== ''" class="cp-state cp-link-note" data-testid="code-panel-linkage-note">
+			{{ linkNote }}
+		</p>
 
 		<p
 			v-else-if="teaching.status.value === 'failed' && teaching.failure.value !== null"
@@ -129,6 +185,25 @@ const totalLines = computed(() => (spec.value === null ? 0 : codeLinesOf(spec.va
 	to {
 		opacity: 1;
 	}
+}
+
+/*
+ * 设备跑到的那一步那几行：**与另外两栏同一条强调色**（`--cc-highlight` = `--cc-accent`）。
+ * 左侧那条竖线与「选中」用的是同一个色，所以同一行上不会出现两种强调色打架。
+ */
+.cp-line-current {
+	background: var(--cc-accent-glow);
+	box-shadow: inset var(--cc-highlight-border-width) 0 0 var(--cc-highlight);
+}
+
+.cp-line-current .cp-no {
+	color: var(--cc-highlight);
+}
+
+.cp-link-note {
+	margin: 0;
+	font-size: var(--cc-fs-xs);
+	color: var(--cc-text-dim);
 }
 
 .cp-no {
