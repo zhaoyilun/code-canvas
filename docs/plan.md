@@ -15,9 +15,9 @@
 | 品牌条 + 固定分区（**无 tab**） | `studio/shell` | **做**（切换机制已拆除） |
 | 任务 JSON 输入带 + 转译链指示 | `studio/shell` | **做**（本阶段唯一真实输入口） |
 | 右栏上方：虚拟设备 | `studio/views/right` | **做**（常驻；如实说明设备层未接入） |
-| 左栏 Blockly 画布 | `studio/views/blockly` + `packages/blockly-toolkit` | **做**（唯一可写） |
+| 左栏 Blockly 画布 | `studio/views/blockly` + `packages/blockly-toolkit` | **做**（本期不再写回声明，见 spec §4.4） |
 | 中栏 Workflow 画布 | `studio/views/flow` | **做** |
-| 两栏之间的虚线 | 生成期映射表 + `studio/views/mapping` | **做** |
+| 两栏之间的虚线 | 生成期映射表 + `studio/views/mapping` | **关掉了**（三张图不再从声明派生，见 spec §4.4；`views/mapping` 只留几何函数） |
 | 右栏 CODE 面板 | `studio/views/code-panel` | **做**（编译产物） |
 | 右栏 EXECUTION TRACE + 步骤列表 | `studio/views/right` | **做**（虚拟设备执行时逐步刷） |
 | 右栏 3D 机器人 | `apps/robot3d` + `views/right` | **做**（挂真 3D 执行器，见 M4） |
