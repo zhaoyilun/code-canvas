@@ -42,6 +42,7 @@ import {
 import CodePanel from './code-panel/CodePanel.vue';
 import FlowView from './flow/FlowView.vue';
 import { loadTeachingFixture } from '../state/__fixtures__/teaching-spec';
+import { PHASE_DELAY_MS } from '../shell/step-playback';
 
 vi.mock('@codecanvas/capabilities', async (importOriginal) => {
 	const actual = await importOriginal<typeof import('@codecanvas/capabilities')>();
@@ -429,8 +430,26 @@ describe('换模块时 · 真组件上确实挂着', () => {
 		const lines = wrapper.findAll('li.cp-line');
 		expect(lines.length).toBeGreaterThan(0);
 		for (const line of lines) {
-			expect(window.getComputedStyle(line.element).animation).toBe('cc-line-in 220ms ease-out 1 both');
+			const animation = window.getComputedStyle(line.element).animation;
+			// 名字与时长是这条动画的判据；**延迟另算**（它是三张画布错峰那一档，见下面一条）。
+			expect(animation).toContain('cc-line-in 220ms ease-out 1');
+			expect(animation).toContain('both');
 		}
+	});
+
+	/*
+	 * 错峰：代码面板是最后一档——它的入场延迟必须与铺开队列读**同一个常量**
+	 * （`PHASE_DELAY_MS.code`）。两处各写一个数早晚对不上，那时会"行先落、内容还在冒"。
+	 */
+	it('代码行的入场延迟就是错峰那一档（代码最后落）', () => {
+		injected.push(installCss(styleFor(SITES[1] as MotionSite)));
+		const wrapper = mount(CodePanel, { attachTo: document.body });
+		wrappers.push(wrapper);
+
+		const line = wrapper.findAll('li.cp-line')[0];
+		expect(line).toBeDefined();
+		expect(window.getComputedStyle(line!.element).animationDelay).toBe(`${String(PHASE_DELAY_MS.code)}ms`);
+		expect(PHASE_DELAY_MS.code).toBeGreaterThan(PHASE_DELAY_MS.flow);
 	});
 });
 

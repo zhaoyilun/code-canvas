@@ -69,6 +69,17 @@ export interface PlaybackTiming {
 export const DEFAULT_PLAYBACK_TIMING: PlaybackTiming = { beatMs: 130, budgetMs: 1600, minBeatMs: 40 };
 
 /**
+ * 三张画布的**错峰开场**（毫秒）：流程图 0、积木 200、代码 400。
+ *
+ * 为什么是这三个数：一拍 130ms，而"错峰"要看得出来、又不能让人等——1.5 拍与 3 拍
+ * 跨在"看得出"和"不觉得慢"之间。三条一起铺是"数据到了"，依次落下来才像"在画"。
+ *
+ * 这个常量是**唯一的真相**：三条队列的开场延迟与三张画布的入场动画延迟都读它，
+ * 两处各写一个数早晚会对不上（那时画布会先亮、后落，读起来像卡了一下）。
+ */
+export const PHASE_DELAY_MS = { flow: 0, blocks: 200, code: 400 } as const;
+
+/**
  * 一拍多久：**这一批还剩的时间 ÷ 队列里还剩几格**，夹在 `[floor, beat]` 之间。
  *
  * `left` 默认给整份预算——于是 `beatFor(n)` 就是「n 格、时间还没花掉时的一拍」，
@@ -101,6 +112,16 @@ export interface PlaybackOptions {
 	readonly timing?: PlaybackTiming;
 	readonly clock?: PlaybackClock;
 	readonly now?: () => number;
+	/**
+	 * 这一条队列的**开场延迟**（毫秒）。默认 0。
+	 *
+	 * 用途只有一个：让三张画布**错峰开场**——流程图先起、积木跟上、代码最后落。
+	 * 一起涌出来是"数据到了"，依次落下来才是"在画"。
+	 *
+	 * 只推迟**每一轮的第一拍**（`reset` 之后、队列空着时来的那一批）：
+	 * 中途陆续到的格子仍然跟着拍子走，不会被这条延迟拖慢。
+	 */
+	readonly delayMs?: number;
 }
 
 const defaultClock: PlaybackClock = (tick, ms) => {
@@ -158,6 +179,7 @@ export const createStepPlayback = <T>(options: PlaybackOptions = {}): StepPlayba
 	const timing = options.timing ?? DEFAULT_PLAYBACK_TIMING;
 	const clock = options.clock ?? defaultClock;
 	const now = options.now ?? (() => Date.now());
+	const delayMs = Math.max(0, options.delayMs ?? 0);
 	/** 上层给的那份序列（整份，含还没放出来的）。 */
 	const sequence = shallowRef<readonly T[]>([]);
 	const revealedCount = ref(0);
@@ -167,6 +189,13 @@ export const createStepPlayback = <T>(options: PlaybackOptions = {}): StepPlayba
 	let lastRevealAt = Number.NEGATIVE_INFINITY;
 	/** 这一批铺完的期限（一批 = 队列从空变满的那一次）。没在铺时是 -∞。 */
 	let deadline = Number.NEGATIVE_INFINITY;
+	/**
+	 * 这一轮**第一批**到手的时刻（`reset` 之后第一次 `aim`）。
+	 *
+	 * 开场延迟从这一刻起算——不能拿 `lastRevealAt` 算：它是 -∞，
+	 * `delayMs - waited` 会算出 +∞ 再被拍子封顶，于是延迟整个失效（第一版就是这么错的，实测第一格仍在 0ms 落）。
+	 */
+	let batchStartedAt = Number.NEGATIVE_INFINITY;
 	let waiting: (() => void)[] = [];
 
 	const pending = computed(() => Math.max(0, sequence.value.length - revealedCount.value));
@@ -216,10 +245,27 @@ export const createStepPlayback = <T>(options: PlaybackOptions = {}): StepPlayba
 		if (cancel !== null) return;
 		// 队列空着时来的这一批：期限从这一刻起算（这一批铺多久由它封顶）。
 		deadline = now() + timing.budgetMs;
+		batchStartedAt = now();
 		// 离上一拍已经够久（数据比拍子慢）就立刻放——跟着数据走；还不够久（数据比拍子快）
 		// 就把这一拍补上，节奏不被打乱。
 		const waited = now() - lastRevealAt;
 		const beat = beatNow();
+		/*
+		 * 开场延迟只作用于**本轮第一格**（`lastRevealAt` 还是 -∞ 的那一次）。
+		 *
+		 * 这里踩过两次坑，都记下来：
+		 * ① 拿 `waited` 当判据不行——它是 +∞，任何延迟都被一步跨过去（第一格仍在 0ms 落）；
+		 * ② 直接写成 `now() - batchStartedAt >= beat` 也不行——那会把**没有延迟时的正常行为**改掉
+		 *    （原来的规矩是"数据一到就先放一格"，那一格不该等拍子）。
+		 * 所以分两种情况：有开场延迟就等够延迟，没有就照旧立刻放第一格。
+		 */
+		const first = lastRevealAt === Number.NEGATIVE_INFINITY;
+		if (first && delayMs > 0) {
+			const left = delayMs - (now() - batchStartedAt);
+			if (left <= 0) step();
+			else cancel = clock(step, left);
+			return;
+		}
 		if (waited >= beat) step();
 		else cancel = clock(step, beat - waited);
 	};
@@ -230,6 +276,7 @@ export const createStepPlayback = <T>(options: PlaybackOptions = {}): StepPlayba
 		revealedCount.value = 0;
 		lastRevealAt = Number.NEGATIVE_INFINITY;
 		deadline = Number.NEGATIVE_INFINITY;
+		batchStartedAt = Number.NEGATIVE_INFINITY;
 		settle();
 	};
 

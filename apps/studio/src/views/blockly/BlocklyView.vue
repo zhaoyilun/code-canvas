@@ -88,8 +88,15 @@ const linkNote = computed(() => linkage.note.value || linkage.blockNote.value);
 			<span v-else-if="teaching.status.value === 'drawing'" class="footer-hint" data-testid="blockly-drawing">
 				正在写…（已经收到 {{ teaching.streamedChars.value }} 字）
 			</span>
+			<!--
+				失败时把**第一条具体问题**也说出来。只给「形状不对」四个字，用户能做的只有再点一次；
+				逐条问题中栏（流程画布）已经摆了，这里带上第一条，够指路又不重复。
+			-->
 			<span v-else-if="teaching.failure.value !== null" class="footer-hint footer-failed" data-testid="blockly-failed">
-				模型没画出来：{{ teaching.failure.value.message }}
+				模型没画出来：{{ teaching.failure.value.message
+				}}<template v-if="teaching.failure.value.issues.length > 0"
+					>（{{ teaching.failure.value.issues[0] }}）</template
+				>
 			</span>
 			<span v-else class="footer-hint" data-testid="blockly-empty">还没有积木可画</span>
 		</footer>

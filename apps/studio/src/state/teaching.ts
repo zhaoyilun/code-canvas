@@ -34,7 +34,7 @@ import {
 	type TeachingValueBlock,
 	type WorkflowDeclaration,
 } from '@codecanvas/contracts';
-import { createStepPlayback, type StepPlayback } from '../shell/step-playback';
+import { createStepPlayback, PHASE_DELAY_MS, type StepPlayback } from '../shell/step-playback';
 import { runningPlanPath } from '../shell/device-run';
 import { generateTeachingSpec } from '../shell/teaching-generation';
 import { readTaskEndpoint } from '../shell/llm-endpoint';
@@ -42,6 +42,15 @@ import { nodeAtPlanPath, planPathOf, planPathsOf } from '../views/shared/plan-st
 import { useStudioDocument } from './document';
 
 export type TeachingStatus = 'idle' | 'drawing' | 'ready' | 'failed';
+
+/**
+ * 这一份规格**我们机械修过哪几处**（`teaching-repair.ts` 的产物，成功那一支带回来的）。
+ *
+ * 为什么要在界面上说出来：修补层会替模型摘掉多余的字、把 `"3"` 还原成 `3`、把编出来的路径摘掉——
+ * 那些改动**改变了屏幕上这句话的来路**。不留痕就是欺骗：用户会以为模型说对了，
+ * 而实际上是我们替它圆了一句。改过就说改过，没改就是空表。
+ */
+const repairs = ref<readonly string[]>([]);
 
 /** 一次失败的实情：模型说的话（message）、逐条形状问题（issues）、已经收到的原文（text）。 */
 export interface TeachingFailure {
@@ -115,10 +124,12 @@ const streamedChars = ref(0);
 const attempt = ref(0);
 
 /** 三条铺开队列：流程图 / 积木 / 代码行。拍子全在 `step-playback.ts` 里。 */
-const flowPlayback: StepPlayback<FlowDrawItem> = createStepPlayback<FlowDrawItem>();
+const flowPlayback: StepPlayback<FlowDrawItem> = createStepPlayback<FlowDrawItem>({
+	delayMs: PHASE_DELAY_MS.flow,
+});
 const blockPlayback: StepPlayback<TeachingBlock | TeachingValueBlock> =
-	createStepPlayback<TeachingBlock | TeachingValueBlock>();
-const codePlayback: StepPlayback<string> = createStepPlayback<string>();
+	createStepPlayback<TeachingBlock | TeachingValueBlock>({ delayMs: PHASE_DELAY_MS.blocks });
+const codePlayback: StepPlayback<string> = createStepPlayback<string>({ delayMs: PHASE_DELAY_MS.code });
 const revealedFlowItems: ComputedRef<readonly FlowDrawItem[]> = flowPlayback.revealed;
 const revealedBlockItems: ComputedRef<readonly (TeachingBlock | TeachingValueBlock)[]> = blockPlayback.revealed;
 const revealedCodeLines: ComputedRef<readonly string[]> = codePlayback.revealed;
@@ -163,6 +174,18 @@ const applySpec = (next: TeachingSpec): void => {
 	}
 	status.value = 'ready';
 	failure.value = null;
+};
+
+/**
+ * 等三条铺开队列**都落定**（这一轮画完）。
+ *
+ * 为什么单独开出来：三张画布是**错峰**开的（流程图 0 / 积木 200 / 代码 400），
+ * 于是"规格到手"与"画完"之间隔着 400ms 以上。断言"画布上有什么"的测试必须先等它——
+ * 否则量的是"还没开始铺"的那一刻（实测：代码面板一行都还没有）。
+ * 产品代码不用它：界面上有 `status` 与三条 `revealed`，不需要 await。
+ */
+export const whenDrawn = async (): Promise<void> => {
+	await Promise.all([flowPlayback.whenSettled(), blockPlayback.whenSettled(), codePlayback.whenSettled()]);
 };
 
 /**
@@ -263,6 +286,7 @@ export async function runTeaching(options: RunTeachingOptions = {}): Promise<voi
 	}
 
 	attempt.value = result.attempts;
+	repairs.value = result.repairs;
 	applySpec(result.spec);
 }
 
@@ -294,12 +318,23 @@ export function useTeaching(): {
 	readonly revealedBlockSet: ComputedRef<ReadonlySet<TeachingBlock | TeachingValueBlock>>;
 	readonly revealedCodeLines: ComputedRef<readonly string[]>;
 	readonly drawing: ComputedRef<boolean>;
+	/** 这一份规格我们机械修过哪几处（没修就是空表）。界面上照实摆出来。 */
+	readonly repairs: Ref<readonly string[]>;
+	/**
+	 * 三张画布**各自的入场延迟**（毫秒）：流程图 0 / 积木 200 / 代码 400。
+	 *
+	 * 与三条铺开队列读的是同一个常量（`PHASE_DELAY_MS`）——两处各写一个数早晚对不上，
+	 * 那时画布会"先亮起来、后落下来"，看起来像卡了一下。
+	 */
+	readonly phaseDelayMs: typeof PHASE_DELAY_MS;
 	run: (options?: RunTeachingOptions) => Promise<void>;
 } {
 	return {
 		spec,
 		status,
 		failure,
+		repairs,
+		phaseDelayMs: PHASE_DELAY_MS,
 		streamedChars,
 		attempt,
 		revealedFlowKeys,
@@ -399,6 +434,8 @@ export function useTeachingLinkage(): {
 	readonly note: ComputedRef<string>;
 	/** 积木那一条对应关系在不在（不在时说一句，见 `blockLinkageOf`）。 */
 	readonly blockNote: ComputedRef<string>;
+	/** 我们替模型修过哪几处（没修就是空串）。与两条 note 分开：那两条说"联动"，这条说"改过手"。 */
+	readonly repairNote: ComputedRef<string>;
 	readonly activeNodeId: ComputedRef<string>;
 } {
 	/** 这一块的锚（与 `flatBlocks` 同序、一格对一格）；规格没到就是空表。 */
@@ -439,6 +476,19 @@ export function useTeachingLinkage(): {
 
 	const activeNodeId = computed<string>(() => currentFlowNodeId.value ?? '');
 
+	/**
+	 * 「这一份有几处是我们改过的」。
+	 *
+	 * 为什么必须说出来：修补层摘掉的可能是模型编出来的一条路径——用户有权知道
+	 * 屏幕上这句话不完全是模型的原话。只是给一句汇总（逐条在中栏那份失败报告里有先例），
+	 * 页脚放不下十几条。
+	 */
+	const repairNote = computed<string>(() => {
+		const list = repairs.value;
+		if (list.length === 0) return '';
+		return `这一份有 ${String(list.length)} 处是自动修的（模型的话不完全是原样）：${list[0] ?? ''}`;
+	});
+
 	return {
 		currentPlanPath,
 		currentNodeId: currentFlowNodeId,
@@ -447,6 +497,7 @@ export function useTeachingLinkage(): {
 		linkage,
 		note,
 		blockNote,
+		repairNote,
 		activeNodeId,
 	};
 }

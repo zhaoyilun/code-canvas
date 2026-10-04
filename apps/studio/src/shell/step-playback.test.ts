@@ -11,8 +11,16 @@
  *   3. **跟着数据走**：数据来得比拍子慢时，来一格放一格，不多等（也绝不抢在数据前面放）；
  *   4. **收尾**：`whenSettled()` 在铺完那一刻落定，`reset()` 也把等着的放行。
  */
+import { PHASE_DELAY_MS as PHASES_FOR_TEST } from './step-playback';
 import { describe, expect, it, vi } from 'vitest';
-import { DEFAULT_PLAYBACK_TIMING, beatFor, createStepPlayback, flattenSteps, type PlaybackClock } from './step-playback';
+import {
+	DEFAULT_PLAYBACK_TIMING,
+	PHASE_DELAY_MS,
+	beatFor,
+	createStepPlayback,
+	flattenSteps,
+	type PlaybackClock,
+} from './step-playback';
 
 /* ───────────────────────── 手动时钟 ───────────────────────── */
 
@@ -302,5 +310,50 @@ describe('嵌套的序列树 · flattenSteps', () => {
 		expect(player.revealed.value.map((node) => node.id)).toEqual(['if']);
 		clock.advance(130);
 		expect(player.revealed.value.map((node) => node.id)).toEqual(['if', 'a']);
+	});
+});
+
+/* ───────────────────────── 错峰开场 ───────────────────────── */
+
+describe('错峰开场 · 三张画布不一起涌出来', () => {
+	it('带开场延迟：第一格等到延迟到点才放，后面的格子仍按拍子走', () => {
+		const clock = manualClock();
+		const player = createStepPlayback<number>({ clock: clock.schedule, now: clock.now, delayMs: 200 });
+		player.aim(items(3));
+		const tape = tapeOf(clock, player, 800);
+
+		// 0–199ms 一格都没有（这就是「错峰」），200ms 落第一格，之后每 130ms 一格。
+		// （`tape[0]` 是 0ms 那一次读数：revealed 还是 0 —— 正是"还没到点"。）
+		expect(tape[0]).toEqual({ at: 0, revealed: 0 });
+		expect(tape[1]).toEqual({ at: 200, revealed: 1 });
+		expect(tape[2]?.at).toBe(330);
+		expect(tape[3]?.at).toBe(460);
+	});
+
+	it('延迟只作用于**第一拍**：中途来的格子不被它再拖一次', () => {
+		const clock = manualClock();
+		const player = createStepPlayback<number>({ clock: clock.schedule, now: clock.now, delayMs: 200 });
+		player.aim(items(1));          // 第一拍到点后落一格
+		clock.advance(200);
+		player.aim(items(2));          // 中途又来一格：应当按拍子（130ms）来，而不是再等 200
+		clock.advance(130);
+		expect(player.revealedCount.value).toBe(2);
+	});
+
+	it('不带延迟时行为与从前完全一样（默认值不许改变既有节奏）', () => {
+		const clock = manualClock();
+		const player = createStepPlayback<number>({ clock: clock.schedule, now: clock.now });
+		player.aim(items(2));
+		expect(tapeOf(clock, player, 300)).toEqual([
+			{ at: 0, revealed: 1 },
+			{ at: 130, revealed: 2 },
+		]);
+	});
+
+	it('三档延迟是递增的：图先起、积木跟上、代码最后落', () => {
+		expect(PHASE_DELAY_MS.flow).toBeLessThan(PHASE_DELAY_MS.blocks);
+		expect(PHASE_DELAY_MS.blocks).toBeLessThan(PHASE_DELAY_MS.code);
+		// 每一档都不到一拍的两倍：看得出错峰，又不至于让人觉得慢。
+		expect(PHASE_DELAY_MS.code).toBeLessThanOrEqual(DEFAULT_PLAYBACK_TIMING.beatMs * 4);
 	});
 });

@@ -24,14 +24,26 @@
  * 路径 → 节点那一步换算由调用方走 `nodeAtPlanPath`，与另外两处视图是同一份判据。
  */
 
-/** 动线此刻的两格记忆：在跑的那一步、刚下来的那一步。两者都是节点 id，可以是 null。 */
+/** 动线此刻的记忆：在跑的那一步、刚下来的那一步，以及**这一趟走过的那条路**。都是节点 id。 */
 export interface RunTrace {
 	readonly running: string | null;
 	readonly settled: string | null;
+	/**
+	 * 这一趟走过的节点，**按走过的顺序**（可能重复：一步跑两遍就走两次）。
+	 *
+	 * 为什么不违反上面那条「两步记忆就够」：那一条管的是**光**（哪一步在跑、哪一步刚收住），
+	 * 光多了会淹掉当下的对比。而 `trail` 管的是**痕**——走过的路留一条细线，
+	 * 它不改光的分配，只是让"已经走过哪儿"读得出来。两者用途不同，所以分开：
+	 * 要读"现在在哪"看 `running`/`settled`，要读"走过哪儿"看 `trail`。
+	 *
+	 * 清空时机与 `settled` 一致：**新的一趟开场**（`null → 某一步`）清掉，
+	 * 所以每一趟都是一条干净的路。
+	 */
+	readonly trail: readonly string[];
 }
 
 /** 什么都没在跑（页面刚打开、跑完清掉了、复位了）。 */
-export const EMPTY_RUN_TRACE: RunTrace = { running: null, settled: null };
+export const EMPTY_RUN_TRACE: RunTrace = { running: null, settled: null, trail: [] };
 
 /**
  * 这一步的状态：三档，缺一档就分不清「机器在这儿」与「这一步刚过去」。
@@ -54,9 +66,22 @@ export type RunPhase = 'idle' | 'flowing' | 'settled';
  * 而不是啪一下回到常态虚线。它停在那儿，直到下一趟开场把它清掉。
  */
 export const traceAfter = (trace: RunTrace, running: string | null): RunTrace => {
+	// 同一个值：设备把同一步报两次，原样返回（不重放、不重复记）。
 	if (running === trace.running) return trace;
-	if (trace.running === null) return { running, settled: null };
-	return { running, settled: trace.running };
+	/*
+	 * 开场（上一格是"没在跑"、这一格是某一步）：**痕与尾巴一起清**。
+	 * 判据是 `trace.running === null`（而不是 `trace.trail.length === 0`）——
+	 * 因为"跑完之后再开一趟"时 `running` 也是 null，而那一趟同样要清干净。
+	 */
+	if (trace.running === null) {
+		return { running, settled: null, trail: running === null ? [] : [running] };
+	}
+	// 换步，以及收工那一跳（`某一步 → null`）：刚下来的进「收住」，走过的进痕。
+	return {
+		running,
+		settled: trace.running,
+		trail: running === null ? trace.trail : [...trace.trail, running],
+	};
 };
 
 /** 某个节点此刻处于哪一档。在跑的赢过收住的——两步重合时（一步跑两遍）亮的是「在跑」。 */

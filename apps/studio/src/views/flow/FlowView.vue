@@ -18,6 +18,10 @@
 import { computed } from 'vue';
 import { useTeaching, useTeachingLinkage } from '../../state/teaching';
 import FlowChart from './FlowChart.vue';
+import { layoutFlowGraph } from './layout';
+import { runTrace } from '../../shell/device-run';
+import { planPathOf } from '../shared/plan-structure';
+import { useStudioDocument } from '../../state/document';
 
 const teaching = useTeaching();
 const linkage = useTeachingLinkage();
@@ -31,6 +35,54 @@ const spec = teaching.spec;
  * 两种都不是「随便挑一个亮着」的理由。
  */
 const currentNodeId = computed(() => linkage.currentNodeId.value ?? '');
+
+/**
+ * 这一趟走过的那条路，**换算到这张图上**。
+ *
+ * ⚠ 这里有个必须说清的坑（实测踩过，痕一条都亮不出来）：
+ * **设备报的是声明里的节点 id**（`nd_01M43C…`），而**流程图上那些框的 id 是模型起的**（`n1`…`n7`）。
+ * 两套 id 各说各的，直接比对永远不匹配。它们之间唯一的公共口径是 **`planPath`**（执行路径）——
+ * 所以换算分两步：先把走 trail 里的声明节点换成执行路径，再拿路径去这张图上找框。
+ *
+ * 拿不到路径的那些（声明被改过、或某一趟跑的是别的任务）**直接丢掉**：
+ * 宁可不亮，也不猜一个框顶上。
+ */
+const visitedPlanPaths = computed<ReadonlySet<string>>(() => {
+	const declaration = useStudioDocument().declaration.value;
+	const paths = new Set<string>();
+	if (declaration === null) return paths;
+	for (const nodeId of runTrace.value.trail) {
+		const path = planPathOf(declaration, nodeId);
+		if (path !== null) paths.add(path);
+	}
+	return paths;
+});
+
+/** 这张图上走过的那几个框：**它讲的那一步走过**。 */
+const visitedNodeIds = computed<ReadonlySet<string>>(() => {
+	const paths = visitedPlanPaths.value;
+	const ids = new Set<string>();
+	for (const node of flow.value?.nodes ?? []) {
+		if (node.planPath !== undefined && paths.has(node.planPath)) ids.add(node.id);
+	}
+	return ids;
+});
+
+/**
+ * 走过的边：**两端都走过**。
+ *
+ * 这样一条支路的边不会因为节点亮了一半就先亮起来；分支只走一条臂时，
+ * 另一条臂两端的框都没走过，那条边自然不亮。
+ * 只认图上真有 `planPath` 的框——模型自己加的讲解框没有归属，不参与（它本来就不该亮）。
+ */
+const visitedEdgeKeys = computed<ReadonlySet<string>>(() => {
+	const visited = visitedNodeIds.value;
+	const keys = new Set<string>();
+	for (const item of layout.value?.edges ?? []) {
+		if (visited.has(item.edge.from) && visited.has(item.edge.to)) keys.add(item.key);
+	}
+	return keys;
+});
 
 /**
  * 有没有一行话要说。
@@ -60,6 +112,9 @@ const failed = computed(() => {
 });
 
 const flow = computed(() => spec.value?.flow ?? null);
+
+/** 图的布局（节点位置 + 边）。`FlowChart` 内部也算一次；这里要边的两端，所以自己算一份。 */
+const layout = computed(() => (flow.value === null ? null : layoutFlowGraph(flow.value)));
 
 /** 这一次画的是哪个任务（标题来自规格，规格还没到时空着——不拿声明的名字顶上）。 */
 const title = computed(() => spec.value?.title ?? '');
@@ -95,11 +150,22 @@ const totalCount = computed(() => {
 			<p v-else-if="missingStepNote" class="flow-link-note" data-testid="flow-linkage-missing-step">
 				当前这一步（{{ linkage.currentPlanPath.value }}）在这张流程图上没有对应的框，所以没有高亮。
 			</p>
+			<!--
+				**我们替模型修过哪几处**，照实说。
+				修补层会摘掉多余的字、把 "3" 还原成 3、把编出来的路径摘掉——那些改动改变了
+				屏幕上这句话的来路。不说出来，用户就会以为模型说对了，而其实是我们替它圆了一句。
+			-->
+			<p v-if="linkage.repairNote.value !== ''" class="flow-link-note" data-testid="flow-repair-note">
+				{{ linkage.repairNote.value }}
+			</p>
 			<div class="flow-scroll">
 				<FlowChart
 					:graph="flow"
 					:revealed="teaching.revealedFlowKeys.value"
 					:current-node-id="currentNodeId"
+					:visited-node-ids="visitedNodeIds"
+					:visited-edge-keys="visitedEdgeKeys"
+					:entrance-delay-ms="teaching.phaseDelayMs.flow"
 				/>
 			</div>
 		</div>

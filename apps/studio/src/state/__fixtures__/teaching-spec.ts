@@ -246,4 +246,14 @@ export const loadTeachingFixture = async (spec: TeachingSpec = TEACHING_SPEC_FIX
 	setSelectedDevice('so101_sim');
 	await loadTeachingPlan();
 	await runTeaching();
+	/*
+	 * 等**铺开落定**，不只是"规格到手"。
+	 *
+	 * 为什么必须等：三张画布是**错峰**开的（流程图 0 / 积木 200 / 代码 400，
+	 * 见 `shell/step-playback.ts` 的 `PHASE_DELAY_MS`），代码那一栏最后一格落在 400ms 之后。
+	 * 只等解析完成的话，断言"每一行都挂上了入场动画"会因为**一行都还没铺出来**而失败
+	 * （实测：`lines.length` 是 0）。等落定之后，三条队列都铺完了，断言量的才是动画本身。
+	 */
+	const { whenDrawn } = await import('../teaching');
+	await whenDrawn();
 };

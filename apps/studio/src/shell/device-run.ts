@@ -13,6 +13,7 @@
  * 不是节点 id：路径说的是「在计划的哪一格」，臂里同名的那一步与顶层那一步才分得开。
  */
 import { ref } from 'vue';
+import { EMPTY_RUN_TRACE, traceAfter, type RunTrace } from '../views/mapping/run-trace';
 
 /** 正在跑的那一步的路径；`null` = 没有在跑（没开跑、跑完了、复位了，都是它）。 */
 export const runningPlanPath = ref<string | null>(null);
@@ -22,7 +23,22 @@ export function setRunningPlanPath(path: string): void {
 	runningPlanPath.value = path;
 }
 
+/**
+ * 这一趟的**动线状态**：在跑的那一步、刚下来的那一步、走过的那条路（都是节点 id）。
+ *
+ * 与 `runningPlanPath` 的区别：那个是**执行路径**（`1.then.0`，判"计划的哪一格"），
+ * 这个是**节点 id**（判"图上哪个框"，三处视图的锚点口径）。
+ * 转移表只有一份，在 `views/mapping/run-trace.ts`——这里只负责存与改，不自己推。
+ */
+export const runTrace = ref<RunTrace>(EMPTY_RUN_TRACE);
+
+/** 图上那个框亮起来时调它（`nodeAtPlanPath` 换算好的节点 id；推不出节点就传 null）。 */
+export function setRunningNode(nodeId: string | null): void {
+	runTrace.value = traceAfter(runTrace.value, nodeId);
+}
+
 /** 没有正在跑的那一步了：跑完、复位、换设备、开始新的一趟，都走这里。 */
 export function clearRunningPlanPath(): void {
 	runningPlanPath.value = null;
+	runTrace.value = traceAfter(runTrace.value, null);
 }

@@ -83,9 +83,10 @@ const linkNote = computed(() => linkage.note.value);
 		<ol v-if="revealed.length > 0" ref="linesRef" class="cp-lines" data-testid="code-panel-lines">
 			<li
 				v-for="(line, index) in revealed"
-				:key="`${String(index)}:${line}`"
+				:key="`${String(index)}:${line}:${isActive(index) ? String(activeRange?.from ?? '') : ''}`"
 				class="cp-line"
 				:class="{ 'cp-line-current': isActive(index) }"
+				:style="{ animationDelay: `${String(teaching.phaseDelayMs.code)}ms` }"
 				data-testid="code-line"
 				:data-cc-line="index"
 				:data-cc-plan-node="anchorOfLine(index)"
@@ -106,7 +107,10 @@ const linkNote = computed(() => linkage.note.value);
 			class="cp-state cp-failed"
 			data-testid="code-panel-failed"
 		>
-			模型没写出来：{{ teaching.failure.value.message }}
+			模型没写出来：{{ teaching.failure.value.message
+			}}<template v-if="teaching.failure.value.issues.length > 0"
+				>（{{ teaching.failure.value.issues[0] }}）</template
+			>
 		</p>
 		<p v-else-if="teaching.status.value === 'drawing'" class="cp-state" data-testid="code-panel-drawing">
 			正在写…（已经收到 {{ teaching.streamedChars.value }} 字）
@@ -198,6 +202,59 @@ const linkNote = computed(() => linkage.note.value);
 .cp-line-current {
 	background: var(--cc-accent-glow);
 	box-shadow: inset var(--cc-highlight-border-width) 0 0 var(--cc-highlight);
+	position: relative;
+}
+
+/*
+ * 扫描线：切到那几行时，一条亮线**从上方扫下来停住**——像示波器上那根指针归位。
+ *
+ * 为什么是"扫"而不是"闪"：切行这件事本身是个**移动**（从上一段移到这一段），
+ * 闪一下只说明"变了"，扫一下说明"从哪儿来、停在哪儿"。位移量很小（12px）——
+ * 这条线是给眼睛一个落点，不是表演。
+ *
+ * 只画在那一段的**第一行**上：一段可能十几行，每行都扫就成了噪音。
+ */
+.cp-line-current:first-child,
+.cp-line-current + .cp-line:not(.cp-line-current) {
+	position: relative;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+	.cp-line-current::before {
+		content: '';
+		position: absolute;
+		left: 0;
+		top: 0;
+		bottom: 0;
+		width: var(--cc-highlight-border-width);
+		background: var(--cc-accent-strong);
+		box-shadow: 0 0 8px var(--cc-accent-glow);
+		animation: cc-scan-in 260ms cubic-bezier(0.22, 0.9, 0.3, 1) 1 both;
+	}
+}
+
+@keyframes cc-scan-in {
+	from {
+		opacity: 0;
+		translate: 0 -12px;
+	}
+
+	to {
+		opacity: 1;
+		translate: 0 0;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	.cp-line-current::before {
+		content: '';
+		position: absolute;
+		left: 0;
+		top: 0;
+		bottom: 0;
+		width: var(--cc-highlight-border-width);
+		background: var(--cc-accent-strong);
+	}
 }
 
 .cp-line-current .cp-no {
