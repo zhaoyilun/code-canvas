@@ -87,7 +87,7 @@ import {
 } from '@codecanvas/robot3d';
 import { findTaskFormat, type TaskFormatRef } from '@codecanvas/task-import';
 import IconBase from '../../shell/IconBase.vue';
-import { clearRunningPlanPath, setRunningPlanPath } from '../../shell/device-run';
+import { clearRunningPlanPath, setRunningNode, setRunningPlanPath } from '../../shell/device-run';
 import type { StudioDevice } from '../../shell/devices';
 import { useStudioDocument } from '../../state/document';
 import { nodeAtPlanPath, primitiveLabelOf, waitLabelOf } from '../shared/plan-structure';
@@ -224,9 +224,10 @@ function writeRow(row: StepRow): void {
 
 	if (row.state !== 'running') return;
 	setRunningPlanPath(row.path);
-	if (!follow.value) return;
 	const node = nodeAtPlanPath(declaration.value, row.path);
 	// 路径推不出节点（声明被改坏了）时不猜一个顶上：宁可这一格不亮。
+	if (node !== null) setRunningNode(node.id);
+	if (!follow.value) return;
 	if (node !== null) doc.select(node.id);
 }
 
@@ -921,14 +922,21 @@ onBeforeUnmount(() => {
 }
 
 .fact-name {
-	font-size: 9px;
+	font-size: var(--cc-fs-xs);
 	line-height: 1.2;
 	color: var(--cc-text-dim);
 }
 
 .fact-value {
 	margin: 0;
-	font: 10px / 1.2 var(--cc-font-mono);
+	/*
+	 * 拆成两条，不用 `font:` 简写：简写里的字号是**藏起来的**——
+	 * 写死 10px 不会被任何一条字号纪律扫到（原来就是 `font: 10px / 1.2 …`，
+	 * 结果改完整套阶梯，这一格还留在旧档上）。行高不是字号，留在这里。
+	 */
+	font-size: var(--cc-fs-xs);
+	line-height: 1.2;
+	font-family: var(--cc-font-mono);
 	color: var(--cc-text);
 	overflow-wrap: anywhere;
 }
@@ -953,7 +961,13 @@ onBeforeUnmount(() => {
 	min-height: clamp(180px, 34vh, 520px);
 	border: 1px solid var(--cc-line);
 	border-radius: var(--cc-radius-sm);
-	background: var(--cc-stage);
+	/*
+	 * 3D 那一格是**全屏唯一有光照的地方**——面板底也照它来：一层很淡的斜向渐变，
+	 * 让"光从左上打下来"这件事在容器上先立住，画面里的机械臂才不是悬在纯色上。
+	 */
+	background:
+		radial-gradient(120% 90% at 28% 8%, rgba(150, 185, 210, 0.07), transparent 62%),
+		var(--cc-stage);
 	overflow: hidden;
 }
 

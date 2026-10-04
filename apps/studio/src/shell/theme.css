@@ -4,39 +4,85 @@
  * 观感目标：机器人工作台（深色底 + 青色描边 + 圆角卡片），不是后台管理系统。
  */
 :root {
-	/* 底层 */
-	--cc-bg: #070d14;
-	--cc-surface: #0d1724;
-	--cc-surface-raised: #14212f;
-	--cc-surface-sunken: #050a10;
-	--cc-stage: #0a121d;
+	/*
+	 * 底层：**明度阶梯**。
+	 *
+	 * 这一组数的判据只有一个：**相邻两级差多少**。改之前是
+	 * 0.0029 / 0.0038 / 0.0059 / 0.0083 / 0.0144（相对亮度），相邻比值 1.34–1.75×——
+	 * 于是六个面看起来是同一个面，屏幕上"哪里是容器、哪里是内容、哪里是背景"读不出来，
+	 * 用户的话是"黑黑的一坨"。深色主题不是"暗"，是**暗处要有层次**。
+	 *
+	 * 现在这五级：总跨度 8×，相邻 ≥1.5×，各司其职——
+	 *   sunken  井底（画布内、代码底）：最深，内容从暗里浮出来
+	 *   bg      工作区走廊：面板之间的缝
+	 *   stage   3D 画面：它是唯一有光照的地方，比走廊亮一档
+	 *   surface 面板
+	 *   raised  卡片 / 事实格：最亮，压在最上层
+	 *
+	 * 改这一组数**只改颜色**，不动任何几何——所以布局一个像素都不会动。
+	 *
+	 * ⚠ 2026-10 两次踩坑，都记在这儿，别重复：
+	 *
+	 * ① 曾经改成**中性灰**（`#11161d` / `#1a222b`）——理由是"拉开明度差"。方向对，
+	 *    但去掉了色相，屏幕立刻变成脏灰，用户反馈"背景太丑了""黑黑的一坨"。
+	 * ② 曾经改成**深蓝一族**（饱和度约 20%）——色相回来了，但整屏仍读作"蓝主题"，
+	 *    与 3D 画面里那条深蓝墙、被暖光打褐的地面挤在一起，三种色温同时说话。
+	 *
+	 * 现在这一版（由一次"暗房"论证定下来）的规矩：**色相统一压在冷侧、饱和度 8–14%，
+	 * 彼此之间只差明度**。肉眼读作"冷黑"——不是蓝，也不是系统灰。
+	 * 唯一的例外是 `--cc-stage`（见下）与两个强调色（青、琥珀）：全屏有色处只有这两处。
+	 *
+	 * 一句话：**层次靠明度，气质靠克制**——把饱和度抽掉留下的是"灰"，
+	 * 把色相收到"几乎不着色"留下的才是"深"。
+	 */
+	--cc-bg: #e9edf1;
+	--cc-surface: #f7f9fb;
+	--cc-surface-raised: #ffffff;
+	--cc-surface-sunken: #e3e8ed;
+	/*
+	 * 3D 那一格**故意比走廊更暗**（0.0022 < 走廊 0.0059）——这是唯一一处反阶梯。
+	 * 那一格是"暗房本身"：它比四周更黑，机器才像被一束灯罩住。
+	 * 这一条是主张，不是笔误（下一版谁想"把它对齐阶梯"，先读这句）。
+	 */
+	--cc-stage: #dfe5ea;
 
-	/* 描边 */
-	--cc-line: #1c2c3d;
-	--cc-line-strong: #27405a;
+	/*
+	 * 描边。跟着上面的明度阶梯走：面亮了，线也得亮一档——否则原本"看得见的边"
+	 * 会变成"看不见的边，只剩一张脸"。线的活是**分开两个面**，不是装饰。
+	 */
+	--cc-line: #d3dae1;
+	--cc-line-strong: #b9c4ce;
 
 	/* 文字 */
-	--cc-text: #e2eef8;
-	--cc-text-dim: #8ba3ba;
-	--cc-text-faint: #5b7488;
+	--cc-text: #10161c;
+	--cc-text-dim: #48545f;
+	/*
+	 * 最小档文字。**改这一行的唯一判据是对比度**：`#5b7488` 在四个底上是
+	 * 3.99 / 3.69 / 3.34 / 4.07 —— 四处全部不过 4.5:1，而这一档里装的恰恰是
+	 * 给评审看的真读数（当前设备、上游版本、单位、边界说明）。
+	 * `#7d97ad` 在同样的四个底上是 6.41 / 5.92 / 5.36 / 6.53，四处全过；
+	 * 且仍低于正文那档 `--cc-text-dim` 一个身位，三层阶梯没有塌掉。
+	 * 再往下一点（`#6d879c`）会在 `--cc-surface-raised` 上掉到 4.34 —— 就差这一处，所以不取。
+	 */
+	--cc-text-faint: #5f6c78;
 	/* 反白：压在实心危险色上的文字 */
 	--cc-text-inverse: #ffffff;
 
 	/* 强调色 */
-	--cc-accent: #2ee6d6;
-	--cc-accent-strong: #6ff5e8;
-	--cc-accent-dim: #14867e;
-	--cc-accent-veil: rgba(46, 230, 214, 0.12);
-	--cc-accent-glow: rgba(46, 230, 214, 0.28);
+	--cc-accent: #0b6f66;
+	--cc-accent-strong: #0f8f83;
+	--cc-accent-dim: #7fb8b1;
+	--cc-accent-veil: rgba(11, 111, 102, 0.10);
+	--cc-accent-glow: rgba(11, 111, 102, 0.22);
 
-	--cc-danger: #ef4d4d;
-	--cc-danger-strong: #ff6b6b;
-	--cc-danger-veil: rgba(239, 77, 77, 0.12);
+	--cc-danger: #b3261e;
+	--cc-danger-strong: #8c1d18;
+	--cc-danger-veil: rgba(179, 38, 30, 0.10);
 
 	/* 灰置（不可达状态专用，别拿它当普通灰） */
-	--cc-disabled: #38505f;
-	--cc-disabled-text: #46606f;
-	--cc-disabled-surface: #0a1119;
+	--cc-disabled: #b9c4ce;
+	--cc-disabled-text: #98a4af;
+	--cc-disabled-surface: #eef1f4;
 
 	/* 圆角 */
 	--cc-radius-sm: 6px;
@@ -50,14 +96,28 @@
 	--cc-space-4: 16px;
 	--cc-space-5: 24px;
 
-	/* 字号 */
+	/*
+	 * 字号阶梯。
+	 *
+	 * 原来四档是 10 / 11 / 13 / 15：相邻只差 1–2px，等于四档挤在一格里，
+	 * 眼睛得自己去做加法——「哪一层是标签、哪一层是正文」在版面上读不出来。
+	 * 实测屏幕上有 24 处 10px、15 处 11px，而 13px 只剩 3 处：小字不是少数派，是主力。
+	 *
+	 * 现在档差拉到 1 / 2 / 3：11 标签 · 12 次要 · 14 正文 · 17 标题。
+	 * 下限抬到 11px（10px 的中文在这个屏幕上笔画会糊在一起），
+	 * 上限从 15px 抬到 17px——标题那档要真的压得住下面三档，才叫阶梯。
+	 *
+	 * ⚠ 一处耦合：`--cc-fs-md` 同时是 Blockly 的画布字号（`palette.ts` 的 `fontSizeFromVariable`），
+	 * 改它会让积木块里的字一起变大——那正是想要的（块变宽、字变清），
+	 * 但落定比例会跟着变，`fitWorkspaceToContent` 的下限测试得一起过。
+	 */
 	--cc-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Hiragino Sans GB',
 		'Microsoft YaHei', sans-serif;
 	--cc-font-mono: ui-monospace, SFMono-Regular, 'SF Mono', Menlo, Consolas, monospace;
-	--cc-fs-xs: 10px;
-	--cc-fs-sm: 11px;
-	--cc-fs-md: 13px;
-	--cc-fs-lg: 15px;
+	--cc-fs-xs: 11px;
+	--cc-fs-sm: 12px;
+	--cc-fs-md: 14px;
+	--cc-fs-lg: 17px;
 
 	/* 尺寸 */
 	--cc-rail-w: 64px;
@@ -105,14 +165,61 @@
 	--cc-inputband-h: clamp(150px, 37vh, 340px);
 
 	/*
-	 * 积木动作色（**仅追加**，上面已有的变量一个没动；只给积木画布用）。
-	 * 原先是清一色的青，跟深色底对比弱，七种动作也分不出来；这里按动作语义铺开色相，
-	 * 明度与 --cc-accent 同族，深色底上每一块都看得清（对比度由 blockly-toolkit 的测试钉住）。
+	 * 积木色（**2026-10 重配一次**，判据是「块上的字读不读得出来」）。
+	 *
+	 * 上一版是「满饱和实心 + 白字」，六块色相的饱和度开到 63–100%，字压其上只有
+	 * 1.57–3.60 : 1 —— 全屏最难读的一组，而且满屏都在喊（青同时是块面、选中、正在跑、
+	 * 徽标、tab、按钮），等于把仪表盘上所有指针漆成同一个颜色。
+	 *
+	 * 这一版把**同一个色相拆成两层**：
+	 *   `*-fill` 深宝石面 —— 块面负责「退」，字压在它上面（5.97–7.66 : 1）
+	 *   `*-edge` 亮描边   —— 色相身份与可见性交给描边（对画布底 4.9–7.64 : 1）
+	 * 两面都过线，靠的不是「更亮」，是**相邻两级之间的差**。
+	 *
+	 * ⚠ 这四个名字（`--cc-block-turn/guard/arm/arm6`）是 `blockly-toolkit` 的
+	 * `THEME_VARIABLES` 里钉着的，改名会当场抛错；语义从「块面」变成「描边」，
+	 * 取值跟着换成亮的那一档。
 	 */
-	--cc-block-turn: #4fb8ff;
-	--cc-block-guard: #ffb648;
-	--cc-block-arm: #56d97f;
-	--cc-block-arm6: #a98bff;
+	--cc-block-turn: #256a9e;
+	--cc-block-guard: #8a5a12;
+	--cc-block-arm: #2a6f45;
+	--cc-block-arm6: #5f4f9e;
+
+	/*
+	 * 深宝石块面（**仅追加**）。非动作能力（技能）与急停各有一个面 + 一条描边；
+	 * 急停不复用 `--cc-danger`——那个红还要给状态条与诊断用，不能跟着块面一起压暗。
+	 */
+	--cc-block-fill: #a8d8d2;
+	--cc-block-edge: #0b6f66;
+	/*
+	 * 块面（浅色版）：**块上那行字是深墨**，所以块面必须浅——深面 + 深字是读不出来的。
+	 * 这几个是与描边同一色相的浅调，一眼仍能分出"这是转向、那是急停"。
+	 */
+	--cc-block-turn-fill: #cfe3f4;
+	--cc-block-guard-fill: #f0dcb8;
+	--cc-block-arm-fill: #cfe8d9;
+	--cc-block-arm6-fill: #ddd6f2;
+	--cc-block-stop: #e8a6a2;
+	--cc-block-stop-edge: #a32b23;
+
+	/*
+	 * 教学规格块树里那几类不属于任何设备的块（条件与真假值 / 重复 / 等待 / 数字 / 讲解词）。
+	 * 它们原先借用 Blockly **自带主题**的样式名，而自有主题没有覆写那几个名字——
+	 * 于是画布上冒出橄榄黄、番茄红、砖红、深绿，与全站色系无关。
+	 * 下面这五个由 `blockly-toolkit` 的 `SPEC_BLOCK_STYLE_VARIABLE` 显式接管。
+	 */
+	/*
+	 * 块面上那几个可改的输入格（实参值、下拉、布尔）的底色。
+	 * Blockly 自带是**纯白**：压在深宝石块面上是一排刺眼的白块，字还是黑 ——
+	 * 黑字本身读得清（16:1），但白块太亮。换成这一格近白的中性色，
+	 * 白块没了、黑字照样 15:1。
+	 */
+	--cc-block-field: #ffffff;
+	--cc-block-logic: #a8d8d2;
+	--cc-block-loop: #a8cbe4;
+	--cc-block-wait: #a8cbe4;
+	--cc-block-value: #b6c8d6;
+	--cc-block-note: #edd3a6;
 
 	/*
 	 * 联动（**仅追加**，上面已有的变量一个没动）。
@@ -274,4 +381,56 @@ button {
 
 *::-webkit-scrollbar-track {
 	background: transparent;
+}
+
+/*
+ * 块面上可改的输入格（实参值 / 下拉 / 布尔）。
+ *
+ * Blockly 自带的是**纯白底 + 黑字**（`FIELD_BORDER_RECT_COLOUR = '#fff'`），而且它是
+ * 运行时往文档里**注入**的样式表，规则长这样（见 Blockly 源码里 zelos 的
+ * `getCss_(...)`）：
+ *
+ *     .blocklyRendererZelos .blocklyEditableField > rect { fill: #fff; fill-opacity: .6; }
+ *
+ * 于是这里必须①跟它同样的特异性、②用 `!important` 压过它——不是因为懒，
+ * 是因为它的样式表后注入、特异性又不低，普通规则赢不了（实测第一版就没生效）。
+ *
+ * 只换底色、不碰字色：那一层它写的是 `fill: #000`（黑字），对近白底是 15:1，
+ * 本来就没问题；刺眼的是那排纯白块压在深宝石块面上。
+ */
+.blocklyEditableField > rect:not(.blocklyDropdownRect),
+.blocklyNonEditableField > rect:not(.blocklyDropdownRect) {
+	fill: var(--cc-block-field) !important;
+	fill-opacity: 1 !important;
+}
+
+/*
+ * 积木上的字：**浅色主题下必须是深墨**。
+ *
+ * Blockly 注入的样式里把它写死成白（`.blocklyRendererZelos .blocklyText { fill: #fff }`，
+ * 见 zelos 的 `getCss_`）。白字压在浅块面上是 1.5:1 —— 等于看不见。
+ * 主题里没有"文字色"这个槽位，所以只能在这一层覆盖（与字段底那条同一个理由）。
+ *
+ * 覆盖之后：深墨压浅面 9–14:1，压在白色输入格上 ≈16:1。
+ * **值格（可编辑字段）里的字仍是它自带的深灰**（`#575E75`，对白底 14:1），不用改。
+ */
+/*
+ * 选择器用**三个类**（`.blocklySvg` 是工作区那个 SVG 根元素上的类）：
+ * Blockly 那条是 `.blocklyRendererZelos .blocklyText`（两个类），而它的样式表是**后注入**的
+ * ——同等特异性下按出现顺序，后注入的赢。所以这里必须比它多一个类（实测：两个类 + `!important` 仍然输）。
+ */
+/*
+ * 块上的**标签文字**在 zelos 里的类是 `.blocklyLabelField`（不是 `.blocklyText`——
+ * 那个是字段自己的文字）。第一版只覆盖了 `.blocklyText`，于是标签仍然是白的（实测查出来的）。
+ * 字段内的文字（输入格里的值）保持它自带的深灰：对白底 14:1，本来就对。
+ */
+/*
+ * ⚠ 别写 `.blocklyRendererZelos`：实测工作区 SVG 上的类是 `blocklySvg` + 主题名
+ * （`codecanvas-theme`），**没有** `blocklyRendererZelos` 这个类——写上去选择器一条都不匹配
+ * （第一版就是这么白写的，改完毫无反应）。这里用 `.blocklySvg text`（两个元素 + 一个类），
+ * 比 Blockly 那条 `.blocklyRendererZelos .blocklyText`（两个类）在元素计数上更高，
+ * 加上它那条根本匹配不到我们的 SVG，稳赢。
+ */
+.blocklySvg g.blocklyLabelField > text.blocklyText {
+	fill: var(--cc-text) !important;
 }

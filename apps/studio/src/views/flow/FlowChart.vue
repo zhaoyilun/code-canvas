@@ -33,6 +33,22 @@ const props = defineProps<{
 	 * ——两种都是「没有」，所以都不亮，**不拿别的框顶上**。
 	 */
 	readonly currentNodeId: string;
+	/**
+	 * 这一趟**走过**的那些节点 id（`shell/device-run.ts` 的 `runTrace.trail` 转成集合）。
+	 *
+	 * 与 `currentNodeId` 分工：那个是"此刻在哪"（亮着、会呼吸），这个是"走过哪儿"（一条安静的痕）。
+	 * 光标只有一个，痕可以有很多——所以两者不是同一个视觉档，别拿同一个颜色糊。
+	 */
+	readonly visitedNodeIds: ReadonlySet<string>;
+	/** 走过的那几条**边**的键（两端都走过才算走过；键与 `layout.edges[].key` 同一套）。 */
+	readonly visitedEdgeKeys: ReadonlySet<string>;
+	/**
+	 * 这一张图的**入场延迟**（毫秒，`PHASE_DELAY_MS.flow`）。
+	 *
+	 * 三张画布错峰开场：图先起、积木跟上、代码最后落。这个数必须与铺开队列读同一个常量，
+	 * 否则会出现"框已经落好了、内容还在往外冒"这种错位。
+	 */
+	readonly entranceDelayMs: number;
 }>();
 
 const layout = computed(() => layoutFlowGraph(props.graph));
@@ -46,6 +62,12 @@ const isRevealed = (key: string): boolean => props.revealed.has(key);
  * 谁都不匹配——「没有」不许靠「随便挑一个亮着」糊过去。
  */
 const isCurrent = (id: string): boolean => props.currentNodeId !== '' && props.currentNodeId === id;
+
+/** 这个框**走过**（不含正在走的那个——正在走的另有更亮的一档）。 */
+const isVisited = (id: string): boolean => !isCurrent(id) && props.visitedNodeIds.has(id);
+
+/** 这条线走过。 */
+const isVisitedEdge = (key: string): boolean => props.visitedEdgeKeys.has(key);
 
 /** 节点里那两行字的截断宽度（框宽减去左右内边距；估宽口径见 `layout.ts`）。 */
 const titleOf = (title: string, width: number): string => fitText(title, 13, width - 32);
@@ -84,6 +106,7 @@ const detailOf = (detail: string, width: number): string => fitText(detail, 11, 
 				v-show="isRevealed(item.key)"
 				:key="item.key"
 				class="flow-edge"
+				:class="{ 'flow-edge-visited': isVisitedEdge(item.key) }"
 				data-testid="flow-edge"
 				:data-from="item.edge.from"
 				:data-to="item.edge.to"
@@ -107,7 +130,11 @@ const detailOf = (detail: string, width: number): string => fitText(detail, 11, 
 				v-show="isRevealed(flowNodeKey(item.id))"
 				:key="item.id"
 				class="flow-node"
-				:class="[`flow-node-${item.node.kind}`, { 'flow-node-current': isCurrent(item.id) }]"
+				:style="{ animationDelay: `${String(props.entranceDelayMs)}ms` }"
+				:class="[
+					`flow-node-${item.node.kind}`,
+					{ 'flow-node-current': isCurrent(item.id), 'flow-node-visited': isVisited(item.id) },
+				]"
 				data-testid="flow-node"
 				:data-node-id="item.id"
 				:data-kind="item.node.kind"
@@ -184,7 +211,7 @@ const detailOf = (detail: string, width: number): string => fitText(detail, 11, 
 .flow-edge-label {
 	fill: var(--cc-text-dim);
 	font-family: var(--cc-font-mono);
-	font-size: 11px;
+	font-size: var(--cc-fs-sm);
 	text-anchor: middle;
 }
 
@@ -212,14 +239,14 @@ const detailOf = (detail: string, width: number): string => fitText(detail, 11, 
 
 .flow-node-title {
 	fill: var(--cc-text);
-	font-size: 13px;
+	font-size: var(--cc-fs-md);
 	font-weight: 600;
 }
 
 .flow-node-detail {
 	fill: var(--cc-text-dim);
 	font-family: var(--cc-font-mono);
-	font-size: 11px;
+	font-size: var(--cc-fs-sm);
 }
 
 /*
@@ -238,6 +265,27 @@ const detailOf = (detail: string, width: number): string => fitText(detail, 11, 
 
 .flow-node-current .flow-node-title {
 	fill: var(--cc-highlight);
+}
+
+/*
+ * 走过的路：**一条安静的痕**。
+ *
+ * 与「当前步」刻意分成两档：当前步是强调色描边 + 呼吸的辉光（那盏灯），
+ * 走过的只是描边换成强调色的**弱化版**（`--cc-accent-dim`）+ 线实起来。
+ * 不发光、不呼吸——痕的活是"让你看见这条路"，不是"喊你来看它"。
+ * 两个都亮成一样，等于把"现在在哪"这件事淹掉。
+ */
+.flow-node-visited .flow-node-box {
+	stroke: var(--cc-accent-dim);
+}
+
+.flow-edge-visited .flow-edge-line {
+	stroke: var(--cc-accent-dim);
+	stroke-width: 1.6;
+}
+
+.flow-edge-visited .flow-arrow-head {
+	fill: var(--cc-accent-dim);
 }
 
 /* 当前步的呼吸：只动那圈辉光，节点的位置与大小一动不动（截图里也读得出是哪一帧）。 */

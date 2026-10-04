@@ -28,7 +28,7 @@
 import * as Blockly from 'blockly';
 import { onBeforeUnmount, onMounted, ref, watch, type ComputedRef, type Ref } from 'vue';
 import type { TeachingBlock, TeachingSpec, TeachingValueBlock } from '@codecanvas/contracts';
-import { buildInjectOptions, fitWorkspaceToContent, paletteFromDocument } from '@codecanvas/blockly-toolkit';
+import { applyFieldSurfaceColour, buildInjectOptions, fitWorkspaceToContent, paletteFromDocument } from '@codecanvas/blockly-toolkit';
 import { playBlockStepEntrance } from './blockly-canvas';
 
 /** 块型前缀：语句块 `cc_spec_do_*`、值块 `cc_spec_value_*`、说明块 `cc_spec_note_*`。 */
@@ -494,6 +494,7 @@ export const useSpecCanvas = (options: {
 			registerSpecBlocks(definitions);
 			if (workspace === null) {
 				workspace = Blockly.inject(hostRef.value, buildInjectOptions(paletteFromDocument(), [], true));
+				applyFieldSurfaceColour(workspace);
 			}
 			workspace.clear();
 			entered = new WeakSet<Element>();

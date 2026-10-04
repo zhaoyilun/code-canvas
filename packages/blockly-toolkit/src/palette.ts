@@ -16,6 +16,8 @@ export const THEME_VARIABLES = [
 	'--cc-text',
 	'--cc-text-dim',
 	'--cc-text-faint',
+	/* 「白」这个数在调色板里的名字：块面往亮里混时用它，源码里就不出现字面色值。 */
+	'--cc-text-inverse',
 	'--cc-accent',
 	'--cc-accent-strong',
 	'--cc-accent-dim',
@@ -26,11 +28,34 @@ export const THEME_VARIABLES = [
 	 * 「同一套高亮语言」只有这样才是真的同一套。
 	 */
 	'--cc-highlight',
-	/* 动作色：turn / stop_if_obstacle / arm_joint / arm6_joints 用（见 theme.css 末尾）。 */
+	/*
+	 * 动作色：turn / guard / arm_joint / arm6_joints 用。
+	 * **这四个名字指的是「描边色」**——块面另有 `--cc-block-fill` 那一档，两者成对使用
+	 * （见 `theme.ts` 的 `STYLE_COLOURS`）。语义从「块面」改成「描边」时取值也跟着换了，
+	 * 名字没动是因为它们在这张表里是**契约**：改名会让所有读它的地方当场抛错，
+	 * 而语义变化本来就该由这条注释交代清楚，不该靠改名去暗示。
+	 */
 	'--cc-block-turn',
 	'--cc-block-guard',
 	'--cc-block-arm',
 	'--cc-block-arm6',
+	/* 块面 / 描边 / 急停：非动作能力的块与急停步各有一对 */
+	'--cc-block-fill',
+	/* 块面（浅色版，与描边同一色相的浅调）：块上的字是深墨，面必须浅 */
+	'--cc-block-turn-fill',
+	'--cc-block-guard-fill',
+	'--cc-block-arm-fill',
+	'--cc-block-arm6-fill',
+	'--cc-block-edge',
+	'--cc-block-stop',
+	'--cc-block-stop-edge',
+	/* 教学规格块树里那几类不属于设备的块（条件 / 重复 / 等待 / 数值 / 讲解词） */
+	'--cc-block-field',
+	'--cc-block-logic',
+	'--cc-block-loop',
+	'--cc-block-wait',
+	'--cc-block-value',
+	'--cc-block-note',
 	'--cc-font-mono',
 	'--cc-fs-md',
 ] as const;

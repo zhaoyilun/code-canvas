@@ -19,6 +19,7 @@ import {
 	ACTION_COLOUR_VARIABLE,
 	CODE_CANVAS_RENDERER,
 	CODE_CANVAS_THEME_NAME,
+	SPEC_BLOCK_STYLE_VARIABLE,
 	buildInjectOptions,
 	capabilityColourVariable,
 	createCodeCanvasTheme,
@@ -59,27 +60,35 @@ describe('调色板', () => {
 
 	it('字号从变量解析，解析不出就不给字号', () => {
 		const palette = fixturePalette();
-		expect(fontSizeFromVariable(palette)).toBe(13);
+		/*
+		 * 断言的是**解析这条链**（变量 → 数字），不是某一档字号的取值——所以期望值从
+		 * `theme.css` 里现读，不在这里再写一份。写死一个数就成了第三个真相：
+		 * 改字号本身是允许的改动（档差、下限那几条由 `viewport.test.ts` 管），
+		 * 而写死的数会让每次合法改动都挂一次假测试。
+		 */
+		const declared = /--cc-fs-md:\s*([\d.]+)px/.exec(themeCssText())?.[1];
+		expect(declared).toBeDefined();
+		expect(fontSizeFromVariable(palette)).toBe(Number.parseFloat(declared ?? ''));
 		expect(fontSizeFromVariable(paletteFromCssVariables({ getPropertyValue: () => 'auto' }))).toBeNull();
 	});
 });
 
 describe('主题', () => {
-	it('目录里每个能力一个 blockStyle，主色就是对应变量的值', () => {
+	it('目录里每个能力一个 blockStyle：面走块面变量，描边走色相变量', () => {
 		const palette = fixturePalette();
 		const theme = createCodeCanvasTheme(palette, [FIXTURE_CATALOG]);
 		expect(theme.name).toBe(CODE_CANVAS_THEME_NAME);
 		for (const capability of FIXTURE_CATALOG.capabilities) {
 			const ref = capability.capabilityRef;
 			const style = theme.blockStyles[blockStyleName(ref)];
-			expect(style?.colourPrimary, ref).toBe(palette[capabilityColourVariable(ref)]);
 			// 三色齐备，Blockly 画 zelos 路径时不会拿到 undefined。
+			expect(style?.colourPrimary, ref).toBeTypeOf('string');
 			expect(style?.colourSecondary, ref).toBeTypeOf('string');
 			expect(style?.colourTertiary, ref).toBeTypeOf('string');
 		}
-		// 一期目录里的能力名就是协议里的七个动作，所以这张表仍是那七个名字。
+		// 七个动作的**描边**就是那七个色相变量——身份认的是这一圈，不是块面。
 		for (const action of ALLOWED_ACTIONS) {
-			expect(theme.blockStyles[blockStyleName(action)]?.colourPrimary, action).toBe(
+			expect(theme.blockStyles[blockStyleName(action)]?.colourTertiary, action).toBe(
 				palette[ACTION_COLOUR_VARIABLE[action]],
 			);
 		}
@@ -87,14 +96,25 @@ describe('主题', () => {
 		expect(Object.keys(theme.blockStyles)).toEqual(expect.arrayContaining(ALLOWED_ACTIONS.map(blockStyleName)));
 	});
 
-	it('副色/第三色是从变量值混出来的，不是另写的色值', () => {
+	it('教学规格那五类块由我们接管，不再借用 Blockly 自带主题的色', () => {
+		const palette = fixturePalette();
+		const theme = createCodeCanvasTheme(palette, [FIXTURE_CATALOG]);
+		for (const [styleName, variable] of Object.entries(SPEC_BLOCK_STYLE_VARIABLE)) {
+			expect(theme.blockStyles[styleName]?.colourPrimary, styleName).toBe(palette[variable]);
+		}
+	});
+
+	it('副色/第三色都是从块面混出来的，不是另写的色值', () => {
 		const palette = fixturePalette();
 		const style = createCodeCanvasTheme(palette, [FIXTURE_CATALOG]).blockStyles[blockStyleName('move')];
-		expect(style?.colourSecondary).not.toBe(palette['--cc-accent']);
+		expect(style?.colourSecondary).not.toBe(palette['--cc-block-fill']);
 		expect(style?.colourTertiary).not.toBe(style?.colourSecondary);
-		// 混色用的是调色板里的底色：把底色换成别的，副色必须跟着变。
-		const shifted = createCodeCanvasTheme({ ...palette, '--cc-surface-sunken': '#101010' }, [FIXTURE_CATALOG]);
+		// 混色的输入是块面：把块面换成别的，副色必须跟着变。
+		const shifted = createCodeCanvasTheme({ ...palette, '--cc-block-fill': '#101010' }, [FIXTURE_CATALOG]);
 		expect(shifted.blockStyles[blockStyleName('move')]?.colourSecondary).not.toBe(style?.colourSecondary);
+		// 混的另一头是调色板里的白（`--cc-text-inverse`），不是源码里写的字面色值。
+		const warm = createCodeCanvasTheme({ ...palette, '--cc-text-inverse': '#fff4e0' }, [FIXTURE_CATALOG]);
+		expect(warm.blockStyles[blockStyleName('move')]?.colourSecondary).not.toBe(style?.colourSecondary);
 	});
 
 	it('工作区与工具箱的底色取自调色板', () => {
@@ -106,7 +126,9 @@ describe('主题', () => {
 		// 选中辉光与另外两栏同一根线：`--cc-highlight`（它派生自强调色，但取的是那个变量）。
 		expect(theme.getComponentStyle('selectedGlowColour')).toBe(palette['--cc-highlight']);
 		expect(theme.getComponentStyle('selectedGlowColour')).toBe(palette['--cc-accent']);
-		expect(palette['--cc-highlight']).toBe('#2ee6d6');
+		// 强调色的**取值**不写死在这里（写死就是第三个真相：换个主题必挂一次假测试）。
+		// 断言的是"highlight 派生自 accent"这条关系，值从 theme.css 现读。
+		expect(palette['--cc-highlight']).toBe(palette['--cc-accent']);
 	});
 
 	it('注入选项用 zelos 渲染器，且**不带工具箱**：实现来自目录，结构只读', () => {
@@ -125,23 +147,50 @@ describe('主题', () => {
 });
 
 describe('配色对比与网格', () => {
-	/** 七个动作的主色：一眼要能认出不同动作，且在深色底上看得清。 */
-	const primaries = (): readonly { action: string; colour: string }[] => {
+	/** 七个动作的**描边色**：一眼要能认出不同动作，且在深色底上看得清。 */
+	const edges = (): readonly { action: string; colour: string }[] => {
 		const palette = fixturePalette();
 		return ALLOWED_ACTIONS.map((action) => ({ action, colour: palette[ACTION_COLOUR_VARIABLE[action]] }));
 	};
 
-	it('每个动作色与工作区底色的对比度都过 4.5', () => {
+	it('每个动作的描边色与画布底的对比度都过 4.5', () => {
 		const background = fixturePalette()['--cc-surface-sunken'];
-		for (const { action, colour } of primaries()) {
+		for (const { action, colour } of edges()) {
 			const ratio = contrastRatio(colour, background);
 			expect(ratio, `${action} 的对比度算不出来`).not.toBeNull();
-			expect(ratio ?? 0, `${action} (${colour}) 与底色的对比度`).toBeGreaterThanOrEqual(4.5);
+			expect(ratio ?? 0, `${action} 描边 (${colour}) 与画布底的对比度`).toBeGreaterThanOrEqual(4.5);
 		}
 	});
 
-	it('七个动作色两两分得开（不是一片青）', () => {
-		const colours = primaries();
+	/*
+	 * 这一条是 2026-10 那次重配的**起因**：旧一版块面是满饱和实心 + 白字，
+	 * 白字压块面只有 1.57–3.60 : 1，全屏最难读的一组，而且当时没有任何一条测试
+	 * 量过「字压在块面上」——测的都是「块色 vs 底色」。尺度错了一格，
+	 * 于是颜色越调越亮、字越读不出来。现在两块面都钉住。
+	 */
+	it('块上的字压得住块面：七个动作与教学规格那几类块都过 4.5', () => {
+		const palette = fixturePalette();
+		const theme = createCodeCanvasTheme(palette, [FIXTURE_CATALOG]);
+		const ink = palette['--cc-text'];
+		const fills: readonly { name: string; fill: string }[] = [
+			...ALLOWED_ACTIONS.map((action) => ({
+				name: `动作 ${action}`,
+				fill: theme.blockStyles[blockStyleName(action)]?.colourPrimary ?? '',
+			})),
+			...Object.keys(SPEC_BLOCK_STYLE_VARIABLE).map((styleName) => ({
+				name: `规格块 ${styleName}`,
+				fill: theme.blockStyles[styleName]?.colourPrimary ?? '',
+			})),
+		];
+		for (const { name, fill } of fills) {
+			const ratio = contrastRatio(ink, fill);
+			expect(ratio, `${name} 的对比度算不出来（fill=${fill}）`).not.toBeNull();
+			expect(ratio ?? 0, `${name}：字 ${ink} 压在块面 ${fill} 上`).toBeGreaterThanOrEqual(4.5);
+		}
+	});
+
+	it('七个动作的描边色两两分得开（不是一片青）', () => {
+		const colours = edges();
 		for (const first of colours) {
 			for (const second of colours) {
 				if (first.action === second.action) continue;
