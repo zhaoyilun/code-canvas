@@ -96,8 +96,8 @@ export function createStage(canvas: HTMLCanvasElement, rig: So101Rig, kit: Kit):
 	renderer.toneMappingExposure = 1.05;
 
 	const scene = new THREE.Scene();
-	scene.background = new THREE.Color(0x0a121d);
-	scene.fog = new THREE.Fog(0x0a121d, 1.6, 4.2);
+	scene.background = new THREE.Color(0x0b0d10);
+	scene.fog = new THREE.Fog(0x0b0d10, 1.6, 4.2);
 
 	const camera = new THREE.PerspectiveCamera(38, 1, 0.02, 40);
 
@@ -109,7 +109,7 @@ export function createStage(canvas: HTMLCanvasElement, rig: So101Rig, kit: Kit):
 	controls.maxDistance = 3;
 	controls.maxPolarAngle = Math.PI * 0.495;
 
-	scene.add(new THREE.HemisphereLight(0x9dc0e0, 0x0a0f14, 0.5));
+	scene.add(new THREE.HemisphereLight(0x9dc0e0, 0x0e1114, 0.5));
 	const key = new THREE.DirectionalLight(0xfff3e2, 2.4);
 	key.position.set(0.5, 0.9, 0.6);
 	key.castShadow = true;
@@ -139,7 +139,7 @@ export function createStage(canvas: HTMLCanvasElement, rig: So101Rig, kit: Kit):
 
 	const floor = new THREE.Mesh(
 		new THREE.CylinderGeometry(6, 6, 0.4, 48),
-		new THREE.MeshStandardMaterial({ color: 0x0d141c, roughness: 0.95, metalness: 0 }),
+		new THREE.MeshStandardMaterial({ color: 0x0d0f12, roughness: 0.88, metalness: 0.05 }),
 	);
 	floor.position.y = -0.25;
 	floor.receiveShadow = true;
