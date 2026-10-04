@@ -176,7 +176,7 @@ describe('对应关系那三样', () => {
 		// 三样各写一处：流程节点、积木、代码分段。
 		expect(TEACHING_SYSTEM_PROMPT).toContain('"planPath"');
 		expect(TEACHING_SYSTEM_PROMPT).toContain('codeSegments');
-		expect(TEACHING_SYSTEM_PROMPT).toContain('每个流程节点');
+		expect(TEACHING_SYSTEM_PROMPT).toContain('讲某一步的流程节点');
 		expect(TEACHING_SYSTEM_PROMPT).toContain('每棵顶层积木');
 		expect(TEACHING_SYSTEM_PROMPT).toContain('每一段代码');
 		// 后果不是修辞：指到不存在的步 → 整份规格被拒；顶层不写 → 照画但不点亮。
@@ -184,6 +184,26 @@ describe('对应关系那三样', () => {
 		expect(TEACHING_SYSTEM_PROMPT).toContain('跟不了当前步');
 		// 「照那张表抄」这句话要有——表在材料里，模型得知道去哪儿看。
 		expect(TEACHING_SYSTEM_PROMPT).toContain('每一步的执行路径');
+	});
+
+	/*
+	 * 这一条来自一次真实的整份被拒（2026-10，输入「旋转360度」）：
+	 * 任务 JSON 只有一步，模型为了讲清楚，加了一个"等旋转走完"的等待框，
+	 * 并按上面那条「每个流程节点都要写 planPath」给它编了一个越界的 "2" ——
+	 * 于是整份规格形状不过，三块画布全空，用户看到的是「模型给的规格形状不对」。
+	 *
+	 * 根因是**提示词自己自相矛盾**：示例里那个 wait 节点带着 planPath，
+	 * 规则又说"每个流程节点都要写"。所以这里把两件事都钉住：
+	 * ① 规则必须说清「自己加出来的讲解节点不写 planPath」；
+	 * ② 示例本身必须与契约一致——那份示例 JSON 现在真的能被解析出来。
+	 */
+	it('提示词不自相矛盾：没对应步的框不许编 planPath，示例本身也过得了契约', () => {
+		expect(TEACHING_SYSTEM_PROMPT).toContain('没有对应步的框，一个字都不要写 planPath');
+		// 示例里那个 wait 节点不许再带 planPath（它就是当初教坏模型的那一行）。
+		expect(TEACHING_SYSTEM_PROMPT).toContain('{"id":"n3","kind":"wait","title":"等它稳下来"}');
+		expect(TEACHING_SYSTEM_PROMPT).not.toContain('"kind":"wait","title":"等 1 秒","planPath"');
+		// 分支仍必须写——那是这一层放宽后唯一的硬要求，提示词里得说得出。
+		expect(TEACHING_SYSTEM_PROMPT).toContain('decision 节点必须写');
 	});
 
 	it('材料与要求对得上：提示词说的字段名就是契约里的字段名', async () => {

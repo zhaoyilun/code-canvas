@@ -15,4 +15,5 @@ export * from './workflow';
 export * from './capability';
 export * from './device-facts';
 export * from './teaching-spec';
+export * from './teaching-repair';
 export * from './step-gate';

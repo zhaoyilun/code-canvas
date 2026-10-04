@@ -92,7 +92,17 @@ export interface TeachingGenerationOptions {
 }
 
 export type TeachingGenerationResult =
-	| { readonly ok: true; readonly spec: TeachingSpec; readonly text: string; readonly attempts: number }
+	| {
+			readonly ok: true;
+			readonly spec: TeachingSpec;
+			readonly text: string;
+			readonly attempts: number;
+			/**
+			 * 交回来的这一份**我们机械修过哪几处**（`teaching-repair.ts`）。
+			 * 改过就说改过：界面照实摆出来，别让它悄悄发生。
+			 */
+			readonly repairs: readonly string[];
+	  }
 	| {
 			readonly ok: false;
 			readonly kind: TeachingFailureKind;
@@ -146,7 +156,12 @@ export async function generateTeachingSpec(
 	const context =
 		options.planPaths === undefined || options.nodeAtPlanPath === undefined
 			? undefined
-			: { declaration: options.declaration, nodeAtPlanPath: options.nodeAtPlanPath };
+			: {
+					declaration: options.declaration,
+					nodeAtPlanPath: options.nodeAtPlanPath,
+					// 路径表给修补层：只判语法抓不住"语法合法但声明里没有"那种（真实踩过）。
+					knownPlanPaths: [...options.planPaths.keys()],
+				};
 	const attempts = Math.max(1, options.attempts ?? GENERATION_ATTEMPTS);
 	const wait = options.wait ?? defaultWait;
 
@@ -172,7 +187,9 @@ export async function generateTeachingSpec(
 		if (result.ok) {
 			lastText = result.text;
 			const parsed = parseTeachingSpec(result.text, context);
-			if (parsed.ok) return { ok: true, spec: parsed.spec, text: result.text, attempts: attempt };
+			if (parsed.ok) {
+				return { ok: true, spec: parsed.spec, text: result.text, attempts: attempt, repairs: parsed.repairs };
+			}
 			failure = { kind: 'rejected', message: parsed.message, issues: parsed.issues };
 			// 下一次带着「哪儿不对」再问一遍（形状不过时 issues 就是那些字；对账不过时同样逐条）。
 			retryNote = parsed.issues.join('\n');

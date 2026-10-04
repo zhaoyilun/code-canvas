@@ -48,6 +48,7 @@
  * 它是分段文本拼出来的（`codeOfSegments`），唯一真相是那几段。
  */
 import { z } from 'zod';
+import { repairTeachingSpec } from './teaching-repair';
 // 只借它的**类型**：对账要拿声明判「这条路径指得到哪一步」。值层面没有依赖
 // （`import type` 编译后什么都不剩），所以两个模块不会绕成一圈。
 import type { WorkflowDeclaration, WorkflowNode } from './workflow';
@@ -118,24 +119,38 @@ export const flowNodeSchema = z
 		/**
 		 * 这个节点讲的是**声明里的哪一步**（执行路径，见 `PLAN_PATH_PATTERN`）。
 		 *
-		 * 动作 / 分支 / 等待三种节点**必须**有（它们讲的就是一步）；`start` / `end` 不许有
-		 * ——那两个框不是执行步骤，给它一个路径就是编的。语法之外还有一层「声明里真有这一步」，
-		 * 那一层由 `findTeachingSpecIssues` 拿着声明判（见文件头）。
+		 * **分支节点必须有**：它讲的是"哪一步的成败"，不写这个框就没有意义。
+		 * **动作与等待可以没有**：讲解时常会加一些声明里并不存在的框
+		 * （"等它稳下来""把结果收个尾"），那种框本来就不对应任何一步。
+		 * 没有 `planPath` = 这个框是纯讲解，设备跑到任何一步都不点亮它——**照画，但不假装它跟着走**。
+		 *
+		 * `start` / `end` 依旧**不许**有：那两个框不是执行步骤，给它一个路径就是编的。
+		 * 语法之外还有一层「声明里真有这一步」，那一层由 `findTeachingSpecIssues` 拿着声明判。
+		 *
+		 * ⚠ 这条是踩出来的（2026-10，输入「旋转360度」）：任务 JSON 只有一步，模型为了讲清楚
+		 * 加了个等待框，给它编了个越界路径——整份规格形状不过，三块画布全空，
+		 * 用户看到的是"形状不对"四个字。根因是我们把"必须写"定得比语义更严：
+		 * **没有对应步的框，本来就不该被迫写一个。**
 		 */
 		planPath: z.string().trim().min(1).max(64).optional(),
 	})
 	.strict()
 	.superRefine((node, ctx) => {
-		const needsStep = node.kind !== 'start' && node.kind !== 'end';
-		if (needsStep && node.planPath === undefined) {
+		const isEndpoint = node.kind === 'start' || node.kind === 'end';
+		/*
+		 * 只有一种"必须写"：分支节点。它讲的是"哪一步的成败"，不写这个框就没有意义。
+		 * 动作与等待**可以不写**——见上面 `planPath` 的注释：讲解里天然会有不对应任何一步的框。
+		 * 形状过不了的那两种（越界、语法错）由 `teaching-repair.ts` 先摘掉，轮不到这里拒。
+		 */
+		if (node.kind === 'decision' && node.planPath === undefined) {
 			ctx.addIssue({
 				code: 'custom',
 				path: ['planPath'],
-				message: `${node.kind} 节点 ${node.id} 没写 planPath：它讲的是声明里的哪一步，不写就对不上设备跑到的那一格`,
+				message: `decision 节点 ${node.id} 没写 planPath：它讲的是哪一步的成败，不写就对不上设备跑到的那一格`,
 			});
 			return;
 		}
-		if (!needsStep && node.planPath !== undefined) {
+		if (isEndpoint && node.planPath !== undefined) {
 			ctx.addIssue({
 				code: 'custom',
 				path: ['planPath'],
@@ -753,6 +768,14 @@ export type TeachingSpecParse =
 			readonly spec: TeachingSpec;
 			/** 能用、但有一处话要说（例如「顶层块没写归属，联动不生效」）。没有就是空表。 */
 			readonly warnings: readonly string[];
+			/**
+			 * 交回来的这一份**我们机械修过哪几处**（`teaching-repair.ts`）。
+			 *
+			 * 为什么这一栏必须存在：修补层会替模型摘掉多余的字、把 `"3"` 还原成 `3`——
+			 * 不留痕就等于把"屏幕上这句话是谁说的"搅浑了。界面上照实摆出来：
+			 * **改过就说改过，没改就是空表。**
+			 */
+			readonly repairs: readonly string[];
 	  }
 	| { readonly ok: false; readonly message: string; readonly issues: readonly string[] };
 
@@ -766,6 +789,14 @@ export type TeachingSpecParse =
 export interface TeachingSpecContext {
 	readonly declaration: WorkflowDeclaration;
 	readonly nodeAtPlanPath: (declaration: WorkflowDeclaration, path: string) => WorkflowNode | null;
+	/**
+	 * 这次任务**真的会走到**的那几条路径（`planPathsOf(declaration)` 的产物）。
+	 *
+	 * 口径只有一份，在 studio 的 `plan-structure.ts`——所以由调用方给，不在这里再走一遍声明。
+	 * 给了它，修补层才判得了"语法合法但声明里没有"那种路径（用户那次踩的正是这个）；
+	 * 不给就只判语法：**少修一点，但绝不修错**。
+	 */
+	readonly knownPlanPaths?: readonly string[];
 }
 
 /**
@@ -789,7 +820,20 @@ export const parseTeachingSpec = (text: string, context?: TeachingSpecContext): 
 			issues: [],
 		};
 	}
-	const parsed = teachingSpecSchema.safeParse(value);
+	/*
+	 * 形状不过时**先机械修一遍再判**（`teaching-repair.ts`）。
+	 *
+	 * 这是 2026-10 那次教训换来的顺序：模型给的东西往往只是"表达方式不一样"
+	 * （多一个键、数值写成字符串、给一个不存在的步编了条路径），不是"说不通"。
+	 * 那些地方**本地就能修**，没必要拒掉整份、把三块画布全清空，再花一次模型往返。
+	 *
+	 * 顺序是刻意的：**先照着模型的原话说，说不通才修**——修过的每一处都记在 `repairs` 里
+	 * 交给界面摆出来，不让它悄悄发生。
+	 */
+	const first = teachingSpecSchema.safeParse(value);
+	const repaired =
+		first.success ? null : repairTeachingSpec(value, { knownPlanPaths: context?.knownPlanPaths });
+	const parsed = first.success ? first : teachingSpecSchema.safeParse(repaired?.value);
 	if (!parsed.success) {
 		return {
 			ok: false,
@@ -797,10 +841,11 @@ export const parseTeachingSpec = (text: string, context?: TeachingSpecContext): 
 			issues: parsed.error.issues.map((issue) => `${issue.path.join('.') || '(根)'}：${issue.message}`),
 		};
 	}
+	const repairNotes = (repaired?.repairs ?? []).map((repair) => `${repair.path}：${repair.what}`);
 
 	const spec: TeachingSpec = { ...parsed.data, code: codeOfSegments(parsed.data.codeSegments) };
 	// 没给声明：只判形状，对账那一层拿着声明才判得了（生成那条路一定会给，见上面）。
-	if (context === undefined) return { ok: true, spec, warnings: [] };
+	if (context === undefined) return { ok: true, spec, warnings: [], repairs: repairNotes };
 
 	const issues = findTeachingSpecIssues(spec, context.declaration, (path) =>
 		context.nodeAtPlanPath(context.declaration, path),
@@ -812,6 +857,7 @@ export const parseTeachingSpec = (text: string, context?: TeachingSpecContext): 
 	// 只有「那条联动不生效」那种非致命问题：规格能用，话照说（见 `TeachingSpecParse` 的 warnings）。
 	return {
 		ok: true,
+		repairs: repairNotes,
 		spec,
 		warnings: issues.map((issue) => issue.message),
 	};

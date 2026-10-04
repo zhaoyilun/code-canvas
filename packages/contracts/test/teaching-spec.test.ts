@@ -146,11 +146,29 @@ describe('对应关系的形状', () => {
 		expect(parsed.success).toBe(true);
 	});
 
-	it('动作 / 分支 / 等待节点没写 planPath：拒（它讲的是哪一步，不写就对不上）', () => {
-		const broken = spec();
-		const withoutPath = { ...broken, flow: { ...broken.flow, nodes: broken.flow.nodes.map((item) => ({ ...item })) } };
+	/*
+	 * 2026-10 放宽的一条，理由是语义而不是方便：
+	 * 讲解里常会加一些声明里并不存在的框（"等它稳下来""收个尾"），
+	 * 那种框本来就不对应任何一步——逼它写一个，模型只会编一个越界路径，
+	 * 结果整份规格被拒、三块画布全空（真实踩过：输入「旋转360度」）。
+	 * 现在：动作与等待**可以**不写（= 纯讲解框，跑到哪一步都不点亮它）；
+	 * 分支**必须**写（它讲的就是"哪一步的成败"）。
+	 */
+	it('动作 / 等待节点可以不写 planPath（纯讲解框，不点亮，但照画）', () => {
+		const doc = spec();
+		const withoutPath = { ...doc, flow: { ...doc.flow, nodes: doc.flow.nodes.map((item) => ({ ...item })) } };
 		delete (withoutPath.flow.nodes[1] as { planPath?: string }).planPath;
 		const parsed = teachingSpecSchema.safeParse(withoutPath);
+		expect(parsed.success).toBe(true);
+	});
+
+	it('decision 节点没写 planPath：拒（它讲的是哪一步的成败）', () => {
+		const doc = spec();
+		const decisionIndex = doc.flow.nodes.findIndex((node) => node.kind === 'decision');
+		expect(decisionIndex).toBeGreaterThanOrEqual(0);
+		const broken = { ...doc, flow: { ...doc.flow, nodes: doc.flow.nodes.map((item) => ({ ...item })) } };
+		delete (broken.flow.nodes[decisionIndex] as { planPath?: string }).planPath;
+		const parsed = teachingSpecSchema.safeParse(broken);
 		expect(parsed.success).toBe(false);
 		if (parsed.success) return;
 		expect(parsed.error.issues.map((issue) => issue.message).join('\n')).toContain('没写 planPath');
